@@ -6,7 +6,7 @@
  */
 
 // deployed room server (server/, `npx wrangler deploy`). Placeholder until deployed: the '<' hides online play in production builds
-export const MP_SERVER_URL = 'https://kucards-rooms.<your-subdomain>.workers.dev';
+export const MP_SERVER_URL = 'https://kucards-rooms.renegue1256.workers.dev';
 
 /** the published web build; share links always point here (also from the Android app) */
 export const WEB_URL = 'https://rene-guerrero.github.io/kucards/';
