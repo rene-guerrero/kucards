@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>KuCards render harness</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #111; color: #eee; font: 13px system-ui, sans-serif; overflow: hidden; }
+      #wrap { position: absolute; inset: 0 0 132px 0; display: flex; align-items: center; justify-content: center; }
+      #app { position: relative; width: 100%; height: 100%; overflow: hidden; }
+      #app.phoneP { width: 390px; height: 844px; max-height: 100%; }
+      #app.phoneL { width: 844px; height: 390px; max-width: 100%; }
+      #bar { position: absolute; left: 0; right: 0; bottom: 28px; height: 104px; display: flex; flex-wrap: wrap; gap: 4px; align-content: center; padding: 0 6px; background: #222; overflow-y: auto; }
+      button, select { background: #3a3a3a; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 3px 7px; font: inherit; cursor: pointer; }
+      #log { position: absolute; top: 4px; left: 6px; pointer-events: none; color: #ffd; text-shadow: 0 1px 2px #000; font-size: 12px; z-index: 5; white-space: pre; }
+      .plate { position: absolute; z-index: 4; pointer-events: none; box-sizing: border-box; border: 1px solid rgba(255,246,230,.5); border-radius: 10px; background: rgba(19,35,46,.72); color: #fff6e6; font: 600 11px system-ui; display: flex; align-items: center; justify-content: center; gap: 4px; transition: none; }
+      .plate.active { border-color: #ffb627; box-shadow: 0 0 10px #ffb627; }
+      .plate.winner { background: rgba(255,182,39,.5); }
+      #snd { position: absolute; left: 0; right: 0; bottom: 0; height: 28px; display: flex; gap: 3px; align-items: center; padding: 0 6px; background: #1a1a1a; overflow-x: auto; white-space: nowrap; }
+      #snd button { padding: 1px 6px; font-size: 11px; }
+      .plate b { background: #ff6f61; border-radius: 8px; padding: 0 5px; }
+    </style>
+  </head>
+  <body>
+    <div id="wrap"><div id="app"></div></div>
+    <div id="log"></div>
+    <div id="bar">
+      <button id="bDeal">Deal</button>
+      <button id="bPick">Human pick</button>
+      <button id="bPlay">Human plays random</button>
+      <button id="bOpp">Opponents play</button>
+      <button id="bDraw">Draw (you 2, opp 1)</button>
+      <button id="bStack">+4 stack</button>
+      <button id="bSkip">Skip</button>
+      <button id="bRev">Reverse</button>
+      <button id="bSwap">Swap 0↔2</button>
+      <button id="bRot">Rotate</button>
+      <button id="bSweep">Sweep</button>
+      <button id="bKu">¡Ku! moment</button>
+      <button id="bCaught">Ku caught</button>
+      <button id="bOpen">Open partner hand</button>
+      <button id="bTeams">Teams: none</button>
+      <button id="bSideDeal">Codo a codo deal (big)</button>
+      <button id="bPen">Penalty window</button>
+      <button id="bTake">Take penalty</button>
+      <button id="bShield">Shield</button>
+      <button id="bMirror">Mirror</button>
+      <button id="bSkipAll">Skip all</button>
+      <button id="bWildColor">WildColor stream</button>
+      <button id="bCyclone">Cyclone cards</button>
+      <button id="bShuffle">Reshuffle</button>
+      <button id="bOut">Eliminate</button>
+      <button id="bEnd">Round end</button>
+      <button id="bReset">Reset</button>
+      <button id="bRestore">Restore</button>
+      <select id="sPlayers"><option>2</option><option>3</option><option selected>4</option></select>
+      <select id="sFrame"><option value="">fill</option><option value="phoneP">phone portrait</option><option value="phoneL">phone landscape</option></select>
+      <select id="sQ"><option>low</option><option selected>medium</option><option>high</option></select>
+      <select id="sSpeed"><option value="1">1x</option><option value="1.8">fast</option><option value="0.4">slow</option></select>
+      <select id="sTable"><option>teal</option><option>navy</option><option>wine</option><option>charcoal</option><option>wood</option><option>sand</option></select>
+      <select id="sBack"><option>ku</option><option>weave</option><option>sun</option><option>night</option></select>
+      <label><input type="checkbox" id="cReduced" /> reduced</label>
+    </div>
+    <div id="snd"><b style="font-size:11px">sfx:</b></div>
+    <script type="module" src="/src/render/harness.ts"></script>
+
+  </body>
+</html>

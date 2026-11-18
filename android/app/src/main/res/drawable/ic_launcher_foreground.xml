@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- KuCards adaptive icon foreground: two fanned cards (public/icon.svg's design, scaled into the 66dp safe zone) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+  <group android:translateX="54" android:translateY="57" android:scaleX="0.13" android:scaleY="0.13">
+    <group android:rotation="-16">
+      <path android:fillColor="#FFF6E6" android:pathData="M-67,-155 h134 a31,31 0 0,1 31,31 v208 a31,31 0 0,1 -31,31 h-134 a31,31 0 0,1 -31,-31 v-208 a31,31 0 0,1 31,-31 z"/>
+      <path android:fillColor="#14A3A0" android:pathData="M-62,-145 h124 a21,21 0 0,1 21,21 v208 a21,21 0 0,1 -21,21 h-124 a21,21 0 0,1 -21,-21 v-208 a21,21 0 0,1 21,-21 z"/>
+      <path android:strokeColor="#FFF6E6" android:strokeWidth="14" android:strokeLineCap="round" android:pathData="M-48,-10 q24,-24 48,0 t48,0"/>
+    </group>
+    <group android:rotation="12">
+      <path android:fillColor="#FFF6E6" android:pathData="M-49,-145 h134 a31,31 0 0,1 31,31 v208 a31,31 0 0,1 -31,31 h-134 a31,31 0 0,1 -31,-31 v-208 a31,31 0 0,1 31,-31 z"/>
+      <path android:fillColor="#FFB627" android:pathData="M-44,-135 h124 a21,21 0 0,1 21,21 v208 a21,21 0 0,1 -21,21 h-124 a21,21 0 0,1 -21,-21 v-208 a21,21 0 0,1 21,-21 z"/>
+      <path android:fillColor="#FFF6E6" android:pathData="M-16,-10 a34,34 0 1,0 68,0 a34,34 0 1,0 -68,0 z"/>
+      <path android:fillColor="#13232E" android:pathData="M3,-10 a15,15 0 1,0 30,0 a15,15 0 1,0 -30,0 z"/>
+    </group>
+  </group>
+</vector>

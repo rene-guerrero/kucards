@@ -1,0 +1,17 @@
+{
+  "name": "KuCards — Juego de cartas",
+  "short_name": "KuCards",
+  "description": "Juego de cartas: combina color o número y grita ¡Ku! con tu última carta. Sin conexión.",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#13232e",
+  "theme_color": "#13232e",
+  "categories": ["games", "card"],
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

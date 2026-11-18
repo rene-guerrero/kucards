@@ -1,0 +1,66 @@
+/**
+ * Pure game-driving helpers for the room: CPU pacing and decisions, move validation. Mirrors the local
+ * game loop (src/app/controller.ts) so online CPUs feel the same. Only the engine's public API is used.
+ */
+import type { Difficulty, MatchState, Move, PlayStyle, Seat } from '../../src/contracts';
+import { chooseMove } from '../../src/engine/ai';
+import { giveOptions, legalMoves, sameMove } from '../../src/engine/game';
+
+const TURN_KINDS = new Set<Move['kind']>(['play', 'draw', 'pass', 'acceptPenalty', 'respond', 'challenge']);
+export const isTurnMove = (m: Move): boolean => TURN_KINDS.has(m.kind);
+
+/** CPU think delay in ms (≈ GameController.cpuTurn): a forced draw is quick, choices take a moment */
+export function thinkDelay(legalCount: number, speed = 1, rnd: () => number = Math.random): number {
+  const base = legalCount <= 1 ? 450 : 620 + Math.min(legalCount, 6) * 60;
+  return (base + rnd() * 450) * speed;
+}
+
+/** when the CPUs at the table react to an open window (catch a missed ¡Ku!, shield the partner) */
+export const reactDelay = (speed = 1, rnd: () => number = Math.random): number => (700 + rnd() * 900) * speed;
+
+/**
+ * Workers freeze the clock during synchronous execution, so the master AI's wall-clock budget never
+ * ends a search early; its playout cap bounds the work instead.
+ */
+const MASTER_OPTS = { maxPlayouts: 240 };
+
+/** the CPU's move for `seat` (null = it does nothing); never throws, always a legal move */
+export function cpuDecide(match: MatchState, seat: Seat, level: Difficulty, style?: PlayStyle): Move | null {
+  let mv: Move | null = null;
+  try {
+    mv = chooseMove(match, seat, level, style, level === 'master' ? MASTER_OPTS : undefined);
+  } catch (e) {
+    console.error('cpu error', e);
+    mv = null;
+  }
+  if (!mv) return null;
+  return validMove(match, seat, mv);
+}
+
+/** a turn move for `seat` (the CPU covering a human, or a CPU on turn): its choice, else draw / pass / accept */
+export function cpuTurnMove(match: MatchState, seat: Seat, level: Difficulty, style?: PlayStyle): Move | null {
+  for (let i = 0; i < 2; i++) {
+    const mv = cpuDecide(match, seat, level, style);
+    if (mv && isTurnMove(mv)) return mv;
+    if (!mv) break;
+  }
+  const legal = legalMoves(match, seat).filter(isTurnMove);
+  return legal.find((m) => m.kind === 'draw' || m.kind === 'pass' || m.kind === 'acceptPenalty') ?? legal[0] ?? null;
+}
+
+/**
+ * Shape check of an untrusted move for `seat`: returns the matching legal move (with the optional
+ * `ku` and a valid `give`), or null.
+ */
+export function validMove(match: MatchState, seat: Seat, raw: unknown): Move | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const m = raw as Record<string, unknown>;
+  if (m.seat !== seat || typeof m.kind !== 'string') return null;
+  const found = legalMoves(match, seat).find((l) => sameMove(l, m as unknown as Move));
+  if (!found) return null;
+  if (found.kind !== 'play') return { ...found };
+  const out: Move = { ...found };
+  if (m.ku === true) out.ku = true;
+  if (typeof m.give === 'number' && giveOptions(match, found).includes(m.give)) out.give = m.give;
+  return out;
+}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">KuCards</string>
+    <string name="title_activity_main">KuCards</string>
+    <string name="package_name">com.kucards.app</string>
+    <string name="custom_url_scheme">com.kucards.app</string>
+</resources>
