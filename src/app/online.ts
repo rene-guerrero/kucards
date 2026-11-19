@@ -638,7 +638,8 @@ export class OnlineController {
     this.deps.container.classList.add('kc-ready');
     this.deps.overlay.hudLayer.append(plates.el, hud.el);
     hud.show(true);
-    const side = !!m.teams && (m.teams[0].includes(1) || m.teams[0].includes(3));
+    // no mode forces landscape any more (the tuned layout fits portrait too)
+    const side = false;
     const stopLandscape = side ? requireLandscape(this.deps.overlay.root, (blocked) => avatars.setPaused(blocked)) : () => {};
     this.table = { view, hud, plates, avatars, stopLandscape };
     this.refreshNames();

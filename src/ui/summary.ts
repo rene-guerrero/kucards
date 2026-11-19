@@ -3,6 +3,7 @@
  * only the middle scrolls), rewritten for cards: cards left per player, their points, running totals,
  * team totals in partners mode.
  */
+import { canFullscreen, toggleFullscreen } from '../app/fullscreen';
 import type { Seat } from '../contracts';
 import type { FaceSpec } from '../roster';
 import { staticFace, type AvatarExpr } from './avatarAdapter';
@@ -220,6 +221,7 @@ export function buildPause(o: {
         audioToggle('music', o.audio.music, o.onAudio),
         typeof navigator.vibrate === 'function' ? audioToggle('vibration', o.audio.vibration, o.onAudio) : null,
         btn(t('menu.howto'), o.onHowto, 'secondary pause-howto', h('span.btn-icon', { html: ICONS.book })),
+        canFullscreen() ? btn(t('menu.fullscreen'), () => void toggleFullscreen(), 'secondary', h('span.btn-icon', { html: ICONS.fullscreen })) : null,
       ),
       btn(t('pause.quit'), o.onQuit, 'ghost', h('span.btn-icon', { html: ICONS.home })),
     ),

@@ -164,7 +164,8 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
 
   let disposed = false;
   let rotateBlocked = false;
-  const sideSeating = !!match.teams && (match.teams[0].includes(1) || match.teams[0].includes(3));
+  // Codo a codo used to require landscape; the tuned layout fits portrait too, so no mode forces it now
+  const sideSeating = false;
   const stopLandscape = sideSeating
     ? requireLandscape(overlay.root, (blocked) => {
         rotateBlocked = blocked;

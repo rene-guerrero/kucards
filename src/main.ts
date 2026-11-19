@@ -9,6 +9,7 @@ import './ui/styles.css';
 import type { AppSettings, GameMode, Lineup, MatchState } from './contracts';
 import { installErrorLog } from './app/errorLog';
 import { resolveQuality } from './app/perf';
+import { enterFullscreen } from './app/fullscreen';
 import { loadSettings, rulesFor, saveSettings, withMode } from './app/settings';
 import { clearSave, loadSave, saveSummary } from './app/save';
 import { startSession, type GameSession } from './app/session';
@@ -87,6 +88,8 @@ async function play(match: MatchState, lineup: Lineup, restored: boolean): Promi
 }
 
 function newGame(o: NewGameStart): void {
+  // starting a game is a tap: go fullscreen where the browser allows it (Android)
+  void enterFullscreen();
   clearSave();
   const rules = { ...rulesFor(settings, o.mode), ...(o.seating ? { seating: o.seating } : {}) };
   // Codo a codo: the partner is the left or the right neighbour, at random each match
@@ -98,6 +101,7 @@ function newGame(o: NewGameStart): void {
 }
 
 function continueGame(): void {
+  void enterFullscreen();
   const saved = loadSave();
   if (saved) void play(saved.match, saved.lineup, true);
   else show('newgame');
@@ -247,6 +251,7 @@ if (!preview) startBackdrop();
 // ───────── online play (the controller and its screens load lazily) ─────────
 let online: OnlineController | null = null;
 async function openOnline(code?: string, quiet = false): Promise<void> {
+  if (!quiet) void enterFullscreen();
   if (!online) {
     const { OnlineController } = await import('./app/online');
     online = new OnlineController({

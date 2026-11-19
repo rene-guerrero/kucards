@@ -2,6 +2,7 @@ import { logoFanSvg } from './cardArt';
 import { h } from './dom';
 import { t } from './i18n';
 import { btn, ICONS } from './overlay';
+import { canFullscreen, toggleFullscreen } from '../app/fullscreen';
 
 export interface MenuOpts {
   /** a saved match to continue (null = none) */
@@ -57,6 +58,8 @@ export function buildMenu(o: MenuOpts): HTMLElement {
       squareBtn(ICONS.gear, t('menu.settings'), o.onSettings, 'settings-btn'),
       btn(t('menu.howto'), o.onHowto, 'ghost', icon(ICONS.book)),
       squareBtn(ICONS.info, t('menu.about'), o.onAbout),
+      // fullscreen (Android browsers; hidden on iPhone and when installed as an app)
+      canFullscreen() ? squareBtn(ICONS.fullscreen, t('menu.fullscreen'), () => void toggleFullscreen()) : null,
       apkBtn(),
     ),
   );
