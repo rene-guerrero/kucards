@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KuCards: all cards</title>
+<style>
+  html, body { margin: 0; background: radial-gradient(circle at 50% 0, #14545a, #0b1d24 60%) fixed #0b1d24; color: #e8f1f0; font: 12px system-ui, sans-serif; }
+  main { padding: 14px 18px 40px; max-width: 1500px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  h2 { font-size: 13px; margin: 22px 0 8px; color: #8fd3c8; border-bottom: 1px solid #22464b; padding-bottom: 4px; }
+  p { margin: 2px 0 0; color: #a9c4c2; }
+  .grid { display: flex; flex-wrap: wrap; gap: 12px 14px; }
+  .cell { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+  .pair { display: flex; gap: 4px; }
+  .pair > * { display: block; filter: drop-shadow(0 2px 3px #0008); }
+  .cell span { font-size: 10px; color: #cfe3e1; white-space: nowrap; }
+  .row { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
+  .row > b { width: 46px; }
+  .tables { display: flex; flex-wrap: wrap; gap: 12px; }
+  .tbl { border-radius: 14px; padding: 10px 12px 6px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .tbl .pair { gap: 5px; }
+  .sw { display: inline-block; width: 60px; height: 34px; border-radius: 6px; margin-right: 6px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<main>
+  <h1>KuCards: all cards</h1>
+  <p>In each pair: left = canvas (the 3D atlas drawing, <code>drawFace</code>), right = SVG (<code>cardSvg</code>, menus). They should look the same.</p>
+  <div id="out"></div>
+</main>
+<script type="module">
+  import { COLOR_HEX, COLOR_DEEP, COLOR_GLOW, TABLE_STYLE_DEFS, drawFace, drawBack } from '/src/render/cardAtlas.ts';
+  import { cardSvg, cardBackSvg, logoFanSvg } from '/src/ui/cardArt.ts';
+
+  const COLORS = ['sol', 'mar', 'palma', 'coral'];
+  const out = document.getElementById('out');
+  const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+  const section = (title) => { out.appendChild(el('h2', '', title)); return out.appendChild(el('div')); };
+
+  function canvasCard(face, w) {
+    const k = Math.max(2, Math.ceil(devicePixelRatio || 1));
+    const c = document.createElement('canvas');
+    c.width = w * k; c.height = w * 1.5 * k;
+    c.style.width = w + 'px'; c.style.height = w * 1.5 + 'px';
+    drawFace(c.getContext('2d'), face, 0, 0, w * k);
+    return c;
+  }
+  function pair(face, w = 60, label) {
+    const cell = el('div', 'cell');
+    const p = cell.appendChild(el('div', 'pair'));
+    p.appendChild(canvasCard(face, w));
+    p.insertAdjacentHTML('beforeend', cardSvg(face, { width: w }));
+    if (label) cell.appendChild(el('span', '', label));
+    return cell;
+  }
+  const row = (host, title) => { const r = host.appendChild(el('div', 'row')); r.appendChild(el('b', '', title)); return r; };
+
+  // close-up
+  let s = section('Close-up');
+  const big = s.appendChild(el('div', 'grid'));
+  for (const f of [
+    { kind: 'number', color: 'sol', value: 7 }, { kind: 'reverse', color: 'mar' }, { kind: 'draw2', color: 'palma', draw: 2 }, { kind: 'skipAll', color: 'coral' },
+    { kind: 'wild', color: null }, { kind: 'draw10', color: null, draw: 10 }, { kind: 'wild4', color: null, draw: 4, tint: 'mar' }, { kind: 'swap', color: null },
+  ]) big.appendChild(pair(f, 90));
+
+  // palette
+  s = section('Palette (card colour · deep shade for marks on ivory · glow for the direction arrows)');
+  for (const c of COLORS) {
+    const r = row(s, c);
+    for (const [name, map] of [['card', COLOR_HEX], ['deep', COLOR_DEEP], ['glow', COLOR_GLOW]]) r.appendChild(el('span', '', `<i class="sw" style="background:${map[c]}"></i>${name} ${map[c]}`));
+  }
+
+  // numbers
+  s = section('Numbers 0–9');
+  for (const c of COLORS) {
+    const r = row(s, c);
+    for (let v = 0; v <= 9; v++) r.appendChild(pair({ kind: 'number', color: c, value: v }, 54));
+  }
+
+  // coloured actions
+  s = section('Colour actions');
+  const ACTIONS = [['skip'], ['skipAll'], ['reverse'], ['draw2', 2], ['draw6', 6], ['shield'], ['sweep'], ['mirror'], ['flip']];
+  for (const c of COLORS) {
+    const r = row(s, c);
+    for (const [kind, draw] of ACTIONS) r.appendChild(pair(draw ? { kind, color: c, draw } : { kind, color: c }, 54, kind));
+  }
+
+  // wilds and their played variants
+  s = section('Colour-changing cards: in hand (black) and once played (the chosen colour)');
+  const WILDS = [['wild'], ['wildColor'], ['wild4', 4], ['draw10', 10], ['swap']];
+  for (const tint of [null, ...COLORS]) {
+    const r = row(s, tint ?? 'hand');
+    for (const [kind, draw] of WILDS) {
+      const f = { kind, color: null };
+      if (draw) f.draw = draw;
+      if (tint) f.tint = tint;
+      r.appendChild(pair(f, 54, kind));
+    }
+    if (!tint) r.appendChild(pair({ kind: 'flip', color: null }, 54, 'flip (dark)'));
+  }
+
+  // backs
+  s = section('Card backs');
+  let r = row(s, '');
+  for (const b of ['ku', 'weave', 'sun', 'night']) {
+    const cell = r.appendChild(el('div', 'cell'));
+    const p = cell.appendChild(el('div', 'pair'));
+    const cv = drawBack(b, 240);
+    cv.style.width = '60px'; cv.style.height = '90px'; cv.style.borderRadius = '7px';
+    p.appendChild(cv);
+    p.insertAdjacentHTML('beforeend', cardBackSvg(b, 60));
+    cell.appendChild(el('span', '', b));
+  }
+
+  // phone size, on every table
+  s = section('Phone size (30 px wide) on each table style');
+  const t = s.appendChild(el('div', 'tables'));
+  const SMALL = [
+    { kind: 'number', color: 'sol', value: 7 }, { kind: 'number', color: 'mar', value: 4 }, { kind: 'number', color: 'palma', value: 9 }, { kind: 'number', color: 'coral', value: 2 },
+    { kind: 'reverse', color: 'mar' }, { kind: 'skip', color: 'coral' }, { kind: 'draw2', color: 'palma', draw: 2 }, { kind: 'draw6', color: 'sol', draw: 6 },
+    { kind: 'wild', color: null }, { kind: 'wild4', color: null, draw: 4 }, { kind: 'draw10', color: null, draw: 10 }, { kind: 'swap', color: null, tint: 'mar' },
+  ];
+  for (const [name, d] of Object.entries(TABLE_STYLE_DEFS)) {
+    const box = t.appendChild(el('div', 'tbl'));
+    box.style.background = `radial-gradient(circle, ${d.felt[0]}, ${d.felt[1]})`;
+    box.style.boxShadow = `0 0 0 6px ${d.bg}`;
+    const p1 = box.appendChild(el('div', 'pair'));
+    for (const f of SMALL) p1.appendChild(canvasCard(f, 30));
+    const p2 = box.appendChild(el('div', 'pair'));
+    p2.innerHTML = SMALL.map((f) => cardSvg(f, { width: 30 })).join('');
+    box.appendChild(el('span', '', `${name}: canvas above, SVG below`));
+  }
+
+  // logo
+  s = section('Menu logo (logoFanSvg)');
+  s.appendChild(el('div', '', logoFanSvg(150))).style.cssText = 'display:inline-block;outline:1px dashed #2b5157;line-height:0';
+</script>
+</body>
+</html>

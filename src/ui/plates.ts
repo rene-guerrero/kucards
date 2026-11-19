@@ -41,9 +41,50 @@ export class SeatPlates {
       const num = document.createTextNode('0');
       const count = h('span.plate-count', h('i.plate-card'), num);
       const root = h('div.plate', { class: `seat-${s}` }, h('div.plate-info', name, count), av);
+      // a catchable avatar is tapped to catch a missed ¡Ku!
+      root.addEventListener('pointerdown', (e) => {
+        if (this.catchSeat !== s || !this.catchFn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const fn = this.catchFn;
+        this.setCatchable(null);
+        this.hurt(s);
+        fn();
+      });
       this.el.append(root);
       return { root, name, letter, team, num, last: { tf: '', w: 0, h: 0, d: 0, layout: '', visible: false, active: false, winner: false, count: -1, team: -1 } };
     });
+  }
+
+  private catchSeat: Seat | null = null;
+  private catchFn: (() => void) | null = null;
+
+  /**
+   * A player who forgot to call ¡Ku!: their avatar swells inside a pulsing ring and becomes a big tap
+   * target; tapping it catches them. `null` ends the window.
+   */
+  setCatchable(seat: Seat | null, onCatch?: () => void): void {
+    if (this.catchSeat !== null && this.catchSeat !== seat) this.p[this.catchSeat]?.root.classList.remove('catchable');
+    this.catchSeat = seat;
+    this.catchFn = seat !== null ? onCatch ?? null : null;
+    if (seat !== null) this.p[seat]?.root.classList.add('catchable');
+  }
+
+  /** a quick hurt shake of a seat's avatar (caught missing ¡Ku!) */
+  hurt(seat: Seat): void {
+    const av = this.p[seat]?.root.querySelector('.plate-av') as HTMLElement | null;
+    if (!av || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    av.animate(
+      [
+        { transform: 'translateX(0) rotate(0)' },
+        { transform: 'translateX(-6px) rotate(-8deg)' },
+        { transform: 'translateX(6px) rotate(7deg)' },
+        { transform: 'translateX(-4px) rotate(-5deg)' },
+        { transform: 'translateX(3px) rotate(3deg)' },
+        { transform: 'translateX(0) rotate(0)' },
+      ],
+      { duration: 520, easing: 'ease-out' },
+    );
   }
 
   setNames(names: readonly string[]): void {

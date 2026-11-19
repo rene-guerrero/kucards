@@ -506,7 +506,8 @@ export class OnlineController {
           if (this.mySeat === null || !this.room) return;
           this.enterGame();
         }
-        if (msg.events.some((e) => !BENIGN.has(e.type))) this.cancelPrompt();
+        // the events themselves settle a previewed card (played → coloured in place, anything else → back to the hand)
+        if (msg.events.some((e) => !BENIGN.has(e.type))) this.cancelPrompt(false);
         this.enqueueEvents(msg.events, msg.snap);
         break;
       case 'turn':
@@ -624,6 +625,7 @@ export class OnlineController {
       onSfx: playSfx,
       onPlates: (list: readonly SeatPlate[]) => {
         plates.update(list.map((p) => ({ ...p, team: this.teamOf(p.seat) })));
+        hud.placeKu(list.find((p) => p.seat === 0), innerWidth, innerHeight);
         const counts: number[] = [];
         for (const p of list) counts[p.seat] = p.count;
         hud.setPlayers(this.hudPlayers(counts));
@@ -632,6 +634,7 @@ export class OnlineController {
       onError: (e) => console.error('[table]', e),
     });
     view.setTeams(m.teams ?? null);
+    hud.colorAnchor = () => view.pileScreenPoint();
     this.deps.container.classList.add('kc-ready');
     this.deps.overlay.hudLayer.append(plates.el, hud.el);
     hud.show(true);
@@ -1101,10 +1104,14 @@ export class OnlineController {
     const tb = this.table;
     const m = this.mirror;
     const r = m?.round;
-    if (!tb || !m || !r || r.over || !m.rules.kuCall) return tb?.hud.setKu('hidden');
+    if (!tb || !m || !r || r.over || !m.rules.kuCall) {
+      tb?.plates.setCatchable(null);
+      return tb?.hud.setKu('hidden');
+    }
     const legal = this.turn?.legal ?? [];
     const catchMv = legal.find((x) => x.kind === 'catchKu');
     const callMv = legal.find((x) => x.kind === 'callKu');
+    tb.plates.setCatchable(catchMv && catchMv.kind === 'catchKu' ? catchMv.target : null, () => this.onKuTap());
     if (catchMv && catchMv.kind === 'catchKu') {
       const note = t('game.catchHint', { name: this.players().names[catchMv.target] });
       if (note !== this.lastNotice) tb.hud.notice((this.lastNotice = note));
@@ -1124,10 +1131,11 @@ export class OnlineController {
     if (!this.client?.send({ t: 'move', move: p.moveToServer(mv) })) this.client?.nudge();
   }
 
-  private cancelPrompt(): void {
+  private cancelPrompt(undoPreview = true): void {
     if (!this.prompt) return;
     this.prompt = null;
     this.table?.view.cancelHumanPick();
+    if (undoPreview) this.table?.view.cancelPreview();
     this.table?.hud.closeAll();
   }
 
@@ -1176,7 +1184,8 @@ export class OnlineController {
     const playable = [...new Set(plays.map((p) => p.cardId))];
     const drawLike = legal.find((x) => x.kind === 'draw' || x.kind === 'pass' || x.kind === 'acceptPenalty');
     if (drawLike?.kind === 'pass') hud.notice(t('game.passHint'));
-    if (r.pendingDraw > 0) hud.notice(t('game.acceptHint', { n: r.pendingDraw }));
+    // nothing playable: the pyramid over the deck is the only hint
+    if (r.pendingDraw > 0 && playable.length) hud.notice(t('game.acceptHint', { n: r.pendingDraw }));
     const pick = await view.requestHumanPick(playable, !!drawLike);
     if (!this.live(id)) return;
     if (pick === 'draw') {
@@ -1192,6 +1201,9 @@ export class OnlineController {
       variants = variants.filter((v) => v.target === target);
     }
     if (variants.some((v) => v.color)) {
+      // the card lands on the pile first, then the colour is asked
+      await view.previewPlay(pick);
+      if (!this.live(id)) return;
       const color = await hud.pickColor();
       if (!this.live(id)) return;
       variants = variants.filter((v) => v.color === color);

@@ -1,28 +1,34 @@
 /**
  * Card faces, backs and table textures, all drawn on canvases with paths (no image assets).
  *
- * Every distinct face lives in ONE atlas texture (12×8 cells; 2048² on high, 1024² otherwise). A card
+ * Every distinct face lives in ONE atlas texture (13×9 cells; 2048² on high, 1024² otherwise). A card
  * instance only carries its cell offset (see FaceMap / cellUv); the shader adds `uv * CELL_SU/SV`.
  * The mapping part is pure (unit-tested in node); the drawing functions need a DOM canvas.
  *
  * Look (our own): rounded ivory card, colour field, a round centre medallion holding the colour symbol
- * (sol = sun, mar = wave, palma = palm leaf, coral = shell) or the action glyph, and a big corner value
- * with the small colour symbol under it. Wild-type cards are dark with a four-colour medallion. Same
- * design as the HTML art in src/ui/cardArt.ts, drawn in the same 60×90 design space.
+ * (sol = sun, mar = wave, palma = palm leaf, coral = shell) or the action glyph, and a big corner index. Wild-type cards are black with a four-colour medallion; once
+ * played, the pile shows the same design on the chosen colour (a `tint` variant cell). Same design as
+ * the HTML art in src/ui/cardArt.ts, drawn in the same 60×90 design space.
  */
 import * as THREE from 'three';
 import type { CardBack, CardFace, CardKind, Color, TableStyle } from '../contracts';
+import { BACK_FIELD, backDesign } from './cardBacks';
 
-export const COLOR_HEX: Record<Color, string> = { sol: '#ffb627', mar: '#14a3a0', palma: '#4caf50', coral: '#ff6f61' };
+/** the four card colours: one hue each and four clearly different lightness steps (sol lightest, mar darkest) */
+export const COLOR_HEX: Record<Color, string> = { sol: '#f7b417', mar: '#0c7489', palma: '#4db33d', coral: '#e04a3f' };
+/** a deep shade of each colour, for the marks on the ivory capsule (plain yellow would wash out there) */
+export const COLOR_DEEP: Record<Color, string> = { sol: '#b86e00', mar: '#0a5d6f', palma: '#2f8a26', coral: '#bf2f2c' };
+/** a bright, light-like version of each colour, for glows and arrows on the felt */
+export const COLOR_GLOW: Record<Color, string> = { sol: '#ffcb45', mar: '#35c6de', palma: '#74db55', coral: '#ff6b5c' };
 export const CREAM = '#fff6e6';
 const INK = '#13232e';
-const WILD_FIELD = '#1d2f3b';
+const WILD_FIELD = '#0b0b0d';
 const COLORS: Color[] = ['sol', 'mar', 'palma', 'coral'];
 
 // ───────────────────────── atlas mapping (pure) ─────────────────────────
 
-export const ATLAS_COLS = 12;
-export const ATLAS_ROWS = 8;
+export const ATLAS_COLS = 13;
+export const ATLAS_ROWS = 9;
 export const ATLAS_CELLS = ATLAS_COLS * ATLAS_ROWS;
 /** inner card width as a fraction of the cell (the rest is an ivory gutter against mip bleeding) */
 const INNER_W = 0.94;
@@ -31,16 +37,28 @@ export const CELL_SV = (INNER_W / ATLAS_COLS) * 1.5;
 
 const DEFAULT_DRAW: Partial<Record<CardKind, number>> = { draw2: 2, wild4: 4, draw6: 6, draw10: 10 };
 
-/** identity of a face for the atlas (two cards with the same key look the same) */
-export function faceKey(f: CardFace): string {
-  const v = f.kind === 'number' ? String(f.value ?? 0) : '';
-  const d = f.draw && f.draw !== DEFAULT_DRAW[f.kind] ? String(f.draw) : '';
-  return `${f.kind}:${f.color ?? 'x'}:${v}:${d}`;
+/** an atlas face: a card face, plus the colour chosen for a played wild-type card (its field colour) */
+export type AtlasFace = CardFace & { tint?: Color };
+
+/** wild-type kinds whose player picks a colour (the played card takes it as its field) */
+export const TINTABLE: readonly CardKind[] = ['wild', 'wild4', 'swap', 'draw10', 'wildColor'];
+
+/** the face to show for a card on the pile: wild-type cards take the chosen colour, others stay as they are */
+export function playedFace(f: CardFace, chosen: Color | null | undefined): AtlasFace {
+  return chosen && f.color === null && TINTABLE.includes(f.kind) ? { ...f, tint: chosen } : f;
 }
 
-/** every face the decks can hold (classic + power cards + Ciclón + Eclipse), in atlas order (82 of 96 cells) */
-export function baseFaces(): CardFace[] {
-  const out: CardFace[] = [];
+/** identity of a face for the atlas (two cards with the same key look the same) */
+export function faceKey(f: AtlasFace): string {
+  const v = f.kind === 'number' ? String(f.value ?? 0) : '';
+  const d = f.draw && f.draw !== DEFAULT_DRAW[f.kind] ? String(f.draw) : '';
+  return `${f.kind}:${f.color ?? 'x'}:${v}:${d}${f.tint && f.color === null ? `@${f.tint}` : ''}`;
+}
+
+/** every face the decks can hold (classic + power cards + Ciclón + Eclipse) and the played wild-type
+ *  variants in the four colours, in atlas order (102 of 117 cells) */
+export function baseFaces(): AtlasFace[] {
+  const out: AtlasFace[] = [];
   for (const c of COLORS) {
     for (let v = 0; v <= 9; v++) out.push({ kind: 'number', color: c, value: v });
     out.push({ kind: 'skip', color: c }, { kind: 'reverse', color: c }, { kind: 'draw2', color: c, draw: 2 });
@@ -50,6 +68,8 @@ export function baseFaces(): CardFace[] {
   // Ciclón: coloured skipAll / +6, dark +10 and "draw until the colour"
   for (const c of COLORS) out.push({ kind: 'skipAll', color: c }, { kind: 'draw6', color: c, draw: 6 });
   out.push({ kind: 'draw10', color: null, draw: 10 }, { kind: 'wildColor', color: null });
+  const wilds = out.filter((f) => f.color === null && TINTABLE.includes(f.kind));
+  for (const f of wilds) for (const c of COLORS) out.push({ ...f, tint: c });
   return out;
 }
 
@@ -72,12 +92,12 @@ export function cellUv(i: number): { u0: number; v0: number } {
 
 /** face → atlas cell. Unknown faces (harsh-mode extras) get a free cell; `added` says it must be drawn. */
 export class FaceMap {
-  readonly faces: CardFace[] = [];
+  readonly faces: AtlasFace[] = [];
   private keys = new Map<string, number>();
   constructor() {
     for (const f of baseFaces()) this.add(f);
   }
-  private add(f: CardFace): number {
+  private add(f: AtlasFace): number {
     const i = this.faces.length;
     this.faces.push({ ...f });
     this.keys.set(faceKey(f), i);
@@ -86,15 +106,15 @@ export class FaceMap {
   get size(): number {
     return this.faces.length;
   }
-  lookup(f: CardFace): number {
+  lookup(f: AtlasFace): number {
     return this.keys.get(faceKey(f)) ?? -1;
   }
   /** cell for a face, adding it when there is room; falls back to the same kind/colour's base face */
-  index(f: CardFace): { i: number; added: boolean } {
+  index(f: AtlasFace): { i: number; added: boolean } {
     const k = this.keys.get(faceKey(f));
     if (k !== undefined) return { i: k, added: false };
     if (this.faces.length < ATLAS_CELLS) return { i: this.add(f), added: true };
-    const base = this.keys.get(faceKey({ kind: f.kind, color: f.color, value: f.value })) ?? 0;
+    const base = this.keys.get(faceKey({ kind: f.kind, color: f.color, value: f.value, tint: f.tint })) ?? 0;
     return { i: base, added: false };
   }
 }
@@ -186,9 +206,15 @@ function drawGlyph(g: G, kind: CardKind, col: string): boolean {
       g.stroke();
       g.stroke(P('M6.8 17.2 17.2 6.8'));
       return true;
-    case 'reverse':
-      g.stroke(P('M5 9h11l-3-3M19 15H8l3 3'));
+    case 'reverse': {
+      // two arrows chasing each other round a ring, like the direction ring on the table
+      g.stroke(P('M4.95 9.43A7.5 7.5 0 0 1 18.5 8.25M19.05 14.57A7.5 7.5 0 0 1 5.5 15.75'));
+      const heads = P('M20.7 12.06 21.6 6.45 15.4 10.05ZM3.3 11.94 2.4 17.55 8.6 13.95Z');
+      g.lineWidth = 1.2;
+      g.fill(heads);
+      g.stroke(heads);
       return true;
+    }
     case 'shield':
       g.stroke(P('M12 3.5 19 6v5.5c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6z'));
       g.lineWidth = 2;
@@ -252,14 +278,31 @@ function fourColourDisc(g: G, cx: number, cy: number, r: number): void {
   }
 }
 
-/** draw one face into (x, y, w, h); w:h = 2:3 (60×90 design space) */
-export function drawFace(g: G, f: CardFace, x: number, y: number, w: number): void {
+/** the gloss on the top of the colour field (turned half a turn it is the shade at the bottom) */
+const SHEEN = 'M3.4 9A5.6 5.6 0 0 1 9 3.4H51A5.6 5.6 0 0 1 56.6 9V30Q30 46 3.4 30Z';
+/** the four quarters of the wild capsule (the capsule inset by 1.8) */
+const QUADS: readonly [Color, string][] = [
+  ['coral', 'M30 45H17.3V36.5A12.7 12.7 0 0 1 30 23.8Z'],
+  ['sol', 'M30 45V23.8A12.7 12.7 0 0 1 42.7 36.5V45Z'],
+  ['mar', 'M30 45H42.7V53.5A12.7 12.7 0 0 1 30 66.2Z'],
+  ['palma', 'M30 45V66.2A12.7 12.7 0 0 1 17.3 53.5V45Z'],
+];
+
+/**
+ * Draw one face into (x, y, w, h); w:h = 2:3 (60×90 design space). Keep cardSvg (src/ui/cardArt.ts) in step.
+ *
+ * Layout: ivory card, glossy colour field, an upright ivory capsule in the middle holding the value (or
+ * the action glyph) over the colour symbol, and in two corners the outlined index on its own. Wild-type cards: black field (the chosen colour once played), the capsule in four colours
+ * with a small ivory disc for the mark ("Ku" on the plain wild).
+ */
+export function drawFace(g: G, f: AtlasFace, x: number, y: number, w: number): void {
   const s = w / 60;
   g.save();
   g.translate(x, y);
   g.scale(s, s);
   const c = f.color;
-  const field = c ? COLOR_HEX[c] : WILD_FIELD;
+  const hue = c ?? f.tint ?? null;
+  const field = hue ? COLOR_HEX[hue] : WILD_FIELD;
   // ivory card + colour field (the ivory gutter around the cell is filled by the caller)
   g.fillStyle = CREAM;
   roundRect(g, 0, 0, 60, 90, 7);
@@ -267,17 +310,20 @@ export function drawFace(g: G, f: CardFace, x: number, y: number, w: number): vo
   g.fillStyle = field;
   roundRect(g, 3.4, 3.4, 53.2, 83.2, 5.6);
   g.fill();
-  // a soft inner light so the field is not flat
-  const grad = g.createRadialGradient(30, 36, 4, 30, 45, 52);
-  grad.addColorStop(0, 'rgba(255,255,255,0.18)');
-  grad.addColorStop(1, 'rgba(0,0,0,0.16)');
-  g.fillStyle = grad;
-  roundRect(g, 3.4, 3.4, 53.2, 83.2, 5.6);
-  g.fill();
-  if (!c) {
-    // wild-type: thin woven lines in the four colours
-    g.globalAlpha = 0.22;
+  // gloss on top, shade at the bottom
+  g.fillStyle = 'rgba(255,255,255,0.12)';
+  g.fill(P(SHEEN));
+  g.save();
+  g.translate(60, 90);
+  g.rotate(Math.PI);
+  g.fillStyle = 'rgba(0,0,0,0.12)';
+  g.fill(P(SHEEN));
+  g.restore();
+  if (!hue) {
+    // unplayed wild-type: thin woven lines in the four colours
+    g.globalAlpha = 0.3;
     g.lineWidth = 1.2;
+    g.lineCap = 'butt';
     for (let i = 0; i < 4; i++) {
       g.strokeStyle = COLOR_HEX[COLORS[i]];
       g.beginPath();
@@ -287,65 +333,78 @@ export function drawFace(g: G, f: CardFace, x: number, y: number, w: number): vo
     }
     g.globalAlpha = 1;
   }
-  // centre medallion (a plain circle; nothing tilted)
-  g.fillStyle = CREAM;
-  g.beginPath();
-  g.arc(30, 45, 16.5, 0, Math.PI * 2);
+  // the capsule (upright, nothing tilted) with a soft drop shadow
+  g.fillStyle = 'rgba(0,0,0,0.24)';
+  roundRect(g, 15.5, 23.3, 29, 46, 14.5);
   g.fill();
-  g.strokeStyle = 'rgba(0,0,0,0.18)';
-  g.lineWidth = 0.8;
-  g.stroke();
+  g.fillStyle = CREAM;
+  roundRect(g, 15.5, 22, 29, 46, 14.5);
+  g.fill();
+  g.textAlign = 'center';
+  g.textBaseline = 'alphabetic';
   if (!c) {
-    fourColourDisc(g, 30, 45, 14.6);
-    if (f.kind !== 'wild') {
-      g.fillStyle = CREAM;
-      g.beginPath();
-      g.arc(30, 45, 9.2, 0, Math.PI * 2);
-      g.fill();
-      if (f.kind === 'swap' || f.kind === 'flip' || f.kind === 'wildColor') {
-        g.save();
-        g.translate(21, 36);
-        g.scale(0.75, 0.75);
-        drawGlyph(g, f.kind, INK);
-        g.restore();
-      } else {
-        g.fillStyle = INK;
-        const t = cornerText(f);
-        g.font = `900 ${t.length > 2 ? 9 : 11}px ${FONT}`;
-        g.textAlign = 'center';
-        g.textBaseline = 'middle';
-        g.fillText(t, 30, 45.6);
-        if (f.kind === 'draw10') {
-          // the +10 carries a thin storm ring so it never reads as a +4 at a glance
-          g.strokeStyle = CREAM;
-          g.lineWidth = 1.4;
-          g.setLineDash([3, 2.2]);
-          g.beginPath();
-          g.arc(30, 45, 16.2, 0, Math.PI * 2);
-          g.stroke();
-          g.setLineDash([]);
-        }
-      }
+    for (const [col, d] of QUADS) {
+      g.fillStyle = COLOR_HEX[col];
+      g.fill(P(d));
+    }
+    g.strokeStyle = CREAM;
+    g.lineWidth = 0.9;
+    g.lineCap = 'butt';
+    g.stroke(P('M30 23.8V66.2M17.3 45H42.7'));
+    if (f.kind === 'draw10') {
+      // the +10 carries a dashed storm ring so it never reads as a +4 at a glance
+      g.lineWidth = 1.3;
+      g.setLineDash([3, 2.2]);
+      roundRect(g, 13.4, 19.9, 33.2, 50.2, 16.6);
+      g.stroke();
+      g.setLineDash([]);
+    }
+    g.fillStyle = CREAM;
+    g.beginPath();
+    g.arc(30, 45, 9.8, 0, Math.PI * 2);
+    g.fill();
+    g.strokeStyle = 'rgba(0,0,0,0.22)';
+    g.lineWidth = 0.8;
+    g.stroke();
+    const t = f.kind === 'wild' ? 'Ku' : cornerText(f);
+    if (t) {
+      g.fillStyle = INK;
+      g.font = `900 ${t.length > 2 ? 9 : t === 'Ku' ? 10.5 : 11.5}px ${FONT}`;
+      g.fillText(t, 30, t.length > 2 ? 48.2 : 48.9);
+    } else {
+      g.save();
+      g.translate(21.6, 36.6);
+      g.scale(0.7, 0.7);
+      drawGlyph(g, f.kind, INK);
+      g.restore();
     }
   } else {
-    g.save();
-    g.translate(18, 33);
-    if (f.kind === 'number') {
-      g.translate(-1, -1);
-      g.scale(1.08, 1.08);
-      drawSymbol(g, c, field);
-    } else if (!drawGlyph(g, f.kind, field)) {
-      g.restore();
+    const deep = COLOR_DEEP[c];
+    g.strokeStyle = deep;
+    g.globalAlpha = 0.45;
+    g.lineWidth = 0.9;
+    roundRect(g, 17.4, 23.9, 25.2, 42.2, 12.6);
+    g.stroke();
+    g.globalAlpha = 1;
+    const t = cornerText(f);
+    if (t) {
+      g.fillStyle = deep;
+      g.font = `900 ${t.length > 2 ? 13 : t.length > 1 ? 17 : 25}px ${FONT}`;
+      g.fillText(t, 30, t.length > 1 ? 45.6 : 47.4);
+    } else {
       g.save();
-      g.fillStyle = field;
-      g.font = `900 16px ${FONT}`;
-      g.textAlign = 'center';
-      g.textBaseline = 'middle';
-      g.fillText(cornerText(f), 30, 46);
+      g.translate(18.6, 26.2);
+      g.scale(0.95, 0.95);
+      drawGlyph(g, f.kind, deep);
+      g.restore();
     }
+    g.save();
+    g.translate(22.8, 50.6);
+    g.scale(0.6, 0.6);
+    drawSymbol(g, c, deep);
     g.restore();
   }
-  // corners: big value (or glyph), the small colour symbol under it; mirrored bottom-right
+  // corners: the index (value or glyph) on its own; mirrored bottom-right
   const corner = cornerText(f);
   for (let k = 0; k < 2; k++) {
     g.save();
@@ -354,15 +413,36 @@ export function drawFace(g: G, f: CardFace, x: number, y: number, w: number): vo
       g.rotate(Math.PI);
     }
     if (corner) {
-      g.font = `900 ${corner.length > 2 ? 11 : corner.length > 1 ? 14 : 17}px ${FONT}`;
+      // single digits keep their size; "+2" … "+10" are fitted to a fixed box (condensed a little, then
+      // shrunk) so the label keeps a clear margin from the card border
+      const multi = corner.length > 1;
+      let px = 18;
+      let sx = 1;
+      let cx = 12.4;
+      if (multi) {
+        px = 15;
+        const maxW = corner.length > 2 ? 13.2 : 12.2;
+        cx = 6.6 + maxW / 2;
+        g.font = `900 ${px}px ${FONT}`;
+        sx = Math.min(1, maxW / g.measureText(corner).width);
+        if (sx < 0.8) {
+          px *= sx / 0.8;
+          sx = 0.8;
+        }
+      }
+      g.font = `900 ${px}px ${FONT}`;
       g.textAlign = 'center';
       g.textBaseline = 'alphabetic';
       g.lineJoin = 'round';
-      g.lineWidth = 2.2;
+      g.lineWidth = multi ? 1.8 : 2.2;
       g.strokeStyle = INK;
-      g.strokeText(corner, 11.5, 19.5);
+      g.save();
+      g.translate(cx, multi ? 19 : 20.6);
+      g.scale(sx, 1);
+      g.strokeText(corner, 0, 0);
       g.fillStyle = CREAM;
-      g.fillText(corner, 11.5, 19.5);
+      g.fillText(corner, 0, 0);
+      g.restore();
     } else if (f.kind === 'wild') {
       fourColourDisc(g, 11.5, 13, 5.6);
       g.strokeStyle = CREAM;
@@ -372,16 +452,9 @@ export function drawFace(g: G, f: CardFace, x: number, y: number, w: number): vo
       g.stroke();
     } else {
       g.save();
-      g.translate(4.3, 5.6);
-      g.scale(0.6, 0.6);
+      g.translate(4.2, 5);
+      g.scale(0.68, 0.68);
       drawGlyph(g, f.kind, CREAM);
-      g.restore();
-    }
-    if (c) {
-      g.save();
-      g.translate(6.5, 22.5);
-      g.scale(0.42, 0.42);
-      drawSymbol(g, c, CREAM, field);
       g.restore();
     }
     g.restore();
@@ -405,7 +478,7 @@ export function drawAtlas(size: number, map: FaceMap): AtlasCanvas {
   return { canvas, size };
 }
 
-export function drawCell(g: G, size: number, i: number, f: CardFace): void {
+export function drawCell(g: G, size: number, i: number, f: AtlasFace): void {
   const r = cellPx(i, size);
   drawFace(g, f, r.x, r.y, r.w);
 }
@@ -421,91 +494,56 @@ export function makeTexture(c: HTMLCanvasElement, mip = true): THREE.CanvasTextu
 
 // ───────────────────────── backs ─────────────────────────
 
-const BACKS: Record<CardBack, { bg: string; fg: string }> = {
-  ku: { bg: '#163a46', fg: '#ffb627' },
-  weave: { bg: '#14a3a0', fg: '#0e6e6c' },
-  sun: { bg: '#ffb627', fg: '#c77d00' },
-  night: { bg: '#1b2b55', fg: '#ffe7a8' },
-};
-
-/** a card back (w × 1.5w px, 60×90 design space). Every back carries the "Ku" mark. */
+/**
+ * A card back (w × 1.5w px, 60×90 design space), drawn from the shared design data in cardBacks.ts (the
+ * SVG back in src/ui/cardArt.ts draws the same data). Ivory edge, lit field, quiet pattern, one "Ku" in
+ * the centre.
+ */
 export function drawBack(b: CardBack, w = 256): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = Math.round(w * 1.5);
   const g = canvas.getContext('2d')!;
-  const d = BACKS[b] ?? BACKS.ku;
+  const d = backDesign(b);
   g.fillStyle = CREAM;
   g.fillRect(0, 0, canvas.width, canvas.height);
   g.scale(w / 60, w / 60);
-  g.fillStyle = d.bg;
-  roundRect(g, 3.4, 3.4, 53.2, 83.2, 5.6);
-  g.fill();
+  const field = P(BACK_FIELD);
+  const lit = g.createRadialGradient(30, 45, 0, 30, 45, 50);
+  lit.addColorStop(0, d.hi);
+  lit.addColorStop(1, d.lo);
+  g.fillStyle = lit;
+  g.fill(field);
   g.save();
-  roundRect(g, 3.4, 3.4, 53.2, 83.2, 5.6);
-  g.clip();
-  g.lineCap = 'round';
-  if (b === 'weave') {
-    g.strokeStyle = d.fg;
-    g.lineWidth = 3;
-    for (let k = -90; k < 90; k += 12) {
-      g.beginPath();
-      g.moveTo(k, 0);
-      g.lineTo(k + 90, 90);
-      g.moveTo(k + 60, 0);
-      g.lineTo(k - 30, 90);
-      g.stroke();
+  g.clip(field);
+  g.lineCap = 'butt';
+  g.lineJoin = 'miter';
+  for (const l of d.layers) {
+    g.globalAlpha = l.alpha;
+    if (l.fill) {
+      g.fillStyle = l.fill;
+      g.fill(P(l.d));
     }
-  } else if (b === 'ku') {
-    // woven diamonds
-    g.strokeStyle = 'rgba(255,182,39,0.22)';
-    g.lineWidth = 1;
-    for (let k = -90; k < 150; k += 7) {
-      g.beginPath();
-      g.moveTo(k, 0);
-      g.lineTo(k - 60, 90);
-      g.moveTo(k - 60, 0);
-      g.lineTo(k, 90);
-      g.stroke();
+    if (l.stroke) {
+      g.strokeStyle = l.stroke;
+      g.lineWidth = l.width ?? 1;
+      g.stroke(P(l.d));
     }
-  } else if (b === 'sun') {
-    g.strokeStyle = 'rgba(255,255,255,0.28)';
-    g.lineWidth = 2.4;
-    for (let i = 0; i < 24; i++) {
-      const a = (i / 24) * Math.PI * 2;
-      g.beginPath();
-      g.moveTo(30 + Math.cos(a) * 14, 45 + Math.sin(a) * 14);
-      g.lineTo(30 + Math.cos(a) * 60, 45 + Math.sin(a) * 60);
-      g.stroke();
-    }
-  } else {
-    g.fillStyle = d.fg;
-    const stars = [[14, 16, 1.3], [46, 14, 1], [44, 74, 1.2], [16, 70, 1], [50, 40, 0.8], [10, 46, 0.8], [26, 10, 0.7], [36, 82, 0.7]];
-    for (const [sx, sy, r] of stars) {
-      g.beginPath();
-      g.arc(sx, sy, r, 0, Math.PI * 2);
-      g.fill();
-    }
-    g.fill(P('M36 22a12 12 0 1 0 6 21 10 10 0 1 1-6-21z'));
   }
   g.restore();
-  g.strokeStyle = d.fg;
-  g.globalAlpha = 0.7;
-  g.lineWidth = 1.6;
-  roundRect(g, 7.5, 7.5, 45, 75, 4);
-  g.stroke();
-  g.globalAlpha = 1;
-  // the "Ku" mark in a medallion
-  const mark = b === 'ku' ? d.fg : b === 'night' ? '#1b2b55' : b === 'sun' ? '#c77d00' : '#0e6e6c';
-  g.fillStyle = b === 'ku' ? 'rgba(0,0,0,0.25)' : b === 'night' ? '#ffe7a8' : CREAM;
-  g.beginPath();
-  g.arc(30, b === 'night' ? 58 : 45, 12, 0, Math.PI * 2);
-  g.fill();
-  g.fillStyle = mark;
-  g.font = `900 13px ${FONT}`;
+  g.fillStyle = d.mark.fill;
+  g.font = `900 ${d.mark.size}px ${FONT}`;
   g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.fillText('Ku', 30, (b === 'night' ? 58 : 45) + 0.8);
+  g.textBaseline = 'alphabetic';
+  g.lineJoin = 'round';
+  for (const u of d.mark.under ?? []) {
+    g.globalAlpha = u.alpha;
+    g.strokeStyle = u.stroke;
+    g.lineWidth = u.width;
+    g.strokeText('Ku', 30, d.mark.y);
+  }
+  g.globalAlpha = 1;
+  g.fillText('Ku', 30, d.mark.y);
   return canvas;
 }
 
@@ -623,36 +661,114 @@ export function drawGlowRing(size = 128): HTMLCanvasElement {
   return c;
 }
 
-/** direction ring: a thin circle with chevrons pointing clockwise (seen from above) */
+/** direction ring: two curved arrows pointing clockwise in canvas space (white + alpha; the table tints it) */
 export function drawDirRing(size = 512): HTMLCanvasElement {
+  // each arrow is a comet: a hair-thin tail that swells and brightens into a swept-back head,
+  // with a soft halo, a body lit towards its outer edge, a crisp rim and a fine bright core line
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d')!;
   const cx = size / 2;
-  const R = size * 0.44;
-  g.strokeStyle = 'rgba(255,246,230,0.9)';
-  g.lineWidth = size * 0.012;
-  g.setLineDash([size * 0.05, size * 0.03]);
-  g.beginPath();
-  g.arc(cx, cx, R, 0, Math.PI * 2);
-  g.stroke();
-  g.setLineDash([]);
-  g.fillStyle = 'rgba(255,246,230,0.95)';
-  for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-    g.save();
-    g.translate(cx + Math.cos(a) * R, cx + Math.sin(a) * R);
-    g.rotate(a + Math.PI / 2); // tangent, clockwise in canvas space
-    const k = size * 0.035;
+  const R = size * 0.4;
+  const w = size * 0.064;
+  const span = Math.PI * 0.72;
+  const steps = 56;
+  const barb = w * 1.12; // how far the head reaches either side of the band
+  const tipAng = (w * 2.05) / R; // the head's length along the circle
+  const sweep = (w * 0.55) / R; // the barbs trail behind the neck
+  const half = (t: number): number => (w / 2) * (0.07 + 0.93 * Math.pow(t, 0.85));
+  const pt = (a: number, r: number): void => g.lineTo(cx + Math.cos(a) * r, cx + Math.sin(a) * r);
+  const body = g.createRadialGradient(cx, cx, R - barb, cx, cx, R + barb);
+  body.addColorStop(0, 'rgba(255,255,255,0.5)');
+  body.addColorStop(0.5, 'rgba(255,255,255,0.72)');
+  body.addColorStop(1, 'rgba(255,255,255,0.98)');
+  g.lineJoin = 'round';
+  g.lineCap = 'round';
+  for (const start of [0, Math.PI]) {
+    const a1 = start + span; // the neck: where the head begins (clockwise in canvas space)
     g.beginPath();
-    g.moveTo(k * 1.3, 0);
-    g.lineTo(-k, -k);
-    g.lineTo(-k * 0.4, 0);
-    g.lineTo(-k, k);
+    for (let i = 0; i <= steps; i++) pt(start + (span * i) / steps, R + half(i / steps));
+    pt(a1 - sweep, R + barb);
+    pt(a1 + tipAng, R);
+    pt(a1 - sweep, R - barb);
+    for (let i = steps; i >= 0; i--) pt(start + (span * i) / steps, R - half(i / steps));
     g.closePath();
+    // the halo and the lit body in one fill
+    g.shadowColor = 'rgba(255,255,255,0.6)';
+    g.shadowBlur = size * 0.035;
+    g.fillStyle = body;
     g.fill();
-    g.restore();
+    g.shadowBlur = 0;
+    g.shadowColor = 'transparent';
+    // the crisp rim (round joins soften the head's points)
+    g.lineWidth = size * 0.0055;
+    g.strokeStyle = 'rgba(255,255,255,1)';
+    g.stroke();
+    // a fine bright core through the wide part of the band, into the head
+    g.beginPath();
+    g.arc(cx, cx, R, start + span * 0.3, a1 + tipAng * 0.45);
+    g.lineWidth = w * 0.13;
+    g.strokeStyle = 'rgba(255,255,255,0.65)';
+    g.stroke();
   }
+  // fade each arrow in along its length (tail -> head): one pass over the pixels, once
+  try {
+    const img = g.getImageData(0, 0, size, size);
+    const d = img.data;
+    const full = span * 0.62; // fully opaque from here on
+    const cut = Math.PI - (Math.PI - span - tipAng) * 0.45; // past the tip's halo, back to nothing
+    for (let y = 0, i = 3; y < size; y++) {
+      for (let x = 0; x < size; x++, i += 4) {
+        if (d[i] === 0) continue;
+        let a = Math.atan2(y + 0.5 - cx, x + 0.5 - cx);
+        if (a < 0) a += Math.PI; // the two arrows are alike: fold onto one
+        const k = a >= cut ? 0 : a >= full ? 1 : a / full;
+        d[i] = Math.round(d[i] * k * k * (3 - 2 * k));
+      }
+    }
+    g.putImageData(img, 0, 0);
+  } catch {
+    /* no pixel access: the arrows stay un-faded */
+  }
+  return c;
+}
+
+/** the turn marker: a rounded arrowhead with a soft halo, tip up (white + alpha; tinted by the material) */
+export function drawTurnMarker(size = 128): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d')!;
+  const u = size;
+  const path = (): void => {
+    g.beginPath();
+    g.moveTo(u * 0.5, u * 0.25);
+    g.lineTo(u * 0.74, u * 0.7);
+    g.quadraticCurveTo(u * 0.5, u * 0.56, u * 0.26, u * 0.7); // a curved notch in the base
+    g.closePath();
+  };
+  g.lineJoin = 'round';
+  // a wide soft halo, then the body
+  path();
+  g.shadowColor = 'rgba(255,255,255,0.75)';
+  g.shadowBlur = u * 0.13;
+  g.lineWidth = u * 0.07;
+  g.strokeStyle = 'rgba(255,255,255,0.55)';
+  g.stroke();
+  g.shadowBlur = u * 0.05;
+  const grad = g.createLinearGradient(0, u * 0.2, 0, u * 0.72);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(1, 'rgba(255,255,255,0.7)');
+  g.fillStyle = grad;
+  g.strokeStyle = grad;
+  g.fill();
+  g.stroke(); // rounds the corners
+  g.shadowBlur = 0;
+  g.shadowColor = 'transparent';
+  // a crisp bright edge
+  path();
+  g.lineWidth = u * 0.07;
+  g.strokeStyle = 'rgba(255,255,255,0.35)';
+  g.stroke();
   return c;
 }
 
@@ -740,4 +856,109 @@ export function drawBadge(g: G, w: number, h: number, text: string, fill = '#ff4
   g.textAlign = 'center';
   g.textBaseline = 'middle';
   g.fillText(text, w / 2, h / 2 + 2);
+}
+
+/**
+ * The round table and the room around it, one square texture for a big floor plane: a round felt with
+ * no rim, softly lit from the middle, thin rings and faint light rays around it, and stray glints, all
+ * fading out to the background colour at the edge (so the plane never shows a seam). `tableR` is the
+ * table radius as a fraction of the plane's side; tints are team glows (u, v in 0..1 over the plane).
+ */
+export function drawArena(style: TableStyle, size: number, tableR: number, tints: readonly FeltTint[] = []): HTMLCanvasElement {
+  const S = TABLE_STYLE_DEFS[style] ?? TABLE_STYLE_DEFS.teal;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d')!;
+  const m = size / 2;
+  const R = tableR * size;
+  // the room: lit from the middle, fading to the background at the edge
+  const room = g.createRadialGradient(m, m, R * 0.6, m, m, m);
+  room.addColorStop(0, S.felt[1]);
+  room.addColorStop(0.45, hexA(S.felt[1], 0.55));
+  room.addColorStop(1, S.bg);
+  g.fillStyle = S.bg;
+  g.fillRect(0, 0, size, size);
+  g.fillStyle = room;
+  g.fillRect(0, 0, size, size);
+  // light rays fanning out from the table
+  g.save();
+  g.translate(m, m);
+  const rays = 20;
+  for (let i = 0; i < rays; i++) {
+    const a0 = (i / rays) * Math.PI * 2;
+    const a1 = a0 + (Math.PI * 2) / rays / 2;
+    const gr = g.createRadialGradient(0, 0, R, 0, 0, m);
+    gr.addColorStop(0, 'rgba(255,255,255,0.05)');
+    gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr;
+    g.beginPath();
+    g.moveTo(Math.cos(a0) * R, Math.sin(a0) * R);
+    g.arc(0, 0, m, a0, a1);
+    g.lineTo(Math.cos(a1) * R, Math.sin(a1) * R);
+    g.closePath();
+    g.fill();
+  }
+  g.restore();
+  // stray glints round the room (fixed seed so redraws match)
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 70; i++) {
+    const a = rnd() * Math.PI * 2;
+    const d = R * 1.08 + rnd() * (m - R * 1.08);
+    const s = size * (0.004 + rnd() * 0.012);
+    g.save();
+    g.translate(m + Math.cos(a) * d, m + Math.sin(a) * d);
+    g.rotate(rnd() * Math.PI);
+    g.fillStyle = `rgba(255,255,255,${(0.04 + rnd() * 0.06) * (1 - d / m)})`;
+    g.fillRect(-s, -s * 0.35, s * 2, s * 0.7);
+    g.restore();
+  }
+  // a soft glow just outside the table edge
+  const halo = g.createRadialGradient(m, m, R * 0.96, m, m, R * 1.25);
+  halo.addColorStop(0, hexA(S.felt[0], 0.45));
+  halo.addColorStop(1, hexA(S.felt[0], 0));
+  g.fillStyle = halo;
+  g.beginPath();
+  g.arc(m, m, R * 1.25, 0, Math.PI * 2);
+  g.fill();
+  // the round felt (no rim)
+  const felt = g.createRadialGradient(m, m * 0.97, R * 0.05, m, m, R);
+  felt.addColorStop(0, S.felt[0]);
+  felt.addColorStop(1, S.felt[1]);
+  g.fillStyle = felt;
+  g.beginPath();
+  g.arc(m, m, R, 0, Math.PI * 2);
+  g.fill();
+  // felt speckle inside the table
+  g.save();
+  g.beginPath();
+  g.arc(m, m, R, 0, Math.PI * 2);
+  g.clip();
+  const n = Math.round((R * R * 3.14) / 90);
+  g.fillStyle = 'rgba(255,255,255,0.035)';
+  for (let i = 0; i < n; i++) g.fillRect(m - R + rnd() * 2 * R, m - R + rnd() * 2 * R, 1.2, 1.2);
+  g.fillStyle = 'rgba(0,0,0,0.05)';
+  for (let i = 0; i < n; i++) g.fillRect(m - R + rnd() * 2 * R, m - R + rnd() * 2 * R, 1.2, 1.2);
+  // team tints behind each seat
+  for (const t of tints) {
+    const cx = t.u * size;
+    const cy = t.v * size;
+    const r = t.r * size;
+    const gr = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+    gr.addColorStop(0, hexA(t.color, 0.3));
+    gr.addColorStop(0.55, hexA(t.color, 0.13));
+    gr.addColorStop(1, hexA(t.color, 0));
+    g.fillStyle = gr;
+    g.fillRect(cx - r, cy - r, 2 * r, 2 * r);
+  }
+  g.restore();
+  // thin rings: one on the edge, two in the room
+  g.lineWidth = Math.max(1, size * 0.0025);
+  for (const [k, a] of [[1, 0.22], [1.22, 0.07], [1.5, 0.045]] as const) {
+    g.strokeStyle = `rgba(255,255,255,${a})`;
+    g.beginPath();
+    g.arc(m, m, R * k, 0, Math.PI * 2);
+    g.stroke();
+  }
+  return c;
 }

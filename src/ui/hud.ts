@@ -62,6 +62,8 @@ export class Hud {
   avatars = true;
   /** the human tapped ¡Ku! */
   onKu: (() => void) | null = null;
+  /** where the colour pane springs from (the pile's viewport point); centre of the screen when null */
+  colorAnchor: (() => { x: number; y: number } | null) | null = null;
 
   private roundEl = h('span.hud-round');
   private targetEl = h('span.hud-target');
@@ -71,6 +73,23 @@ export class Hud {
   private pendingEl = h('span.hud-pending', { role: 'status' });
   private noticeEl = h('div.notice', { role: 'status', 'aria-live': 'polite' });
   private kuBtn: HTMLButtonElement;
+
+  /**
+   * Put the ¡Ku! button beside the human's cards: from the human's plate (left of the hand) mirror to the
+   * hand's right edge, level with the plate. Called on every plate layout.
+   */
+  placeKu(plate: { x: number; y: number; w: number; h: number } | undefined, W: number, H: number): void {
+    const b = this.kuBtn;
+    if (!plate) return;
+    const size = b.offsetWidth || 72;
+    const handRight = W - (plate.x + plate.w / 2 + 10);
+    const x = Math.min(W - size / 2 - 8, handRight + 12 + size / 2);
+    const y = Math.min(H - size / 2 - 8, Math.max(size / 2 + 8, plate.y));
+    b.style.left = `${x - size / 2}px`;
+    b.style.top = `${y - size / 2}px`;
+    b.style.right = 'auto';
+    b.style.bottom = 'auto';
+  }
   private kuWaiters: (() => void)[] = [];
   private pauseBtn: HTMLButtonElement;
   private respLayer = h('div.resp-host');
@@ -202,26 +221,65 @@ export class Hud {
 
   // ───────── pickers ─────────
 
-  /** the four colours as big symbol buttons (after a wild) */
+  /**
+   * The four colours as one rounded diamond (four equal quadrants) springing open over the pile card, once the
+   * played wild has landed. Not a modal: no backdrop, the table keeps animating, Esc does nothing; it stays until
+   * a colour is tapped or closeAll() runs (pause/exit, or the online turn timer resolving the choice).
+   */
   pickColor(): Promise<Color> {
     return new Promise((resolve) => {
-      let close = () => {};
-      const opts = COLORS.map((c) => {
+      let done = false;
+      // grid cells of the square before its 45° turn: top-left → top, top-right → right, bottom-right → bottom, bottom-left → left
+      const cells = ['q-t', 'q-r', 'q-b', 'q-l'];
+      const opts = COLORS.map((c, i) => {
         const b = h(
-          'button.color-opt',
-          { type: 'button', style: `--c:${COLOR_HEX[c]}`, 'aria-label': t(`color.${c}` as Key) },
-          h('span.color-sym', { html: symbolSvg(c, 44, '#fff6e6') }),
-          h('span.color-name', t(`color.${c}` as Key)),
+          'button.color-quad',
+          { type: 'button', class: cells[i], style: `--c:${COLOR_HEX[c]};--ca:${COLOR_HEX[c]}d4`, 'aria-label': t(`color.${c}` as Key), title: t(`color.${c}` as Key) },
+          h('span.color-sym', { html: symbolSvg(c, 40, '#fff6e6') }),
         );
         b.addEventListener('click', () => {
+          if (done) return;
+          done = true;
           close();
           resolve(c);
         });
         return b;
       });
-      opts[0].dataset.autofocus = '';
-      const card = h('div.card.picker.color-picker', h('h2.card-title', t('hud.pickColor')), h('div.color-grid', ...opts));
-      close = this.track(this.overlay.openModal(card));
+      const pane = h(
+        'div.color-pane',
+        { role: 'group', 'aria-label': t('hud.pickColor'), class: prefersReducedMotion() ? 'still' : '' },
+        h('span.color-pane-title', t('hud.pickColor')),
+        h('div.color-diamond', ...opts),
+      );
+      this.el.append(pane);
+      const diamond = pane.lastElementChild as HTMLElement;
+      // stay over the pile while open (window resize / rotation / table re-layout), always fully on screen
+      let px = NaN;
+      let py = NaN;
+      let raf = 0;
+      const place = () => {
+        const half = (diamond.offsetWidth || 120) * 0.71;
+        const p = this.colorAnchor?.() ?? null;
+        const W = window.innerWidth;
+        const H = window.innerHeight;
+        const x = Math.round(Math.min(Math.max(p ? p.x : W / 2, half + 6), W - half - 6));
+        const y = Math.round(Math.min(Math.max(p ? p.y : H / 2, half + 46), H - half - 6));
+        if (x !== px || y !== py) {
+          px = x;
+          py = y;
+          pane.style.left = `${x}px`;
+          pane.style.top = `${y}px`;
+        }
+        if (!done) raf = requestAnimationFrame(place);
+      };
+      place();
+      requestAnimationFrame(() => opts[0].focus({ preventScroll: true }));
+      const close = this.track(() => {
+        done = true;
+        cancelAnimationFrame(raf);
+        pane.classList.add('leaving');
+        setTimeout(() => pane.remove(), 200);
+      });
     });
   }
 

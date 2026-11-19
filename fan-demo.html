@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fan demo</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d1b1e; color: #e8f1f0; font: 12px system-ui, sans-serif; overflow: hidden; }
+  #stage { position: absolute; inset: 0 290px 0 0; display: flex; align-items: center; justify-content: center; }
+  #view { position: relative; outline: 1px solid #2b5157; }
+  #view canvas { display: block; }
+  .av { position: absolute; transform: translate(-50%, -50%); border-radius: 50%; background: #f2c14e; color: #173f45; display: flex; align-items: center; justify-content: center; font-weight: 700; cursor: grab; border: 3px solid #fff; box-shadow: 0 2px 6px #0008; user-select: none; touch-action: none; }
+  .av { z-index: 3; }
+  .ui { z-index: 2; position: absolute; transform: translate(-50%, -50%); box-sizing: border-box; border: 2px dashed #8fd3c8; background: #132a2ecc; color: #e8f1f0; border-radius: 8px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 11px; padding: 2px; cursor: move; user-select: none; touch-action: none; overflow: hidden; }
+  .ui i { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; background: #8fd3c8; cursor: nwse-resize; }
+  .av span { position: absolute; top: 100%; margin-top: 2px; white-space: nowrap; color: #e8f1f0; font-size: 11px; background: #0d1b1ecc; padding: 1px 5px; border-radius: 3px; }
+  #panel { position: absolute; top: 0; right: 0; bottom: 0; width: 290px; overflow-y: auto; background: #132a2e; padding: 8px 10px; box-sizing: border-box; }
+  details { border-top: 1px solid #22464b; padding: 4px 0; }
+  summary { cursor: pointer; color: #8fd3c8; font-weight: 600; padding: 2px 0; }
+  label.s { display: grid; grid-template-columns: 62px 1fr 62px; gap: 5px; align-items: center; margin: 2px 0; }
+  label.s.off { opacity: 0.4; }
+  label.c { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+  input[type=range] { width: 100%; }
+  input.num { width: 100%; box-sizing: border-box; background: #0d1b1e; color: #e8f1f0; border: 1px solid #2b5157; border-radius: 3px; padding: 1px 3px; font: 12px system-ui; text-align: right; }
+  textarea { width: 100%; height: 120px; background: #0d1b1e; color: #cfe; border: 1px solid #2b5157; font: 11px monospace; box-sizing: border-box; }
+  button { background: #1f4a50; color: #e8f1f0; border: 0; padding: 5px 9px; border-radius: 4px; cursor: pointer; margin: 2px 4px 2px 0; }
+  button.on { background: #2f8f86; }
+  .row { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="view"></div></div>
+<div id="panel">
+  <div class="row"><b>Fan demo</b></div>
+  <div class="row">
+    <button id="o-land" class="on">Horizontal</button>
+    <button id="o-port">Vertical</button>
+  </div>
+  <label class="c"><input type="checkbox" id="orbit" /> Cámara libre (arrastrar) / Free camera</label>
+  <div id="groups"></div>
+  <details open><summary>Valores / Values (ambas orientaciones)</summary>
+    <textarea id="out" readonly></textarea>
+    <div class="row">
+      <button id="copy">Copiar / Copy</button>
+      <button id="reset">Reiniciar esta vista / Reset this view</button>
+    </div>
+  </details>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+
+const CW = 0.667, CH = 1;
+const DEG = Math.PI / 180;
+const DIMS = { land: { A: 3.9, B: 2.15, W: 915, H: 412 }, port: { A: 2.05, B: 2.9, W: 412, H: 915 } };
+
+// ---------- parameters: one full set per orientation ----------
+const R180 = { min: -180, max: 180, step: 1 };
+const rot = (x, y, z) => ({ rotX: { v: x, ...R180 }, rotY: { v: y, ...R180 }, rotZ: { v: z, ...R180 } });
+const pos = (x, y, z, span) => ({
+  posX: { v: x, min: -span, max: span, step: 0.05 },
+  posY: { v: y, min: 0, max: 2, step: 0.02 },
+  posZ: { v: z, min: -span, max: span, step: 0.05 },
+});
+const fan = (n, sp, ang, arc) => ({
+  cards: { v: n, min: 1, max: 25, step: 1 },
+  spacing: { v: sp, min: 0.05, max: 0.8, step: 0.01 },
+  angle: { v: ang, min: 0, max: 20, step: 0.5 },
+  arc: { v: arc, min: 0, max: 0.3, step: 0.005 },
+  // depth curve: above 0 the middle cards sit nearer the table centre than the ends, below 0 the ends do
+  curve: { v: 0, min: -0.3, max: 0.3, step: 0.005 },
+  // how many cards fit at full spacing; more cards squeeze into the same length
+  fullCards: { v: 7, min: 2, max: 25, step: 1 },
+});
+const scale = (v) => ({ scale: { v, min: 0.2, max: 2, step: 0.01 } });
+
+/** the table's on-screen UI pieces (the game's HUD), default boxes [x, y, w, h] in % per orientation */
+const UI_DEF = {
+  scores: { label: 'Marcador / Scores', land: [10, 7, 18, 10], port: [20, 4, 36, 5] },
+  info: { label: 'Ronda · color · sentido / Round · colour · direction', land: [50, 6, 30, 8], port: [50, 9, 70, 4] },
+  menu: { label: '☰ Menú / Menu', land: [96, 7, 5, 10], port: [92, 4, 10, 5] },
+  pending: { label: '+4 pendiente / Pending draw', land: [50, 62, 10, 7], port: [50, 56, 22, 3.5] },
+  ku: { label: '¡Ku! botón / button', land: [90, 72, 12, 16], port: [84, 64, 24, 8] },
+  notice: { label: 'Mensaje / Message', land: [50, 30, 40, 9], port: [50, 30, 80, 5] },
+  resp: { label: 'Barra de respuesta / Response bar', land: [50, 58, 50, 14], port: [50, 58, 92, 9], show: false },
+  color: { label: 'Elegir color / Colour picker', land: [50, 45, 40, 40], port: [50, 45, 80, 22], show: false },
+  target: { label: 'Elegir jugador / Player picker', land: [50, 45, 50, 40], port: [50, 45, 88, 24], show: false },
+  kuPop: { label: '¡KU! grande / Big ¡KU!', land: [50, 40, 30, 24], port: [50, 40, 60, 12], show: false },
+  bubble: { label: 'Globo de diálogo / Speech bubble', land: [30, 20, 12, 8], port: [30, 30, 24, 4], show: false },
+};
+
+function defaults(o) {
+  const L = o === 'land';
+  const { A, B } = DIMS[o];
+  const k = L ? 1 : A / 3.9;
+  return {
+    camera: { title: 'Cámara / Camera', p: {
+      tilt: { v: L ? 36.5 : 26, min: 0, max: 85, step: 0.5 },
+      dist: { v: L ? 9.1 : 11, min: 4, max: 25, step: 0.1 },
+      fov: { v: L ? 38 : 42, min: 20, max: 75, step: 1 },
+    } },
+    table: { title: 'Mesa / Table', p: { ...rot(0, 0, 0) } },
+    top: { title: 'Jugador de enfrente / Top player (arrastrar / drag)', flags: { open: false }, p: {
+      ...rot(20, 180, 0), ...pos(0, 0.05, -B + 0.5, 4), ...scale(L ? 0.54 : 0.7), ...fan(7, 0.32, 4.3, 0.01) } },
+    right: { title: 'Jugador derecho / Right player (arrastrar / drag)', flags: { open: false }, p: {
+      ...rot(3, 102, -2), ...pos(3.05 * k, 0.6 * k, 0.4 * (L ? 1 : B / 2.15), 4), ...scale(L ? 1.02 : 0.84), ...fan(7, 0.38, 5.5, 0.01) } },
+    left: { title: 'Jugador izquierdo / Left player (arrastrar / drag)', flags: { open: false, mirror: true }, p: {
+      ...rot(3, -102, 2), ...pos(-3.05 * k, 0.6 * k, 0.4 * (L ? 1 : B / 2.15), 4), ...scale(L ? 1.02 : 0.84), ...fan(7, 0.38, 5.5, 0.01) } },
+    me: { title: 'Mi mano / My hand (arrastrar / drag)', p: {
+      ...rot(-55, 0, 0), ...pos(0, 0.3, B - 0.3, 4), ...scale(L ? 0.9 : 0.8), ...fan(7, 0.42, 4.3, 0.01) } },
+    deck: { title: 'Mazo / Deck (arrastrar / drag)', p: { ...rot(0, 0, 0), ...pos(-0.66, 0, 0, 4), ...scale(1), height: { v: 0.3, min: 0.02, max: 1, step: 0.01 } } },
+    pile: { title: 'Pila de jugadas / Played pile (arrastrar / drag)', p: { ...rot(0, 0, 0), ...pos(0.66, 0, 0.05, 4), ...scale(1), spread: { v: 12, min: 0, max: 45, step: 1 } } },
+    // the table's on-screen UI: centre x / y and size w / h in % of the view (drag to move, corner to resize)
+    ...Object.fromEntries(Object.entries(UI_DEF).map(([k, d]) => {
+      const [x, y, w, h] = d[o];
+      const pc = (val) => ({ v: val, min: 0, max: 100, step: 0.5 });
+      return [`ui_${k}`, { title: `Interfaz / UI: ${d.label}`, flags: { show: d.show !== false }, p: { x: pc(x), y: pc(y), w: pc(w), h: pc(h) } }];
+    })),
+    // avatar plates: screen position in % of the view (drag them)
+    avatars: { title: 'Avatares / Avatars (arrastrar / drag)', p: {
+      size: { v: L ? 12 : 14, min: 3, max: 30, step: 0.5 },
+      ...Object.fromEntries(Object.entries(L
+        ? { me: [12, 88], top: [36, 14], left: [8, 22], right: [92, 22] }
+        : { me: [14, 70], top: [26, 10], left: [12, 36], right: [88, 36] })
+        .flatMap(([n, [x, y]]) => [[`${n}X`, { v: x, min: 0, max: 100, step: 0.5 }], [`${n}Y`, { v: y, min: 0, max: 100, step: 0.5 }]])),
+    } },
+  };
+}
+const STATE = { land: defaults('land'), port: defaults('port') };
+let orient = 'land';
+const S = () => STATE[orient];
+const v = (g, k) => S()[g].p[k].v;
+
+// ---------- scene ----------
+const view = document.getElementById('view');
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1b1e);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334444, 2.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(2, 6, 4); scene.add(sun);
+const world = new THREE.Group(); scene.add(world);
+
+function canvasTex(draw) {
+  const c = document.createElement('canvas'); c.width = 200; c.height = 300;
+  const g = c.getContext('2d'); draw(g);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+function rounded(g, col) { g.fillStyle = '#fff'; g.fillRect(0, 0, 200, 300); g.fillStyle = col; g.beginPath(); g.roundRect(10, 10, 180, 280, 18); g.fill(); }
+const backTex = canvasTex((g) => {
+  rounded(g, '#173f45'); g.strokeStyle = '#2f7f86'; g.lineWidth = 6; g.strokeRect(30, 30, 140, 240);
+  g.fillStyle = '#f2c14e'; g.font = 'bold 64px sans-serif'; g.textAlign = 'center'; g.fillText('Ku', 100, 170);
+  g.fillStyle = '#e8f1f0'; g.font = 'bold 26px sans-serif'; g.fillText('▲ arriba', 100, 70);
+});
+const faceTexs = ['#e7a83a', '#2fa39b', '#d4544b', '#5a7fd0'].map((col, i) => canvasTex((g) => {
+  rounded(g, col); g.fillStyle = '#fff'; g.font = 'bold 120px sans-serif'; g.textAlign = 'center'; g.fillText(String(i + 2), 100, 190);
+  g.font = 'bold 26px sans-serif'; g.fillText('▲', 100, 50);
+}));
+const edge = new THREE.MeshStandardMaterial({ color: 0xf4f1ea });
+const backMat = new THREE.MeshStandardMaterial({ map: backTex, roughness: 0.6 });
+const faceMats = faceTexs.map((t) => new THREE.MeshStandardMaterial({ map: t, roughness: 0.6 }));
+const cardGeo = new THREE.BoxGeometry(CW, CH, 0.008);
+// box faces: +x,-x,+y,-y,+z,-z
+const cardMesh = (front, back) => new THREE.Mesh(cardGeo, [edge, edge, edge, edge, front, back]);
+
+/** a fan in its holder's frame: cards stand in the XY plane, faces toward +Z (the holder). `open`: faces away. */
+function buildFan(g) {
+  const grp = new THREE.Group();
+  const n = v(g, 'cards') | 0, sp0 = v(g, 'spacing'), ang0 = v(g, 'angle') * DEG, arc = v(g, 'arc'), curve = v(g, 'curve');
+  // past `fullCards` the hand squeezes: spacing and angle shrink so the hand keeps the same length, turn,
+  // arc and curve as with fullCards cards
+  const full = Math.max(2, v(g, 'fullCards') | 0);
+  const q = n > full ? (full - 1) / (n - 1) : 1;
+  const sp = sp0 * q, ang = ang0 * q;
+  const open = S()[g].flags?.open;
+  const mid = (n - 1) / 2;
+  for (let i = 0; i < n; i++) {
+    const d = i - mid;
+    const m = open ? cardMesh(backMat, faceMats[i % 4]) : cardMesh(faceMats[i % 4], backMat);
+    m.position.set(d * sp, CH / 2 - d * q * d * q * arc, (open ? -i : i) * 0.01);
+    m.rotation.z = (open ? d : -d) * ang;
+    if (open) m.position.x = -m.position.x;
+    // depth curve: the cards follow a circle seen from above (the ends towards the holder, +Z, when
+    // curve > 0), each turned along it. Each card also sits a little in front of its left neighbour, just
+    // enough that the overlapping parts never cut through each other.
+    if (curve !== 0 && sp > 0) {
+      const k = (2 * curve) / (sp0 * sp0); // curvature with the same depth at the ends as curve * d^2
+      const x0 = m.position.x;
+      const th = x0 * k; // angle along the circle (x0 is the arc length)
+      const gap = Math.max(0, CW - sp) * Math.abs(Math.sin(sp * k)) + 0.004;
+      const lz = (open ? -1 : 1) * (i * gap - ((n - 1) * gap) / 2); // 'in front' is towards the face we see
+      m.position.x = Math.sin(th) / k - Math.sin(th) * lz;
+      m.position.z += (1 - Math.cos(th)) / k + Math.cos(th) * lz - (open ? -i : i) * 0.01;
+      m.rotation.order = 'YXZ';
+      m.rotation.y = -th;
+    }
+    grp.add(m);
+  }
+  place(grp, g);
+  return grp;
+}
+function place(obj, g) {
+  obj.rotation.set(v(g, 'rotX') * DEG, v(g, 'rotY') * DEG, v(g, 'rotZ') * DEG, 'YXZ');
+  obj.position.set(v(g, 'posX'), v(g, 'posY'), v(g, 'posZ'));
+  obj.scale.setScalar(v(g, 'scale'));
+}
+
+let built = [];
+function rebuild() {
+  for (const o of built) world.remove(o);
+  built = [];
+  const { A, B } = DIMS[orient];
+  const rim = new THREE.Mesh(new THREE.BoxGeometry(A * 2 + 0.5, 0.1, B * 2 + 0.5), new THREE.MeshStandardMaterial({ color: 0x5a3a22 }));
+  rim.position.y = -0.06;
+  const felt = new THREE.Mesh(new THREE.PlaneGeometry(A * 2, B * 2), new THREE.MeshStandardMaterial({ color: 0x1f7f7a, roughness: 0.9 }));
+  felt.rotation.x = -Math.PI / 2; felt.position.y = 0.001;
+  const axes = new THREE.AxesHelper(0.8);
+  built.push(rim, felt, axes);
+  // the left player mirrors the right one when linked
+  if (S().left.flags.mirror) {
+    const r = S().right.p, l = S().left.p;
+    for (const k of Object.keys(r)) l[k].v = r[k].v;
+    l.rotY.v = -r.rotY.v; l.rotZ.v = -r.rotZ.v; l.posX.v = -r.posX.v;
+    S().left.flags.open = S().right.flags.open;
+  }
+  for (const g of ['top', 'left', 'right', 'me']) built.push((fanObjs[g] = buildFan(g)));
+  // deck: a stack lying flat, back up
+  const deck = new THREE.Group();
+  const h = v('deck', 'height');
+  const stack = new THREE.Mesh(new THREE.BoxGeometry(CW, h, CH), [edge, edge, backMat, edge, edge, edge]);
+  backTex.rotation = 0;
+  stack.position.y = h / 2;
+  deck.add(stack); place(deck, 'deck');
+  // played pile: face-up cards lying flat, each turned a little
+  const pile = new THREE.Group();
+  const spread = v('pile', 'spread') * DEG;
+  for (let i = 0; i < 5; i++) {
+    const c = cardMesh(faceMats[i % 4], backMat);
+    c.rotation.set(-Math.PI / 2, 0, (((i * 7919) % 11) / 10 - 0.5) * 2 * spread);
+    c.position.y = 0.006 + i * 0.008;
+    pile.add(c);
+  }
+  place(pile, 'pile');
+  built.push(deck, pile);
+  for (const o of built) world.add(o);
+  world.rotation.set(v('table', 'rotX') * DEG, v('table', 'rotY') * DEG, v('table', 'rotZ') * DEG, 'YXZ');
+  deckObj = deck; pileObj = pile;
+  placeAvatars();
+}
+let deckObj = null, pileObj = null;
+const fanObjs = {};
+
+// ---------- avatars: HTML plates over the view, dragged anywhere ----------
+const AV = { me: 'Yo / Me', top: 'Enfrente / Top', left: 'Izquierda / Left', right: 'Derecha / Right' };
+const avEls = {};
+for (const [n, label] of Object.entries(AV)) {
+  const el = document.createElement('div');
+  el.className = 'av';
+  el.innerHTML = `${label[0]}<span>${label}</span>`;
+  view.appendChild(el);
+  avEls[n] = el;
+  el.onpointerdown = (e) => {
+    e.preventDefault(); el.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      const r = view.getBoundingClientRect();
+      setP('avatars', `${n}X`, Math.min(100, Math.max(0, ((ev.clientX - r.left) / r.width) * 100)));
+      setP('avatars', `${n}Y`, Math.min(100, Math.max(0, ((ev.clientY - r.top) / r.height) * 100)));
+      placeAvatars(); out.value = dump();
+    };
+    el.onpointermove = move;
+    el.onpointerup = () => { el.onpointermove = null; };
+  };
+}
+const uiEls = {};
+for (const [k, d] of Object.entries(UI_DEF)) {
+  const el = document.createElement('div');
+  el.className = 'ui';
+  el.innerHTML = `${d.label}<i></i>`;
+  view.appendChild(el);
+  uiEls[k] = el;
+  const g = `ui_${k}`;
+  el.onpointerdown = (e) => {
+    e.preventDefault(); el.setPointerCapture(e.pointerId);
+    const resize = e.target.tagName === 'I';
+    const r = view.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    const start = { x: v(g, 'x'), y: v(g, 'y'), w: v(g, 'w'), h: v(g, 'h') };
+    el.onpointermove = (ev) => {
+      const dx = ((ev.clientX - sx) / r.width) * 100, dy = ((ev.clientY - sy) / r.height) * 100;
+      if (resize) {
+        // the top-left corner stays put
+        const w = Math.max(2, start.w + dx), h = Math.max(2, start.h + dy);
+        setP(g, 'w', w); setP(g, 'h', h);
+        setP(g, 'x', start.x - start.w / 2 + w / 2); setP(g, 'y', start.y - start.h / 2 + h / 2);
+      } else {
+        setP(g, 'x', Math.min(100, Math.max(0, start.x + dx))); setP(g, 'y', Math.min(100, Math.max(0, start.y + dy)));
+      }
+      placeAvatars(); out.value = dump();
+    };
+    el.onpointerup = () => { el.onpointermove = null; };
+  };
+}
+function placeAvatars() {
+  for (const k of Object.keys(UI_DEF)) {
+    const el = uiEls[k], g = `ui_${k}`;
+    el.style.display = S()[g].flags.show ? 'flex' : 'none';
+    el.style.left = v(g, 'x') + '%';
+    el.style.top = v(g, 'y') + '%';
+    el.style.width = v(g, 'w') + '%';
+    el.style.height = v(g, 'h') + '%';
+  }
+  const size = (v('avatars', 'size') / 100) * Math.min(view.clientWidth, view.clientHeight);
+  for (const n of Object.keys(AV)) {
+    const el = avEls[n];
+    el.style.left = v('avatars', `${n}X`) + '%';
+    el.style.top = v('avatars', `${n}Y`) + '%';
+    el.style.width = el.style.height = size + 'px';
+    el.style.fontSize = size * 0.45 + 'px';
+  }
+}
+/** set a value and its slider */
+function setP(g, k, val) {
+  const o = S()[g].p[k];
+  o.v = Math.round(val / o.step) * o.step;
+  if (o.ui) { o.ui.inp.value = o.v; o.ui.op.value = o.v.toFixed(2); }
+}
+
+// ---------- drag the deck / pile across the felt ----------
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const floor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const hitPt = new THREE.Vector3();
+function pick(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, controls.enabled ? freeCam : gameCam);
+}
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (controls.enabled) return;
+  pick(e);
+  // whatever is nearest under the pointer: the deck, the pile or a player's hand
+  const cands = { deck: deckObj, pile: pileObj, ...fanObjs };
+  let g = null, best = Infinity;
+  for (const [k, obj] of Object.entries(cands)) {
+    const h = obj && ray.intersectObject(obj, true)[0];
+    if (h && h.distance < best) { best = h.distance; g = k; }
+  }
+  if (!g) return;
+  // a mirrored left hand moves the right one (mirrored back)
+  const mirrored = g === 'left' && S().left.flags.mirror;
+  // keep the grab offset so the hand does not jump to the pointer
+  world.updateMatrixWorld();
+  floor.set(new THREE.Vector3(0, 1, 0), 0).applyMatrix4(world.matrixWorld);
+  if (!ray.ray.intersectPlane(floor, hitPt)) return;
+  world.worldToLocal(hitPt);
+  const off = { x: v(g, 'posX') - hitPt.x, z: v(g, 'posZ') - hitPt.z };
+  renderer.domElement.setPointerCapture(e.pointerId);
+  const move = (ev) => {
+    pick(ev);
+    // the felt plane in world space (the table may be rotated)
+    world.updateMatrixWorld();
+    floor.set(new THREE.Vector3(0, 1, 0), 0).applyMatrix4(world.matrixWorld);
+    if (!ray.ray.intersectPlane(floor, hitPt)) return;
+    world.worldToLocal(hitPt);
+    if (mirrored) { setP('right', 'posX', -(hitPt.x + off.x)); setP('right', 'posZ', hitPt.z + off.z); }
+    else { setP(g, 'posX', hitPt.x + off.x); setP(g, 'posZ', hitPt.z + off.z); }
+    changed();
+  };
+  const up = () => { renderer.domElement.removeEventListener('pointermove', move); renderer.domElement.removeEventListener('pointerup', up); };
+  renderer.domElement.addEventListener('pointermove', move);
+  renderer.domElement.addEventListener('pointerup', up);
+});
+
+const gameCam = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+const freeCam = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+freeCam.position.set(0, 9, 9);
+const controls = new OrbitControls(freeCam, renderer.domElement);
+controls.enabled = false;
+document.getElementById('orbit').onchange = (e) => { controls.enabled = e.target.checked; };
+
+function placeGameCam() {
+  const t = v('camera', 'tilt') * DEG, d = v('camera', 'dist');
+  gameCam.fov = v('camera', 'fov');
+  gameCam.position.set(0, Math.cos(t) * d, Math.sin(t) * d);
+  gameCam.lookAt(0, 0, 0);
+  gameCam.updateProjectionMatrix();
+}
+
+/** the view box keeps the phone's shape (915x412 or 412x915), as big as fits */
+function resize() {
+  const { W, H } = DIMS[orient];
+  const k = Math.min((stage.clientWidth - 16) / W, (stage.clientHeight - 16) / H);
+  const w = Math.floor(W * k), h = Math.floor(H * k);
+  renderer.setSize(w, h);
+  gameCam.aspect = freeCam.aspect = w / h;
+  gameCam.updateProjectionMatrix(); freeCam.updateProjectionMatrix();
+}
+addEventListener('resize', () => { resize(); placeAvatars(); });
+
+// ---------- panel ----------
+const groupsBox = document.getElementById('groups');
+const out = document.getElementById('out');
+const FLAG_LABEL = { show: 'Mostrar / Show', open: 'Cartas visibles (compañero) / Face-up (partner)', mirror: 'Espejo del derecho / Mirror the right player' };
+function buildPanel() {
+  const openState = {};
+  groupsBox.querySelectorAll('details').forEach((d) => { openState[d.dataset.g] = d.open; });
+  groupsBox.innerHTML = '';
+  for (const [g, grp] of Object.entries(S())) {
+    const det = document.createElement('details');
+    det.dataset.g = g;
+    det.open = openState[g] ?? (g === 'right' || g === 'top');
+    det.innerHTML = `<summary>${grp.title}</summary>`;
+    const locked = g === 'left' && grp.flags.mirror;
+    for (const [f, val] of Object.entries(grp.flags ?? {})) {
+      if (g === 'left' && f === 'open' && locked) continue;
+      const l = document.createElement('label'); l.className = 'c';
+      l.innerHTML = `<input type="checkbox" ${val ? 'checked' : ''}> ${FLAG_LABEL[f]}`;
+      l.querySelector('input').onchange = (e) => { grp.flags[f] = e.target.checked; if (f === 'mirror') buildPanel(); changed(); };
+      det.appendChild(l);
+    }
+    for (const [k, o] of Object.entries(grp.p)) {
+      const l = document.createElement('label'); l.className = 's' + (locked ? ' off' : '');
+      l.innerHTML = `<span>${k}</span><input type="range" min="${o.min}" max="${o.max}" step="${o.step}" value="${o.v}" ${locked ? 'disabled' : ''}><input type="number" class="num" min="${o.min}" max="${o.max}" step="${o.step}" value="${(+o.v).toFixed(2)}" ${locked ? 'disabled' : ''}>`;
+      const inp = l.querySelector('input[type=range]'), op = l.querySelector('input.num');
+      o.ui = { inp, op };
+      inp.oninput = () => { o.v = +inp.value; op.value = o.v.toFixed(2); changed(); };
+      // typed numbers go past the slider's range too
+      op.onchange = () => { const n = parseFloat(op.value); if (!Number.isFinite(n)) { op.value = (+o.v).toFixed(2); return; } o.v = n; inp.value = n; changed(); };
+      det.appendChild(l);
+    }
+    groupsBox.appendChild(det);
+  }
+}
+function syncLocked() {
+  for (const o of Object.values(S().left.p)) if (o.ui) { o.ui.inp.value = o.v; o.ui.op.value = (+o.v).toFixed(2); }
+}
+function dump() {
+  const r = {};
+  for (const [o, st] of Object.entries(STATE)) {
+    r[o] = {};
+    for (const [g, grp] of Object.entries(st)) {
+      r[o][g] = { ...(grp.flags ?? {}) };
+      for (const [k, p] of Object.entries(grp.p)) r[o][g][k] = Math.round(p.v * 100) / 100;
+    }
+  }
+  return JSON.stringify(r);
+}
+function changed() {
+  rebuild(); placeGameCam();
+  if (S().left.flags.mirror) syncLocked();
+  out.value = dump();
+  try { localStorage.setItem('kucards-fan-demo', out.value); } catch {}
+}
+/** the fitted default layout (both orientations), used until something is saved and by Reset */
+const PRESET = {"land":{"camera":{"tilt":36.5,"dist":9.1,"fov":38},"table":{"rotX":0,"rotY":0,"rotZ":0},"top":{"open":false,"rotX":20,"rotY":180,"rotZ":0,"posX":0,"posY":0.05,"posZ":-2.4,"scale":0.72,"cards":7,"spacing":0.3,"angle":6,"arc":0.015,"curve":0,"fullCards":7},"right":{"open":false,"rotX":3,"rotY":102,"rotZ":-2,"posX":3.05,"posY":0.6,"posZ":0.4,"scale":1.02,"cards":7,"spacing":0.38,"angle":5.5,"arc":0.01,"curve":0,"fullCards":7},"left":{"open":false,"mirror":true,"rotX":3,"rotY":-102,"rotZ":2,"posX":-3.05,"posY":0.6,"posZ":0.4,"scale":1.02,"cards":7,"spacing":0.38,"angle":5.5,"arc":0.01,"curve":0,"fullCards":7},"me":{"rotX":-55,"rotY":0,"rotZ":0,"posX":0,"posY":0.1,"posZ":2.7,"scale":1.25,"cards":7,"spacing":0.42,"angle":4.5,"arc":0.012,"curve":0,"fullCards":9},"deck":{"rotX":0,"rotY":0,"rotZ":0,"posX":-0.66,"posY":0,"posZ":0,"scale":1,"height":0.3},"pile":{"rotX":0,"rotY":0,"rotZ":0,"posX":0.66,"posY":0,"posZ":0.05,"scale":1,"spread":12},"ui_scores":{"show":true,"x":10,"y":7,"w":18,"h":10},"ui_info":{"show":true,"x":50,"y":6,"w":30,"h":8},"ui_menu":{"show":true,"x":96,"y":7,"w":5,"h":10},"ui_pending":{"show":true,"x":64,"y":47,"w":9,"h":6},"ui_ku":{"show":true,"x":90,"y":85,"w":12,"h":18},"ui_notice":{"show":true,"x":50,"y":31.5,"w":34,"h":8},"ui_resp":{"show":false,"x":50,"y":61.5,"w":40,"h":6},"ui_color":{"show":false,"x":50,"y":46,"w":36,"h":38},"ui_target":{"show":false,"x":50,"y":46,"w":36,"h":38},"ui_kuPop":{"show":false,"x":50,"y":46,"w":30,"h":24},"ui_bubble":{"show":false,"x":30,"y":14,"w":12,"h":7},"avatars":{"size":12,"meX":19,"meY":86,"topX":39.5,"topY":19,"leftX":9.5,"leftY":40,"rightX":90.5,"rightY":40}},"port":{"camera":{"tilt":26,"dist":12.5,"fov":46},"table":{"rotX":0,"rotY":0,"rotZ":0},"top":{"open":false,"rotX":20,"rotY":180,"rotZ":0,"posX":0,"posY":0.05,"posZ":-3.2,"scale":0.8,"cards":7,"spacing":0.3,"angle":6,"arc":0.015,"curve":0,"fullCards":7},"right":{"open":false,"rotX":8,"rotY":114,"rotZ":-2,"posX":1.5,"posY":0.32,"posZ":0.3,"scale":0.75,"cards":7,"spacing":0.24,"angle":6,"arc":0.01,"curve":0,"fullCards":7},"left":{"open":false,"mirror":true,"rotX":8,"rotY":-114,"rotZ":2,"posX":-1.5,"posY":0.32,"posZ":0.3,"scale":0.75,"cards":7,"spacing":0.24,"angle":6,"arc":0.01,"curve":0,"fullCards":7},"me":{"rotX":-55,"rotY":0,"rotZ":0,"posX":0,"posY":0,"posZ":4,"scale":1.2,"cards":7,"spacing":0.3,"angle":4.5,"arc":0.012,"curve":0,"fullCards":8},"deck":{"rotX":0,"rotY":0,"rotZ":0,"posX":-0.55,"posY":0,"posZ":0,"scale":1,"height":0.3},"pile":{"rotX":0,"rotY":0,"rotZ":0,"posX":0.55,"posY":0,"posZ":0.05,"scale":1,"spread":12},"ui_scores":{"show":true,"x":20,"y":4,"w":36,"h":5},"ui_info":{"show":true,"x":50,"y":9.5,"w":70,"h":4},"ui_menu":{"show":true,"x":92,"y":4,"w":10,"h":5},"ui_pending":{"show":true,"x":50,"y":58.5,"w":22,"h":3.5},"ui_ku":{"show":true,"x":84,"y":70,"w":24,"h":7},"ui_notice":{"show":true,"x":50,"y":31.5,"w":60,"h":5},"ui_resp":{"show":false,"x":50,"y":63.5,"w":92,"h":6},"ui_color":{"show":false,"x":50,"y":46,"w":48,"h":22},"ui_target":{"show":false,"x":50,"y":46,"w":48,"h":24},"ui_kuPop":{"show":false,"x":50,"y":42,"w":48,"h":12},"ui_bubble":{"show":false,"x":22,"y":14,"w":24,"h":3.5},"avatars":{"size":14,"meX":12,"meY":70,"topX":17,"topY":20.5,"leftX":11,"leftY":35,"rightX":89,"rightY":35}}};
+/** settings saved by an earlier visit (both orientations), else the preset */
+function restore(only) {
+  let saved = null;
+  if (!only) try { saved = JSON.parse(localStorage.getItem('kucards-fan-demo') || 'null'); } catch {}
+  saved = saved || PRESET;
+  if (only) saved = { [only]: PRESET[only] };
+  for (const [o, st] of Object.entries(STATE))
+    for (const [g, grp] of Object.entries(st)) {
+      const sv = saved[o]?.[g];
+      if (!sv) continue;
+      for (const f of Object.keys(grp.flags ?? {})) if (typeof sv[f] === 'boolean') grp.flags[f] = sv[f];
+      for (const [k, prm] of Object.entries(grp.p)) if (typeof sv[k] === 'number') prm.v = sv[k];
+    }
+}
+function setOrient(o) {
+  orient = o;
+  document.getElementById('o-land').classList.toggle('on', o === 'land');
+  document.getElementById('o-port').classList.toggle('on', o === 'port');
+  buildPanel(); resize(); changed();
+}
+document.getElementById('o-land').onclick = () => setOrient('land');
+document.getElementById('o-port').onclick = () => setOrient('port');
+document.getElementById('copy').onclick = () => navigator.clipboard?.writeText(out.value);
+document.getElementById('reset').onclick = () => { STATE[orient] = defaults(orient); restore(orient); buildPanel(); changed(); };
+
+restore();
+setOrient('land');
+renderer.setAnimationLoop(() => {
+  if (controls.enabled) controls.update();
+  renderer.render(scene, controls.enabled ? freeCam : gameCam);
+});
+</script>
+</body>
+</html>

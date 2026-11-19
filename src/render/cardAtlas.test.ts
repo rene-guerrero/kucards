@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ATLAS_CELLS, ATLAS_COLS, ATLAS_ROWS, CELL_SU, CELL_SV, FaceMap, baseFaces, cellPx, cellUv, faceKey } from './cardAtlas';
+import { ATLAS_CELLS, ATLAS_COLS, ATLAS_ROWS, CELL_SU, CELL_SV, FaceMap, baseFaces, cellPx, cellUv, faceKey, playedFace } from './cardAtlas';
 import { buildDeck } from '../engine/cards';
 import { DEFAULT_RULES } from '../engine/rules';
 
@@ -95,5 +95,23 @@ describe('atlas: Ciclón faces', () => {
       return; // engine work in progress
     }
     for (const c of deck) expect(map.index(c.face).added, faceKey(c.face)).toBe(false);
+  });
+});
+
+describe('played wild-type faces', () => {
+  it('take the chosen colour on the pile and keep their own cell per colour', () => {
+    const map = new FaceMap();
+    const wild = { kind: 'wild', color: null } as const;
+    expect(playedFace(wild, undefined)).toBe(wild);
+    const sol = playedFace(wild, 'sol');
+    const mar = playedFace({ kind: 'draw10', color: null, draw: 10 }, 'mar');
+    expect(map.index(sol).added).toBe(false);
+    expect(map.index(mar).added).toBe(false);
+    expect(map.lookup(sol)).not.toBe(map.lookup(wild));
+    expect(map.lookup(sol)).not.toBe(map.lookup(playedFace(wild, 'coral')));
+    // coloured cards and the colourless flip stay as they are
+    const red = { kind: 'skip', color: 'coral' } as const;
+    expect(playedFace(red, 'sol')).toBe(red);
+    expect(playedFace({ kind: 'flip', color: null }, 'sol')).not.toHaveProperty('tint');
   });
 });

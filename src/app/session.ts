@@ -114,12 +114,14 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
     onSfx: playSfx,
     onPlates: (list: readonly SeatPlate[]) => {
       plates.update(list.map((p) => ({ ...p, team: teamOf(p.seat) })));
+      hud.placeKu(list.find((p) => p.seat === 0), innerWidth, innerHeight);
       const counts: number[] = [];
       for (const p of list) counts[p.seat] = p.count;
       hud.setPlayers(hudPlayers(counts));
     },
     onError: (e) => console.error('[table]', e),
   });
+  hud.colorAnchor = () => view.pileScreenPoint();
   if (match.teams) view.setTeams(match.teams);
   deps.container.classList.add('kc-ready');
   overlay.hudLayer.append(plates.el, hud.el);
@@ -150,6 +152,7 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
     ui: {
       hud,
       say: (seat, text, strong) => plates.say(seat, text, strong),
+      catchable: (seat, onCatch) => plates.setCatchable(seat, onCatch),
       bubbleFor,
       avatarEvent: (ev) => avatars.onEvent(ev),
       t: (k, p) => t(k, p),

@@ -43,6 +43,8 @@ export interface GameUi {
   /** card phrase for an event (plates.bubbleFor) */
   bubbleFor(ev: GameEvent): { seat: Seat; text: string; strong: boolean } | null;
   avatarEvent(ev: GameEvent): void;
+  /** a seat that can be caught for a missed ¡Ku! (its avatar becomes the tap target); null = none */
+  catchable?(seat: Seat | null, onCatch: () => void): void;
   roundSummary(ctx: RoundSummaryCtx): Promise<'next' | 'menu'>;
   matchEnd(ctx: MatchEndCtx): Promise<'rematch' | 'menu'>;
   t(key: 'game.passHint' | 'game.acceptHint' | 'game.catchHint' | 'game.giveHint' | 'game.pickSwapColor' | 'hud.pickSwap' | 'team.a' | 'team.b', p?: Record<string, string | number>): string;
@@ -58,7 +60,12 @@ export interface SeatInfo {
 }
 
 /** TableView plus the renderer's extras (src/render/index.ts TableViewExt) */
-export type GameView = TableView & { setDeck?(cards: readonly Card[]): void; restore?: TableView['restore'] };
+export type GameView = TableView & {
+  setDeck?(cards: readonly Card[]): void;
+  restore?: TableView['restore'];
+  /** the human's colour-changing card onto the pile before the colour pane opens (resolves when it lands) */
+  previewPlay?(cardId: number): Promise<void>;
+};
 
 export interface ControllerOpts {
   engine: EngineApi;
@@ -241,8 +248,12 @@ export class GameController {
   private refreshKu(): void {
     const r = this.match.round;
     const { hud } = this.o.ui;
-    if (!r || r.over || !this.match.rules.kuCall) return hud.setKu('hidden');
+    if (!r || r.over || !this.match.rules.kuCall) {
+      this.o.ui.catchable?.(null, () => {});
+      return hud.setKu('hidden');
+    }
     const { catchMv, callMv } = this.kuMoves();
+    this.o.ui.catchable?.(catchMv && catchMv.kind === 'catchKu' ? catchMv.target : null, () => this.onKuTap());
     if (catchMv && catchMv.kind === 'catchKu') {
       const note = this.o.ui.t('game.catchHint', { name: this.name(catchMv.target) });
       if (note !== this.lastNotice) hud.notice((this.lastNotice = note));
@@ -374,7 +385,8 @@ export class GameController {
     const playable = [...new Set(plays.map((p) => p.cardId))];
     const drawLike = legal.find((x) => x.kind === 'draw' || x.kind === 'pass' || x.kind === 'acceptPenalty');
     if (r.drewThisTurn && drawLike?.kind === 'pass') ui.hud.notice(ui.t('game.passHint'));
-    if (r.pendingDraw > 0) ui.hud.notice(ui.t('game.acceptHint', { n: r.pendingDraw }));
+    // nothing playable: the pyramid over the deck is the only hint
+    if (r.pendingDraw > 0 && playable.length) ui.hud.notice(ui.t('game.acceptHint', { n: r.pendingDraw }));
     const pick = await view.requestHumanPick(playable, !!drawLike);
     if (this.stopped || this.match !== m) return;
     if (pick === 'draw') {
@@ -390,7 +402,11 @@ export class GameController {
       variants = variants.filter((v) => v.target === target);
     }
     if (variants.some((v) => v.color)) {
+      // the card lands on the pile first, then the colour is asked
+      await view.previewPlay?.(pick);
+      if (this.stopped || this.match !== m) return;
       const color = await ui.hud.pickColor();
+      if (this.stopped || this.match !== m) return;
       variants = variants.filter((v) => v.color === color);
     }
     // partnerPass: on a 7 the human may give one card to the partner

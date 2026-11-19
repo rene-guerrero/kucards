@@ -16,6 +16,12 @@ export interface TableViewExt extends TableView {
   setOpenHand(seat: Seat, cards: Card[] | null): void;
   /** Parejas teams for the felt tint (team A teal, team B coral); null = none. Without it, an open hand implies the partner. */
   setTeams(teams: [Seat[], Seat[]] | null): void;
+  /** the pile's screen point in viewport CSS px (the colour pane springs from it); null before layout */
+  pileScreenPoint(): { x: number; y: number } | null;
+  /** move the human's colour-changing card onto the pile before the colour is picked; resolves when it has landed */
+  previewPlay(cardId: number): Promise<void>;
+  /** return a previewed card to the hand (no play followed) */
+  cancelPreview(): void;
 }
 
 export function createTableView(opts: TableViewOptions): TableViewExt {

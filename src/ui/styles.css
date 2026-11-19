@@ -1250,7 +1250,30 @@ body[data-mock] .menu,
 .plate.winner .plate-info {
   box-shadow:
     inset 0 0 0 2px #f0cf6a,
+    0 0 16px rgba(255, 205, 100, 0.45),
     0 3px 8px rgba(0, 0, 0, 0.45);
+  /* the gold rays reach the plate ~0.45 s after the win: it flares, then glows on */
+  animation: plate-win 0.9s ease-out 0.45s 2 both;
+}
+@keyframes plate-win {
+  0% {
+    box-shadow:
+      inset 0 0 0 2px #f0cf6a,
+      0 0 0 rgba(255, 205, 100, 0),
+      0 3px 8px rgba(0, 0, 0, 0.45);
+  }
+  30% {
+    box-shadow:
+      inset 0 0 0 2.5px #fff1c2,
+      0 0 30px rgba(255, 210, 110, 0.95),
+      0 3px 8px rgba(0, 0, 0, 0.45);
+  }
+  100% {
+    box-shadow:
+      inset 0 0 0 2px #f0cf6a,
+      0 0 16px rgba(255, 205, 100, 0.45),
+      0 3px 8px rgba(0, 0, 0, 0.45);
+  }
 }
 .plate-name {
   min-width: 0;
@@ -2490,6 +2513,7 @@ button.ng-seat:hover {
 }
 :root[data-quality='low'] .plate.winner .plate-info {
   box-shadow: inset 0 0 0 2px #f0cf6a;
+  animation: none;
 }
 :root[data-quality='low'] .plate.active .plate-info {
   box-shadow: inset 0 0 0 2px #e8b450;
@@ -3308,56 +3332,117 @@ button.ng-seat:hover {
   width: min(420px, calc(100vw - 32px));
   text-align: center;
 }
-.color-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-top: 12px;
+/* colour pane: one rounded diamond of four equal quadrants, springing open over the pile card (not a modal) */
+.color-pane {
+  position: fixed;
+  width: 0;
+  height: 0;
+  z-index: 30;
+  pointer-events: none;
+  --cq: 150px; /* side of the square before its 45° turn (diagonal ≈ 212px) */
 }
-.color-opt {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-height: 108px;
-  border: 0;
-  border-radius: 20px;
-  background: var(--c);
+.color-pane-title {
+  position: absolute;
+  left: 0;
+  top: calc(var(--cq) * -0.71 - 40px);
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 99px;
+  background: rgba(10, 21, 28, 0.82);
   color: #fff6e6;
-  font: inherit;
   font-weight: 900;
-  font-size: 17px;
-  cursor: pointer;
-  box-shadow:
-    inset 0 0 0 3px rgba(255, 246, 230, 0.35),
-    0 5px 0 rgba(0, 0, 0, 0.3);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  transition: transform 0.15s var(--ease-pop);
+  font-size: 15px;
+  white-space: nowrap;
+  animation: cp-fade 0.25s ease-out both;
 }
-.color-opt:hover,
-.color-opt:focus-visible {
-  transform: translateY(-2px) scale(1.03);
+.color-diamond {
+  position: absolute;
+  left: calc(var(--cq) / -2);
+  top: calc(var(--cq) / -2);
+  width: var(--cq);
+  height: var(--cq);
+  display: grid;
+  grid-template: 1fr 1fr / 1fr 1fr;
+  gap: 4px;
+  padding: 3px;
+  box-sizing: border-box;
+  border-radius: 24px;
+  background: rgba(10, 21, 28, 0.5);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.3);
+  transform: rotate(45deg);
+  pointer-events: auto;
+  animation: cp-spring 0.4s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+.color-pane .color-quad {
+  --lx: 0;
+  --ly: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: var(--c);
+  background: var(--ca, var(--c)); /* slightly see-through; the symbol stays opaque */
+  cursor: pointer;
+  box-shadow: inset 0 0 0 2px rgba(255, 246, 230, 0.35);
+  transition: transform 0.12s ease-out, box-shadow 0.12s, filter 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+.color-pane .color-quad.q-t { grid-area: 1 / 1; border-top-left-radius: 21px; --lx: -1; --ly: -1; }
+.color-pane .color-quad.q-r { grid-area: 1 / 2; border-top-right-radius: 21px; --lx: 1; --ly: -1; }
+.color-pane .color-quad.q-b { grid-area: 2 / 2; border-bottom-right-radius: 21px; --lx: 1; --ly: 1; }
+.color-pane .color-quad.q-l { grid-area: 2 / 1; border-bottom-left-radius: 21px; --lx: -1; --ly: 1; }
+.color-quad .color-sym {
+  transform: rotate(-45deg);
+  pointer-events: none;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
+.color-pane .color-quad:hover,
+.color-pane .color-quad:focus-visible,
+.color-pane .color-quad:active {
   outline: none;
+  z-index: 1;
+  background: var(--c);
+  transform: translate(calc(var(--lx) * 4px), calc(var(--ly) * 4px));
   box-shadow:
     inset 0 0 0 3px #fff6e6,
-    0 6px 0 rgba(0, 0, 0, 0.3);
+    0 3px 6px rgba(0, 0, 0, 0.35);
 }
-.color-opt:active {
-  transform: scale(0.96);
+.color-pane .color-quad:active {
+  transform: translate(calc(var(--lx) * 3px), calc(var(--ly) * 3px)) scale(0.96);
 }
 .color-sym svg {
   display: block;
 }
-@media (orientation: landscape) and (max-height: 520px) {
-  .color-grid {
-    grid-template-columns: repeat(4, 1fr);
+.color-pane.leaving {
+  transition: opacity 0.18s;
+  opacity: 0;
+}
+.color-pane.leaving .color-diamond {
+  pointer-events: none;
+}
+.color-pane.still .color-diamond,
+.color-pane.still .color-pane-title {
+  animation: cp-fade 0.2s ease-out both;
+}
+.color-pane.still .color-quad {
+  transition: none;
+}
+@media (max-height: 460px), (max-width: 460px) {
+  .color-pane {
+    --cq: 128px;
   }
-  .card.color-picker {
-    width: min(560px, calc(100vw - 32px));
+}
+@keyframes cp-spring {
+  from {
+    /* about the pile card's footprint, upright, then opens into the diamond */
+    transform: rotate(0deg) scale(0.45, 0.62);
+    opacity: 0.2;
   }
-  .color-opt {
-    min-height: 92px;
+}
+@keyframes cp-fade {
+  from {
+    opacity: 0;
   }
 }
 .target-grid {
@@ -4995,4 +5080,56 @@ button.ng-seat:hover {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 4px 8px;
+}
+
+/* a player who forgot to call ¡Ku!: their avatar swells inside a pulsing ring; tap it to catch them */
+.plates .plate.catchable,
+.plates .plate.catchable .plate-av {
+  /* the plates layer ignores taps; a catchable avatar must take them */
+  pointer-events: auto !important;
+  cursor: pointer;
+}
+.plates .plate.catchable {
+  z-index: 6 !important;
+}
+.plate.catchable .plate-av {
+  transform: scale(1.55);
+  transition: transform 0.22s cubic-bezier(0.3, 1.8, 0.5, 1);
+  z-index: 2;
+}
+.plate.catchable .plate-av::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 4px solid #ffcb45;
+  box-shadow: 0 0 18px 4px rgba(255, 203, 69, 0.8), inset 0 0 12px rgba(255, 203, 69, 0.5);
+  animation: kc-catch-ring 0.75s cubic-bezier(0.3, 1.7, 0.5, 1) infinite;
+  pointer-events: none;
+}
+.plate.catchable .plate-av::before {
+  content: '';
+  position: absolute;
+  inset: -9px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 203, 69, 0.7);
+  animation: kc-catch-wave 0.75s ease-out infinite;
+  pointer-events: none;
+}
+.plate.catchable:active .plate-av {
+  transform: scale(1.35);
+}
+@keyframes kc-catch-ring {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  45% { transform: scale(1.18); opacity: 0.85; }
+}
+@keyframes kc-catch-wave {
+  0% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1.9); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plate.catchable .plate-av::after,
+  .plate.catchable .plate-av::before {
+    animation: none;
+  }
 }

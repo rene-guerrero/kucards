@@ -1,67 +1,33 @@
 /**
  * Phase 1 smoke scene: a felt table, the deck, the first card on the pile and a dealt hand fanned at the
  * bottom, dealt with the Kudominoes FrameLoop + Animator. Phase 2 replaces it with the real card table
- * (cardTable.ts, card atlas, input). Placeholder card faces are drawn on a canvas per card here.
+ * (cardTable.ts, card atlas, input). Card faces and the deck's back use the game's own art (drawFace / drawBack of the card atlas).
  */
 import * as THREE from 'three';
-import type { Card, Color, Quality } from '../contracts';
+import type { Card, Quality, TableStyle } from '../contracts';
 import { FrameLoop } from './frameLoop';
+import { drawArena, drawBack, drawFace, makeTexture, roundRect, TABLE_STYLE_DEFS } from './cardAtlas';
 import { Animator, ease } from './tween';
 
-export const COLOR_HEX: Record<Color, string> = { sol: '#ffb627', mar: '#14a3a0', palma: '#4caf50', coral: '#ff6f61' };
-const LABEL: Record<string, string> = { skip: '⦸', reverse: '⇄', draw2: '+2', wild: '★', wild4: '+4', swap: '⇅', shield: '⛨', sweep: '≋', mirror: '◐', flip: '◑' };
-
 const CARD_W = 0.62;
-const CARD_H = 0.9;
+const CARD_H = CARD_W * 1.5;
 
-function roundRect(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  g.beginPath();
-  g.moveTo(x + r, y);
-  g.arcTo(x + w, y, x + w, y + h, r);
-  g.arcTo(x + w, y + h, x, y + h, r);
-  g.arcTo(x, y + h, x, y, r);
-  g.arcTo(x, y, x + w, y, r);
-  g.closePath();
-}
-
+/** a card texture with the game's own art: the atlas face drawing, or the default "Ku" back when `card` is null */
 function faceTexture(card: Card | null): THREE.CanvasTexture {
+  const W = 128;
   const c = document.createElement('canvas');
-  c.width = 128;
-  c.height = 186;
+  c.width = W;
+  c.height = W * 1.5;
   const g = c.getContext('2d')!;
-  g.fillStyle = '#fff6e6';
-  roundRect(g, 0, 0, 128, 186, 16);
-  g.fill();
-  if (!card) {
-    g.fillStyle = '#1b3a46';
-    roundRect(g, 8, 8, 112, 170, 11);
-    g.fill();
-    g.fillStyle = '#ffb627';
-    g.font = '900 40px system-ui, sans-serif';
-    g.textAlign = 'center';
-    g.fillText('Ku', 64, 108);
+  if (card) {
+    drawFace(g, card.face, 0, 0, W);
   } else {
-    const col = card.face.color ? COLOR_HEX[card.face.color] : '#26323a';
-    g.fillStyle = col;
-    roundRect(g, 8, 8, 112, 170, 11);
-    g.fill();
-    g.fillStyle = '#fff6e6';
-    g.beginPath();
-    g.arc(64, 93, 38, 0, Math.PI * 2);
-    g.fill();
-    const txt = card.face.kind === 'number' ? String(card.face.value) : LABEL[card.face.kind];
-    g.fillStyle = col;
-    g.font = '900 46px system-ui, sans-serif';
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    g.fillText(txt, 64, 95);
-    g.fillStyle = '#fff6e6';
-    g.font = '800 24px system-ui, sans-serif';
-    g.fillText(txt, 26, 30);
+    // the back fills its whole canvas: cut the card's rounded corners out of it
+    roundRect(g, 0, 0, W, W * 1.5, (W * 7) / 60);
+    g.clip();
+    g.drawImage(drawBack('ku', W), 0, 0, W, W * 1.5);
   }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
+  return makeTexture(c, true);
 }
 
 export interface DemoTable {
@@ -70,17 +36,21 @@ export interface DemoTable {
   dispose(): void;
 }
 
-export function createDemoTable(container: HTMLElement, quality: Quality): DemoTable {
+export function createDemoTable(container: HTMLElement, quality: Quality, style: TableStyle = 'teal'): DemoTable {
   const renderer = new THREE.WebGLRenderer({ antialias: quality !== 'low', powerPreference: 'low-power' });
   const setPR = (q: Quality) => renderer.setPixelRatio(Math.min(devicePixelRatio, q === 'high' ? 2 : q === 'medium' ? 1.5 : 1));
   setPR(quality);
   container.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color('#13232e');
+  // the player's chosen table, the same round felt and room as in the game
+  const look = TABLE_STYLE_DEFS[style] ?? TABLE_STYLE_DEFS.teal;
+  scene.background = new THREE.Color(look.bg);
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 50);
   camera.position.set(0, 5.2, 3.6);
   camera.lookAt(0, 0, 0.4);
-  const felt = new THREE.Mesh(new THREE.CircleGeometry(4, 48), new THREE.MeshBasicMaterial({ color: '#1e5a66' }));
+  const ARENA = 22;
+  const feltTex = makeTexture(drawArena(style, quality === 'low' ? 768 : 1536, 4 / ARENA), true);
+  const felt = new THREE.Mesh(new THREE.PlaneGeometry(ARENA, ARENA), new THREE.MeshBasicMaterial({ map: feltTex }));
   felt.rotation.x = -Math.PI / 2;
   scene.add(felt);
 

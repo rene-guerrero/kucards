@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import {
-  fanLayout, hitFan, inSlot, oppFan, openFan, openScale, partnerFan, partnerScale, separatePlates, seatSides, turnSpin, ringSign, seatAnchor,
-  plateBox, projectCss, sortHand, tableDims, CARD_W, CARD_H, SEAT_SIDE, OPEN_MIN_STRIP_X, OPEN_MIN_STRIP_Z, type FanLayout,
+  fanLayout, hitFan, inSlot, separatePlates, seatSides, turnSpin, ringSign, seatAnchor, plateBox, projectCss, sortHand, tableDims,
+  cameraTilt, cameraFov, fitTable, seatHand, fanSpread, seatHoldYaw, handCardCorners, handCardNormal, handFitPoints, layoutPlates,
+  CARD_W, SEAT_SIDE, HUD_TOP, HAND_HIDDEN, tableTune, tableCamera, openHandScale, type FanLayout, type PlateSeat, type Box,
 } from './layout';
-import type { Card } from '../contracts';
+import type { Card, Seat } from '../contracts';
 
 const VIEWS = [
   { W: 390, H: 844 }, // phone portrait
@@ -45,7 +46,7 @@ function visibleWidth(f: FanLayout, i: number): number {
 
 describe('fanLayout', () => {
   for (const v of VIEWS)
-    it(`keeps 1..30 cards in one row on screen at ${v.W}x${v.H}`, () => {
+    it(`keeps 1..30 cards in one straight row, 20% below the edge, at ${v.W}x${v.H}`, () => {
       for (let n = 1; n <= 30; n++) {
         const f = fanLayout(n, v);
         expect(f.slots.length).toBe(n);
@@ -55,8 +56,11 @@ describe('fanLayout', () => {
             expect(x).toBeGreaterThanOrEqual(-0.5);
             expect(x).toBeLessThanOrEqual(v.W + 0.5);
             expect(y).toBeGreaterThanOrEqual(0);
-            expect(y).toBeLessThanOrEqual(v.H + 0.5);
+            // the bottom HAND_HIDDEN of each card hides below the screen edge
+            expect(y).toBeLessThanOrEqual(v.H + f.ch * HAND_HIDDEN + 0.5);
           }
+          expect(f.slots[i].rot).toBeCloseTo(0, 9); // a straight row
+          expect(f.slots[i].y + f.ch / 2).toBeCloseTo(v.H + f.ch * HAND_HIDDEN, 6);
           // a comfortable strip while it fits, then evenly compressed (the peek reads squeezed cards)
           if (i < n - 1) expect(visibleWidth(f, i)).toBeGreaterThanOrEqual(Math.min(f.minTap, f.spacing * 0.9) - 1.5);
         }
@@ -103,23 +107,75 @@ describe('sortHand', () => {
   });
 });
 
-describe('opponent fans', () => {
-  it('stay on the felt and compress', () => {
-    for (const portrait of [true, false]) {
-      const d = tableDims(portrait);
-      for (const seat of [1, 2, 3]) {
-        for (const n of [1, 7, 25]) {
-          const poses = oppFan(n, SEAT_SIDE[seat], d);
-          expect(poses.length).toBe(n);
-          for (const p of poses) {
-            expect(Math.abs(p.x)).toBeLessThanOrEqual(d.A);
-            expect(Math.abs(p.z)).toBeLessThanOrEqual(d.B);
+// ───────── the other seats' hands: the human's fan, held at each seat (3D) ─────────
+
+const DEG = Math.PI / 180;
+const DIMS = [tableDims(false), tableDims(true), { A: 4.6, B: 2.6 }, { A: 2.05, B: 4.2 }];
+
+describe('hands of the other seats (tuned in fan-demo.html)', () => {
+  const sides = ['top', 'left', 'right', 'lowerLeft', 'lowerRight'] as const;
+  const tune = (portrait: boolean, side: (typeof sides)[number]) => {
+    const T = tableTune(portrait);
+    return side === 'top' ? T.top : side === 'left' || side === 'lowerLeft' ? T.left : T.right;
+  };
+
+  it('stand where the demo put them, at the tuned size, above the felt', () => {
+    for (const portrait of [false, true])
+      for (const side of sides)
+        for (const open of [false, true])
+          for (const n of [1, 2, 7, 12, 25]) {
+            const F = tune(portrait, side);
+            const f = seatHand(n, side, open, tableDims(portrait), portrait);
+            const tag = `${side} open=${open} n=${n} portrait=${portrait}`;
+            expect(f.poses.length, tag).toBe(n);
+            expect(f.s, tag).toBeCloseTo(F.scale, 9);
+            expect(f.ax, tag).toBeCloseTo(F.posX, 9);
+            expect(f.az, tag).toBeCloseTo(F.posZ, 9);
+            expect(f.holdYaw).toBeCloseTo(seatHoldYaw(side), 9);
+            for (const p of f.poses) {
+              expect(p.q, tag).toBeDefined();
+              const cs = handCardCorners(p, f.s);
+              for (let k = 1; k < 12; k += 3) expect(cs[k], tag).toBeGreaterThanOrEqual(0);
+            }
           }
+  });
+
+  it('show their backs to the table centre, an open hand its faces', () => {
+    for (const portrait of [false, true])
+      for (const side of sides)
+        for (const open of [false, true]) {
+          const f = seatHand(7, side, open, tableDims(portrait), portrait);
+          const p = f.poses[3];
+          const nrm = handCardNormal(p);
+          // the face normal points at the holder (away from the centre) unless the hand is open
+          const toCentre = -(nrm[0] * p.x + nrm[2] * p.z);
+          if (open) expect(toCentre, `${side} portrait=${portrait}`).toBeGreaterThan(0);
+          else expect(toCentre, `${side} portrait=${portrait}`).toBeLessThan(0);
         }
+  });
+
+  it('squeeze big hands into the length of fullCards, never a second row', () => {
+    for (const portrait of [false, true])
+      for (const side of sides) {
+        const F = tune(portrait, side);
+        const full = seatHand(F.fullCards, side, false, tableDims(portrait), portrait);
+        const big = seatHand(25, side, false, tableDims(portrait), portrait);
+        expect(big.spacing).toBeLessThan(full.spacing);
+        const span = (h: typeof big) => Math.hypot(h.poses[h.poses.length - 1].x - h.poses[0].x, h.poses[h.poses.length - 1].z - h.poses[0].z);
+        expect(span(big)).toBeLessThan(span(full) * 1.1 + 0.05);
       }
+  });
+
+  it("the partner's open hand is the size of the opponents' hands across the table", () => {
+    for (const portrait of [false, true]) {
+      expect(openHandScale(portrait, 'top')).toBeCloseTo(tableTune(portrait).top.scale, 9);
+      expect(openHandScale(portrait, 'lowerLeft')).toBeCloseTo(tableTune(portrait).left.scale, 9);
+      expect(openHandScale(portrait, 'lowerRight')).toBeCloseTo(tableTune(portrait).right.scale, 9);
     }
   });
 });
+
+void DEG;
 
 describe('plates', () => {
   it('projects world points to CSS px like three.js does', () => {
@@ -159,76 +215,7 @@ describe('plates', () => {
   });
 });
 
-describe('open hand fan (Parejas partner face up)', () => {
-  const VIEWS_OPEN = [
-    { W: 390, H: 844, portrait: true, dims: [tableDims(true), { A: 2.05, B: 4.2 }] },
-    { W: 844, H: 390, portrait: false, dims: [tableDims(false), { A: 4.6, B: 2.15 }] },
-  ];
-  const sides = ['top', 'right', 'left'] as const;
-
-  it('keeps every card on the felt, in order, for 1..30 cards', () => {
-    for (const v of VIEWS_OPEN)
-      for (const d of v.dims)
-        for (const side of sides)
-          for (let n = 1; n <= 30; n++) {
-            const tilt = v.portrait ? 0.42 : 0.5;
-            const f = openFan(n, side, d, tilt, openScale(v.portrait));
-            expect(f.poses.length).toBe(n);
-            const w = CARD_W * f.s;
-            const hz = (CARD_H * f.s * Math.cos(tilt)) / 2;
-            for (const p of f.poses) {
-              expect(Math.abs(p.x) + w / 2).toBeLessThanOrEqual(d.A + 0.1);
-              expect(Math.abs(p.z) + hz).toBeLessThanOrEqual(d.B + 0.1);
-              expect(p.y).toBeGreaterThan(0);
-            }
-            // extents cover the cards
-            for (const p of f.poses) {
-              expect(p.x - w / 2).toBeGreaterThanOrEqual(f.cx - f.hx - 1e-9);
-              expect(p.x + w / 2).toBeLessThanOrEqual(f.cx + f.hx + 1e-9);
-            }
-          }
-  });
-
-  it('every card keeps its top-left corner (value + colour symbol) uncovered', () => {
-    for (const v of VIEWS_OPEN)
-      for (const d of v.dims)
-        for (const side of sides)
-          for (const n of [2, 7, 12, 18, 25]) {
-            const tilt = v.portrait ? 0.42 : 0.5;
-            const f = openFan(n, side, d, tilt, openScale(v.portrait));
-            const w = CARD_W * f.s;
-            const hz = (CARD_H * f.s * Math.cos(tilt)) / 2;
-            // one line: past the corner strip the hand just compresses (the peek reads it)
-            const minStrip = side === 'top' ? OPEN_MIN_STRIP_X * w : OPEN_MIN_STRIP_Z * CARD_H * f.s;
-            if (n > 1 && f.step < minStrip) return;
-            expect(f.lines).toBe(1);
-            f.poses.forEach((p, i) => {
-              // probe the corner value: ~19% across, ~15% down the card
-              const px = p.x - w / 2 + 0.19 * w;
-              const pz = p.z - hz + 0.15 * 2 * hz;
-              const coveredBy = f.poses.findIndex(
-                (q, j) => j !== i && q.y > p.y && Math.abs(px - q.x) < w / 2 && Math.abs(pz - q.z) < hz,
-              );
-              expect(coveredBy, `${side} n=${n} card ${i}`).toBe(-1);
-            });
-          }
-  });
-
-  it('stays readable on a phone (card and visible strip size in px)', () => {
-    for (const v of VIEWS_OPEN) {
-      const d = v.dims[0];
-      // the felt fits the screen (camera fit); the far side shrinks with perspective (~0.7)
-      const pxPerUnit = Math.min((v.W - 8) / (2 * (d.A + 0.15)), (v.H - 90) / (2 * (d.B + 0.15))) * 0.7;
-      for (const side of sides)
-        for (const n of [5, 8]) {
-          const f = openFan(n, side, d, v.portrait ? 0.42 : 0.5, openScale(v.portrait));
-          const wPx = CARD_W * f.s * pxPerUnit;
-          expect(wPx, `${v.W}x${v.H} ${side}`).toBeGreaterThanOrEqual(30);
-          if (n > 1) expect(f.step * pxPerUnit, `${v.W}x${v.H} ${side} n=${n}`).toBeGreaterThanOrEqual(10);
-        }
-    }
-  });
-
+describe('open hands', () => {
   it('sorts open hands by colour then value with the cyclone kinds placed', () => {
     const cs: Card[] = [
       { id: 1, face: { kind: 'draw10', color: null, draw: 10 } },
@@ -276,48 +263,6 @@ describe('Codo a codo (side-seating partners)', () => {
     expect(turnSpin([{ x: 0, z: 2 }, { x: 0, z: -2 }])).toBe(0); // 2 players: collinear
   });
 
-  it('the partner arc lies along their edge, inside the felt, clear of the centre, top to bottom', () => {
-    for (const c of CASES)
-      for (const d of DIMS)
-        for (const zNear of [1.0, 1.6, 2.2])
-          for (let n = 1; n <= 30; n++) {
-            const f = partnerFan(n, c.side, d, zNear, partnerScale(false));
-            expect(f.poses.length).toBe(n);
-            const w = L_W * f.s;
-            const h = L_H * f.s;
-            f.poses.forEach((p, i) => {
-              expect(Math.abs(p.x) + w / 2).toBeLessThanOrEqual(d.A);
-              expect(Math.abs(p.z) + h / 2).toBeLessThanOrEqual(d.B);
-              // on the partner's side and well away from the deck / pile (|x| <= ~1.1)
-              expect(Math.sign(p.x)).toBe(c.side === 'lowerRight' ? 1 : -1);
-              expect(Math.abs(p.x) - w / 2).toBeGreaterThan(1.3);
-              expect(Math.abs(p.yaw ?? 0)).toBeLessThanOrEqual(0.2); // a gentle arc, still upright
-              if (i > 0) expect(p.z).toBeGreaterThan(f.poses[i - 1].z);
-            });
-            // smaller than the human's cards: opponent-ish scale
-            expect(f.s).toBeLessThan(0.9);
-          }
-  });
-
-  it('keeps every partner corner value visible for 7-14 cards on a landscape table', () => {
-    for (const c of CASES)
-      for (const d of DIMS)
-        for (const n of [7, 10, 14]) {
-          const f = partnerFan(n, c.side, d, 1.9, partnerScale(false), -1.4);
-          const w = L_W * f.s;
-          // each nearer card sits lower and to the right: the one behind keeps a full-height left strip
-          for (let i = 1; i < n; i++) {
-            const dx = f.poses[i].x - f.poses[i - 1].x;
-            const dz = f.poses[i].z - f.poses[i - 1].z;
-            expect(dz).toBeGreaterThan(0);
-            // value + colour symbol at 7 cards on a phone table; graceful (value only) at 14
-            expect(dx, `${c.side} A=${d.A} n=${n}`).toBeGreaterThanOrEqual(w * (n <= 7 ? 0.34 : n <= 10 ? 0.27 : 0.18) - 1e-9);
-          }
-          // the far end stays below the reserved plate slot
-          expect(f.poses[0].z - (L_H * f.s) / 2).toBeGreaterThanOrEqual(-1.4 - (L_H * f.s) / 2 - 1e-9);
-        }
-  });
-
   it('separates overlapping plates and keeps them off the pile', () => {
     const mk = (seat: 0 | 1 | 2 | 3, x: number, y: number) => ({
       seat, x, y, w: 120, h: 40, d: 40, layout: 'row' as const, scale: 1, visible: true, active: false, winner: false, count: 7,
@@ -338,5 +283,65 @@ describe('Codo a codo (side-seating partners)', () => {
   });
 });
 
-const L_W = CARD_W;
-const L_H = CARD_H;
+// ───────── the whole table: rows, plates, pile and the human hand never collide ─────────
+
+describe('the whole table at phone and desktop sizes', () => {
+  interface Mode { name: string; W: number; H: number; seats: Seat[]; teams: Seat[][] | null; open?: Seat }
+  const MODES: Mode[] = [
+    { name: 'Clásico 4p portrait', W: 375, H: 812, seats: [0, 1, 2, 3], teams: null },
+    { name: 'Clásico 4p landscape', W: 915, H: 412, seats: [0, 1, 2, 3], teams: null },
+    { name: 'Clásico 4p small landscape', W: 844, H: 390, seats: [0, 1, 2, 3], teams: null },
+    { name: 'Clásico 4p desktop', W: 1280, H: 720, seats: [0, 1, 2, 3], teams: null },
+    { name: '2p landscape', W: 915, H: 412, seats: [0, 2], teams: null },
+    { name: 'Enfrente landscape', W: 915, H: 412, seats: [0, 1, 2, 3], teams: [[0, 2], [1, 3]], open: 2 },
+    { name: 'Codo a codo R landscape', W: 915, H: 412, seats: [0, 1, 2, 3], teams: [[0, 1], [2, 3]], open: 1 },
+    { name: 'Codo a codo L portrait', W: 375, H: 812, seats: [0, 1, 2, 3], teams: [[0, 3], [1, 2]], open: 3 },
+  ];
+
+  /** the view's camera (tableCamera): the tuned tilt, fov and distance */
+  function table(m: Mode) {
+    const { W, H } = m;
+    const portrait = H > W * 1.05;
+    const tc = tableCamera(W, H, portrait);
+    const cam = new THREE.PerspectiveCamera(tc.fov, W / H, 0.1, 100);
+    cam.position.set(0, Math.cos(tc.tilt) * tc.dist, Math.sin(tc.tilt) * tc.dist);
+    cam.lookAt(0, 0, 0);
+    cam.updateMatrixWorld(true);
+    const vp = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    const project = (x: number, y: number, z: number, out: { x: number; y: number }) => projectCss(vp.elements, x, y, z, W, H, out);
+    return { portrait, sides: seatSides(m.seats, m.teams), project, dims: tableDims(portrait) };
+  }
+
+  for (const m of MODES)
+    it(`${m.name} ${m.W}x${m.H}: every hand on screen, every plate on screen`, () => {
+      const t = table(m);
+      for (const n of [7, 15, 25]) {
+        const list: PlateSeat[] = m.seats.map((s) => {
+          const side = t.sides[s];
+          return { seat: s, side, count: n, hand: s === 0 ? null : seatHand(n, side, s === m.open, t.dims, t.portrait), active: false, winner: false, scale: 1, visible: true };
+        });
+        const pt = { x: 0, y: 0 };
+        for (const ps of list) {
+          if (!ps.hand) continue;
+          for (const c of ps.hand.poses) {
+            const cs = handCardCorners(c, ps.hand.s);
+            for (let k = 0; k < 12; k += 3) {
+              t.project(cs[k], cs[k + 1], cs[k + 2], pt);
+              const tag = `${m.name} n=${n} seat ${ps.seat}`;
+              expect(pt.x, tag).toBeGreaterThan(-m.W * 0.05);
+              expect(pt.x, tag).toBeLessThan(m.W * 1.05);
+              expect(pt.y, tag).toBeGreaterThan(-m.H * 0.05);
+              expect(pt.y, tag).toBeLessThan(m.H * 1.05);
+            }
+          }
+        }
+        const { plates } = layoutPlates(m.W, m.H, t.portrait, t.project, list, n, { x: m.W / 2, y: m.H / 2, w: 10, h: 10 });
+        for (const p of plates) {
+          expect(p.x - p.w / 2).toBeGreaterThanOrEqual(0);
+          expect(p.x + p.w / 2).toBeLessThanOrEqual(m.W);
+          expect(p.y - p.h / 2).toBeGreaterThanOrEqual(0);
+          expect(p.y + p.h / 2).toBeLessThanOrEqual(m.H);
+        }
+      }
+    });
+});

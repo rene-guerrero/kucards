@@ -229,7 +229,7 @@ function startBackdrop(): void {
   const token = ++backdropToken;
   void import('./render/demoTable').then(async ({ createDemoTable }) => {
     if (token !== backdropToken || backdrop) return;
-    const view = createDemoTable(tableEl, settings.quality);
+    const view = createDemoTable(tableEl, settings.quality, settings.tableStyle);
     backdrop = view;
     tableEl.classList.add('kc-ready');
     const { match } = startRound(createMatch(RULE_PRESETS[0].rules, { mode: 'classic', players: 4 }));

@@ -124,7 +124,10 @@ export class AvatarController {
         this.react(ev.seat, 'shout', 1.2);
         break;
       case 'kuCaught':
-        this.react(ev.target, 'amazed', 1.2);
+        // caught: the forgetful player winces (the plate shakes, see SeatPlates.hurt); the catcher cheers
+        this.react(ev.target, 'hurt', 1.8);
+        // KuAvatars' hurt face plus its facepalm hands
+        this.gesture(ev.target, 'facepalm', 0.1);
         this.gesture(ev.by, 'thumbsUp');
         break;
       case 'shield':

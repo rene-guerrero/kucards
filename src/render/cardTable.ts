@@ -38,30 +38,147 @@ interface QualityCfg {
   confetti: number;
   felt: number;
   aniso: number;
-  fountain: number;
 }
 
 export const QUALITY: Record<Quality, QualityCfg> = {
-  low: { dpr: 1, aa: false, atlas: 1024, frameMs: 28, maxDt: 0.1, particles: 60, confetti: 90, felt: 512, aniso: 1, fountain: 10 },
-  medium: { dpr: 1.5, aa: true, atlas: 1024, frameMs: 0, maxDt: 0.1, particles: 160, confetti: 200, felt: 1024, aniso: 2, fountain: 18 },
-  high: { dpr: 2, aa: true, atlas: 2048, frameMs: 0, maxDt: 0.05, particles: 300, confetti: 300, felt: 1024, aniso: 4, fountain: 26 },
+  low: { dpr: 1, aa: false, atlas: 1024, frameMs: 28, maxDt: 0.1, particles: 60, confetti: 90, felt: 512, aniso: 1 },
+  medium: { dpr: 1.5, aa: true, atlas: 1024, frameMs: 0, maxDt: 0.1, particles: 160, confetti: 200, felt: 1024, aniso: 2 },
+  high: { dpr: 2, aa: true, atlas: 2048, frameMs: 0, maxDt: 0.05, particles: 300, confetti: 300, felt: 1024, aniso: 4 },
 };
 
 const POOL = 220;
 const PILE_KEEP = 8;
-const HUD_TOP = 56;
+/** events that undo a previewed (not yet played) human card */
+const PREVIEW_UNDO = new Set<GameEvent['type']>(['play', 'draw', 'deal', 'swapHands', 'rotateHands', 'sweep', 'reshuffle', 'roundEnd', 'eliminated']);
+const HUD_TOP = L.HUD_TOP;
 /** distance of the human hand in front of the camera (world units) */
 const HAND_D = 2.4;
+/** cards in the human hand before it counts as crowded (a tapped card's neighbours then step aside) */
+const HAND_FULL = 7;
+/** the direction arrows: see-through, tinted by the colour in play, turning slowly (rad/s) */
+const DIR_OPACITY = 0.55;
+const DIR_SPIN = 0.22;
+/** power effects over the pile */
+const FX_GOLD = new THREE.Color('#ffd36b');
+const FX_WHITE = new THREE.Color('#ffffff');
+const FX_SHIELD = new THREE.Color('#9fe6ff');
+/** side of the floor plane carrying the round table and the room around it (world units) */
+const ARENA_SIZE = 22;
+/** height of a full deck (world units, as tuned in the fan demo) */
+const DECK_MAX_H = 0.25;
 const DECK_GUESS = 108;
 const UP = new THREE.Vector3(0, 1, 0);
 const Q_LAY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 const Q_FLIP = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+const AX_X = new THREE.Vector3(1, 0, 0);
+const AX_Z = new THREE.Vector3(0, 0, 1);
+const tmpQ2 = new THREE.Quaternion();
 const CONFETTI: [number, number, number][] = [
   [1, 0.714, 0.153], [0.078, 0.639, 0.627], [0.298, 0.686, 0.314], [1, 0.435, 0.38], [1, 0.965, 0.902],
 ];
 const KU_COLS: [number, number, number][] = [
   [1, 0.714, 0.153], [0.078, 0.639, 0.627], [0.298, 0.686, 0.314], [1, 0.435, 0.38],
 ];
+/** on-screen size of the skip mark (CSS px, min / max): big over the table, small at a seat */
+const SKIP_BIG_PX = [150, 320];
+const SKIP_SMALL_PX = [46, 70];
+
+/** the skip mark: a white ring with a slash on a soft dark disc, glowing; drawn once, tinted per use */
+function drawSkipMark(ctx: CanvasRenderingContext2D, S: number): void {
+  const c = S / 2;
+  const r = S * 0.33;
+  const w = S * 0.1;
+  ctx.clearRect(0, 0, S, S);
+  const bg = ctx.createRadialGradient(c, c, r * 0.4, c, c, S * 0.48);
+  bg.addColorStop(0, 'rgba(0,0,0,0.42)');
+  bg.addColorStop(0.75, 'rgba(0,0,0,0.28)');
+  bg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, S, S);
+  const d = r * Math.SQRT1_2;
+  const path = (lw: number, style: string, blur: number) => {
+    ctx.save();
+    ctx.lineWidth = lw;
+    ctx.strokeStyle = style;
+    ctx.shadowColor = blur ? 'rgba(255,255,255,0.85)' : 'transparent';
+    ctx.shadowBlur = blur;
+    ctx.beginPath();
+    ctx.arc(c, c, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(c, c, r, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.lineCap = 'butt';
+    ctx.beginPath();
+    ctx.moveTo(c - d, c - d);
+    ctx.lineTo(c + d, c + d);
+    ctx.stroke();
+    ctx.restore();
+  };
+  // dark rim for contrast on a bright felt, the glowing white body, then a crisp core
+  path(w + S * 0.035, 'rgba(10,14,20,0.55)', 0);
+  path(w, '#ffffff', S * 0.07);
+  path(w * 0.86, '#ffffff', 0);
+  // a thin bright highlight along the ring's upper-left edge
+  ctx.save();
+  ctx.globalAlpha = 0.5;
+  ctx.lineWidth = S * 0.012;
+  ctx.strokeStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(c, c, r + w * 0.62, Math.PI * 1.05, Math.PI * 1.6);
+  ctx.stroke();
+  ctx.restore();
+}
+
+const MARK_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+
+/** the penalty mark: "+N" big and bold in a thin glowing ring on a soft dark disc (white; tinted per use) */
+function drawPenMark(ctx: CanvasRenderingContext2D, S: number, text: string): void {
+  const c = S / 2;
+  const r = S * 0.37;
+  ctx.clearRect(0, 0, S, S);
+  const bg = ctx.createRadialGradient(c, c, r * 0.4, c, c, S * 0.49);
+  bg.addColorStop(0, 'rgba(0,0,0,0.45)');
+  bg.addColorStop(0.75, 'rgba(0,0,0,0.3)');
+  bg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, S, S);
+  ctx.save();
+  ctx.lineWidth = S * 0.05;
+  ctx.strokeStyle = 'rgba(10,14,20,0.55)';
+  ctx.beginPath();
+  ctx.arc(c, c, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = S * 0.032;
+  ctx.strokeStyle = '#ffffff';
+  ctx.shadowColor = 'rgba(255,255,255,0.85)';
+  ctx.shadowBlur = S * 0.06;
+  ctx.stroke();
+  // the number: as big as fits inside the ring
+  let px = Math.round(S * (text.length > 2 ? 0.4 : 0.5));
+  ctx.font = `900 ${px}px ${MARK_FONT}`;
+  const wMax = r * 1.62;
+  const tw = ctx.measureText(text).width;
+  if (tw > wMax) {
+    px = Math.floor((px * wMax) / tw);
+    ctx.font = `900 ${px}px ${MARK_FONT}`;
+  }
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const y = c + px * 0.04;
+  ctx.shadowBlur = 0;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = S * 0.035;
+  ctx.strokeStyle = 'rgba(10,14,20,0.6)';
+  ctx.strokeText(text, c, y);
+  ctx.fillStyle = '#ffffff';
+  ctx.shadowColor = 'rgba(255,255,255,0.8)';
+  ctx.shadowBlur = S * 0.07;
+  ctx.fillText(text, c, y);
+  ctx.shadowBlur = 0;
+  ctx.fillText(text, c, y);
+  ctx.restore();
+}
 /** penalty a card carries when its face has no explicit draw */
 const KIND_DRAW: Partial<Record<string, number>> = { draw2: 2, wild4: 4, draw6: 6, draw10: 10 };
 const TEAM_TINT = ['#3fe0d0', '#ff7a6b'];
@@ -88,10 +205,10 @@ void main() {
 }`;
 
 const COLOR_LIN: Record<Color, THREE.Color> = {
-  sol: new THREE.Color(A.COLOR_HEX.sol),
-  mar: new THREE.Color(A.COLOR_HEX.mar),
-  palma: new THREE.Color(A.COLOR_HEX.palma),
-  coral: new THREE.Color(A.COLOR_HEX.coral),
+  sol: new THREE.Color(A.COLOR_GLOW.sol),
+  mar: new THREE.Color(A.COLOR_GLOW.mar),
+  palma: new THREE.Color(A.COLOR_GLOW.palma),
+  coral: new THREE.Color(A.COLOR_GLOW.coral),
 };
 
 const tmpV = new THREE.Vector3();
@@ -149,6 +266,59 @@ void main() {
   #include <colorspace_fragment>
 }`;
 
+/** the opponents' hands mirrored under the table: same faces / backs, fading with depth below the felt */
+const REFL_VERT = /* glsl */ `
+attribute vec2 aCell;
+attribute float aFace;
+varying vec2 vUv;
+varying vec2 vCell;
+varying float vFace;
+varying float vDepth;
+varying vec3 vWorld;
+void main() {
+  vUv = uv;
+  vCell = aCell;
+  vFace = aFace;
+  vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0);
+  vDepth = -wp.y;
+  vWorld = wp.xyz;
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}`;
+
+const REFL_FRAG = /* glsl */ `
+uniform sampler2D uAtlas;
+uniform sampler2D uBack;
+uniform vec2 uCell;
+uniform float uStrength;
+uniform float uFade;
+uniform sampler2D uFelt;
+uniform float uArena;
+varying vec2 vUv;
+varying vec2 vCell;
+varying float vFace;
+varying float vDepth;
+varying vec3 vWorld;
+void main() {
+  // the mirror flips the winding, so the sides swap
+  bool front = !gl_FrontFacing;
+  vec3 c;
+  if (front && vFace > 0.5) c = texture2D(uAtlas, vCell + vUv * uCell).rgb;
+  else c = texture2D(uBack, front ? vUv : vec2(1.0 - vUv.x, vUv.y)).rgb;
+  float a = uStrength * (1.0 - smoothstep(0.0, uFade, vDepth));
+  if (a < 0.004) discard;
+  // solid, not see-through: blend with the floor seen along this ray (where it meets the felt), so
+  // overlapping reflections hide each other like the cards do
+  vec3 ray = vWorld - cameraPosition;
+  float t = cameraPosition.y / max(1e-4, cameraPosition.y - vWorld.y);
+  vec3 hit = cameraPosition + ray * t;
+  vec3 floorC = texture2D(uFelt, vec2(hit.x / uArena + 0.5, 0.5 - hit.z / uArena)).rgb;
+  gl_FragColor = vec4(mix(floorC, c, a), 1.0);
+  #include <colorspace_fragment>
+}`;
+/** at most this many reflected cards (every opponent's hand together) */
+const REFL_MAX = 90;
+const MIRROR_Y = new THREE.Matrix4().makeScale(1, -1, 1);
+
 interface CardObj {
   i: number;
   card: Card | null;
@@ -200,7 +370,28 @@ function faceUpQ(yaw: number, out: Q): Q {
 function faceDownQ(yaw: number, out: Q): Q {
   return out.setFromAxisAngle(UP, yaw).multiply(Q_LAY).multiply(Q_FLIP);
 }
-
+/** a yellow square pyramid, point down, with flat-shaded faces (the scene has no lights) */
+function makeDrawCue(): THREE.Mesh {
+  const g = new THREE.ConeGeometry(0.26, 0.46, 4, 1).rotateX(Math.PI).toNonIndexed();
+  g.computeVertexNormals();
+  const pos = g.getAttribute('position');
+  const nrm = g.getAttribute('normal');
+  const col = new Float32Array(pos.count * 3);
+  const light = new THREE.Vector3(0.4, 0.8, 0.5).normalize();
+  const n = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i += 3) {
+    // one shade per triangle from its first vertex normal
+    n.set(nrm.getX(i), nrm.getY(i), nrm.getZ(i));
+    const k = 0.55 + 0.45 * Math.max(0, n.dot(light));
+    for (let j = 0; j < 3; j++) {
+      col[(i + j) * 3] = 1 * k;
+      col[(i + j) * 3 + 1] = 0.82 * k;
+      col[(i + j) * 3 + 2] = 0.12 * k;
+    }
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true }));
+}
 /** rounded-rect card geometry in the XY plane facing +Z, uv 0..1 over the card */
 function buildCardGeometry(): THREE.BufferGeometry {
   const w = L.CARD_W;
@@ -225,6 +416,103 @@ function buildCardGeometry(): THREE.BufferGeometry {
   uv.needsUpdate = true;
   g.deleteAttribute('normal');
   return g;
+}
+
+/** world height of one stack layer (about eight cards) */
+const STACK_BAND = 0.028;
+const STACK_BANDS = 16;
+/**
+ * A card stack, built once: STACK_BANDS rounded-rect slabs from y=0 upwards (in XZ, W along x, H along z),
+ * each slightly staggered and sized unevenly, with a thin dark seam at its foot, baked side shading and
+ * a darker foot near the table. Indices run band by band, so `bandIndexCount(n)` draws the lowest n.
+ */
+function buildStackGeometry(): THREE.BufferGeometry {
+  const SEG = 4;
+  const P = 4 * (SEG + 1);
+  const r = 0.075;
+  const ring: number[] = []; // x, z, nx, nz per outline point
+  const corners = [
+    [1, 1, 0],
+    [-1, 1, Math.PI / 2],
+    [-1, -1, Math.PI],
+    [1, -1, Math.PI * 1.5],
+  ];
+  for (const [sx, sz, a0] of corners)
+    for (let i = 0; i <= SEG; i++) {
+      const a = a0 + (i / SEG) * (Math.PI / 2);
+      const nx = Math.cos(a);
+      const nz = Math.sin(a);
+      ring.push(sx * (L.CARD_W / 2 - r) + nx * r, sz * (L.CARD_H / 2 - r) + nz * r, nx, nz);
+    }
+  const vPerBand = 4 * P + P + 1;
+  const pos = new Float32Array(STACK_BANDS * vPerBand * 3);
+  const col = new Float32Array(STACK_BANDS * vPerBand * 3);
+  const idx: number[] = [];
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+  let v = 0;
+  const put = (x: number, y: number, z: number, c: number) => {
+    pos[v * 3] = x;
+    pos[v * 3 + 1] = y;
+    pos[v * 3 + 2] = z;
+    col[v * 3] = c;
+    col[v * 3 + 1] = c * 0.985;
+    col[v * 3 + 2] = c * 0.955;
+    v++;
+  };
+  for (let b = 0; b < STACK_BANDS; b++) {
+    const base = v;
+    const ox = rnd() * 0.007;
+    const oz = rnd() * 0.007;
+    const inset = 0.006 + Math.abs(rnd()) * 0.004; // a hair inside the card outline, uneven per layer
+    const tint = 0.93 + Math.abs(rnd()) * 0.07;
+    const foot = 0.74 + 0.26 * Math.min(1, b / 3); // darker towards the table
+    const y0 = b * STACK_BAND;
+    const ys = y0 + STACK_BAND * 0.13; // the dark seam's top
+    const y1 = y0 + STACK_BAND;
+    // rows: seam bottom, seam top (dark) | seam top, band top (white)
+    const rows: [number, number][] = [
+      [y0, 0.32],
+      [ys, 0.4],
+      [ys, 0.86],
+      [y1, 1],
+    ];
+    for (const [y, k] of rows)
+      for (let i = 0; i < P; i++) {
+        const x = ring[i * 4] - ring[i * 4 + 2] * inset + ox;
+        const z = ring[i * 4 + 1] - ring[i * 4 + 3] * inset + oz;
+        const side = 0.84 + 0.1 * ring[i * 4 + 3] + 0.06 * ring[i * 4 + 2]; // baked light from front-right
+        put(x, y, z, k * side * tint * foot);
+      }
+    for (const row of [0, 2])
+      for (let i = 0; i < P; i++) {
+        const j = (i + 1) % P;
+        const a = base + row * P + i;
+        const bb = base + row * P + j;
+        const c = a + P;
+        const d = bb + P;
+        idx.push(a, c, bb, bb, c, d);
+      }
+    // top cap (only the uppermost drawn one shows, and barely: the deck's top card sits on it)
+    const capC = v;
+    put(ox, y1, oz, 0.95 * tint);
+    for (let i = 0; i < P; i++) put(ring[i * 4] * 0.99 + ox, y1, ring[i * 4 + 1] * 0.99 + oz, 0.95 * tint);
+    for (let i = 0; i < P; i++) idx.push(capC, capC + 1 + ((i + 1) % P), capC + 1 + i);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setIndex(idx);
+  return g;
+}
+/** indices per stack band (sides + cap) */
+const STACK_BAND_IDX = (4 * (4 + 1)) * 6 * 2 + 4 * (4 + 1) * 3;
+
+/** show `h` world units of stack: a whole number of bands, stretched to fit exactly */
+function fitStack(m: THREE.Mesh, h: number): void {
+  const n = Math.max(1, Math.min(STACK_BANDS, Math.round(h / STACK_BAND)));
+  m.geometry.setDrawRange(0, n * STACK_BAND_IDX);
+  m.scale.set(1, Math.max(0.001, h) / (n * STACK_BAND), 1);
 }
 
 export class CardTable implements TableView {
@@ -253,17 +541,31 @@ export class CardTable implements TableView {
   private cardGeo!: THREE.BufferGeometry;
   private cardMat!: THREE.ShaderMaterial;
   private cards!: THREE.InstancedMesh;
+  /** the opponents' hands reflected in the floor (one more instanced draw) */
+  private refl!: THREE.InstancedMesh;
+  private reflCell!: THREE.InstancedBufferAttribute;
+  private reflFace!: THREE.InstancedBufferAttribute;
   private aCell!: THREE.InstancedBufferAttribute;
   private aFx!: THREE.InstancedBufferAttribute;
   private felt!: THREE.Mesh;
   private feltTex: THREE.CanvasTexture | null = null;
   private feltKey = '';
-  private edgeTex!: THREE.CanvasTexture;
-  private boxGeo!: THREE.BoxGeometry;
+  /** the deck's stack geometry; the pile's shares its buffers (own draw range) */
+  private boxGeo!: THREE.BufferGeometry;
+  private pileGeo!: THREE.BufferGeometry;
   private boxMat!: THREE.MeshBasicMaterial;
   private deckBox!: THREE.Mesh;
+  /** a faint mirror of the deck stack under the floor */
+  private deckRefl!: THREE.Mesh;
   private pileBox!: THREE.Mesh;
   private glowRing!: THREE.Mesh;
+  /** the bouncing yellow pyramid over the deck when the human has no play and must draw */
+  private drawCue!: THREE.Mesh;
+  private cueT = 0;
+  /** a flat triangle on the felt, out from the table centre, pointing at whoever's turn it is */
+  private turnArrow!: THREE.Mesh;
+  private arrowYaw = 0;
+  private arrowTarget = 0;
   private glowTex!: THREE.CanvasTexture;
   private dirRing!: THREE.Mesh;
   private dirTex!: THREE.CanvasTexture;
@@ -288,7 +590,18 @@ export class CardTable implements TableView {
   /** mirror flash */
   private flash!: THREE.Sprite;
   private flashTex!: THREE.CanvasTexture;
-  /** quick skip stamps (Salto total: one per skipped seat) */
+  /** the big skip mark over the table centre, and the small ones that fly to each skipped seat */
+  private skipBig!: THREE.Sprite;
+  private skipTok = 0;
+  /** the round / match win celebration (a new one, or a reset, stops the old) */
+  private winTok = 0;
+  /** the big "+N" penalty mark: pops over the table centre (growing as penalties stack), then flies to the victim */
+  private penBig!: THREE.Sprite;
+  private penMarkCanvas!: HTMLCanvasElement;
+  private penMarkTex!: THREE.CanvasTexture;
+  private penMarkTok = 0;
+  private penMarkTotal = 0;
+  private penMarkPop: Promise<void> | null = null;
   private skipStamps: THREE.Sprite[] = [];
   private skipTex!: THREE.CanvasTexture;
 
@@ -302,6 +615,8 @@ export class CardTable implements TableView {
   private discardCount = 0;
   private faces = new Map<number, CardFace>();
   private activeColor: Color | null = null;
+  /** colours picked for played wild-type cards, by card id (the pile keeps showing them) */
+  private chosen = new Map<number, Color>();
   private direction: Direction = 1;
   private stackTotal = 0;
   private eliminated = [false, false, false, false, false, false];
@@ -331,6 +646,8 @@ export class CardTable implements TableView {
   private dims: L.TableDims = L.tableDims(true);
   private fan: L.FanLayout = L.fanLayout(0, { W: 1, H: 1 });
   private deckPos = new THREE.Vector3(-0.6, 0, 0.05);
+  /** the deck's turn about the vertical (radians), from the tuned layout */
+  private deckYaw = 0;
   private pilePos = new THREE.Vector3(0.6, 0, 0.05);
   private push = 0;
   private pushTarget = new THREE.Vector3();
@@ -436,6 +753,8 @@ export class CardTable implements TableView {
     // felt
     this.felt = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffffff }));
     this.felt.renderOrder = -10;
+    // no depth: the reflections drawn after it sit below it and must still show
+    (this.felt.material as THREE.MeshBasicMaterial).depthWrite = false;
     this.scene.add(this.felt);
     // rings
     this.glowTex = A.makeTexture(A.drawGlowRing(128), false);
@@ -447,22 +766,69 @@ export class CardTable implements TableView {
     this.glowRing.renderOrder = -5;
     this.glowRing.visible = false;
     this.scene.add(this.glowRing);
+    this.drawCue = makeDrawCue();
+    this.drawCue.visible = false;
+    this.scene.add(this.drawCue);
+    {
+      // a glowing rounded arrowhead (one small quad, its own small texture), warm white;
+      // the tip on +Z; turned about the vertical to point at a seat
+      this.turnArrow = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.72, 0.72).rotateX(-Math.PI / 2).rotateY(Math.PI),
+        new THREE.MeshBasicMaterial({ map: A.makeTexture(A.drawTurnMarker(128), true), color: 0xfff0d2, transparent: true, opacity: 0.92, depthWrite: false }),
+      );
+      this.turnArrow.userData.t = 0;
+      this.turnArrow.renderOrder = -4;
+      this.turnArrow.visible = false;
+      this.scene.add(this.turnArrow);
+    }
     this.dirTex = A.makeTexture(A.drawDirRing(512), true);
     this.dirRing = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
-      new THREE.MeshBasicMaterial({ map: this.dirTex, transparent: true, depthWrite: false, opacity: 0.28 }),
+      new THREE.MeshBasicMaterial({ map: this.dirTex, transparent: true, depthWrite: false, opacity: DIR_OPACITY }),
     );
     this.dirRing.position.set(0, 0.002, 0.05);
     this.dirRing.renderOrder = -6;
     this.scene.add(this.dirRing);
     // deck / pile edges (one shared box geometry + material)
-    this.edgeTex = A.makeTexture(A.drawEdge(64), false);
-    this.edgeTex.wrapS = this.edgeTex.wrapT = THREE.RepeatWrapping;
-    this.boxGeo = new THREE.BoxGeometry(L.CARD_W * 0.97, 1, L.CARD_H * 0.97);
-    this.boxMat = new THREE.MeshBasicMaterial({ map: this.edgeTex });
+    this.boxGeo = buildStackGeometry();
+    this.pileGeo = new THREE.BufferGeometry();
+    this.pileGeo.setAttribute('position', this.boxGeo.attributes.position);
+    this.pileGeo.setAttribute('color', this.boxGeo.attributes.color);
+    this.pileGeo.setIndex(this.boxGeo.index);
+    this.boxMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
     this.deckBox = new THREE.Mesh(this.boxGeo, this.boxMat);
-    this.pileBox = new THREE.Mesh(this.boxGeo, this.boxMat);
+    this.pileBox = new THREE.Mesh(this.pileGeo, this.boxMat);
     this.scene.add(this.deckBox, this.pileBox);
+    // a short mirror that fades out just below the felt (not a second, see-through stack)
+    this.deckRefl = new THREE.Mesh(
+      this.boxGeo,
+      new THREE.ShaderMaterial({
+        vertexShader: /* glsl */ `
+          attribute vec3 color;
+          varying vec3 vColor;
+          varying float vDepth;
+          void main() {
+            vColor = color;
+            vec4 wp = modelMatrix * vec4(position, 1.0);
+            vDepth = -wp.y;
+            gl_Position = projectionMatrix * viewMatrix * wp;
+          }`,
+        fragmentShader: /* glsl */ `
+          varying vec3 vColor;
+          varying float vDepth;
+          void main() {
+            float a = 0.3 * (1.0 - smoothstep(0.0, 0.12, vDepth));
+            if (a < 0.004) discard;
+            gl_FragColor = vec4(vColor, a);
+            #include <colorspace_fragment>
+          }`,
+        side: THREE.DoubleSide,
+        transparent: true,
+        depthWrite: false,
+      }),
+    );
+    this.deckRefl.renderOrder = -8;
+    this.scene.add(this.deckRefl);
     // cards
     this.cardGeo = buildCardGeometry();
     this.atlasCanvas = A.drawAtlas(this.q.atlas, this.faceMap);
@@ -487,6 +853,31 @@ export class CardTable implements TableView {
     this.cards.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.cards.frustumCulled = false;
     this.scene.add(this.cards);
+    {
+      const geo = buildCardGeometry();
+      this.reflCell = new THREE.InstancedBufferAttribute(new Float32Array(REFL_MAX * 2), 2).setUsage(THREE.DynamicDrawUsage);
+      this.reflFace = new THREE.InstancedBufferAttribute(new Float32Array(REFL_MAX), 1).setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('aCell', this.reflCell);
+      geo.setAttribute('aFace', this.reflFace);
+      const u = this.cardMat.uniforms;
+      const mat = new THREE.ShaderMaterial({
+        vertexShader: REFL_VERT,
+        fragmentShader: REFL_FRAG,
+        // shared uniform objects: an atlas / back rebuild reaches the reflection too
+        uniforms: {
+          uAtlas: u.uAtlas, uBack: u.uBack, uCell: u.uCell, uStrength: { value: 0.55 }, uFade: { value: 1.3 },
+          uFelt: { value: this.feltTex }, uArena: { value: ARENA_SIZE },
+        },
+        side: THREE.DoubleSide,
+      });
+      this.refl = new THREE.InstancedMesh(geo, mat, REFL_MAX);
+      this.refl.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this.refl.frustumCulled = false;
+      // over the floor, under everything standing on it
+      this.refl.renderOrder = -8;
+      this.refl.count = 0;
+      this.scene.add(this.refl);
+    }
     for (let i = 0; i < POOL; i++) {
       const o: CardObj = {
         i, card: null, cell: 0, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), s: 1, sqx: 1, sqy: 1, glow: 0, dim: 0,
@@ -550,20 +941,30 @@ export class CardTable implements TableView {
     this.flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.flashTex, depthTest: false, depthWrite: false, transparent: true, blending: THREE.AdditiveBlending }));
     this.flash.renderOrder = 23;
     this.flash.visible = false;
-    // skip stamps share one pre-drawn texture
+    // skip marks share one pre-drawn texture (256 px: the big one fills ~a third of a phone screen);
+    // they draw over the additive flash, which glows behind them
     const sc = document.createElement('canvas');
-    sc.width = sc.height = 128;
-    A.drawStamp(sc.getContext('2d')!, 128, 'skip');
+    sc.width = sc.height = 256;
+    drawSkipMark(sc.getContext('2d')!, 256);
     this.skipTex = A.makeTexture(sc, false);
     const skipMat = new THREE.SpriteMaterial({ map: this.skipTex, depthTest: false, depthWrite: false, transparent: true });
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 6; i++) {
       const sp = new THREE.Sprite(skipMat.clone());
-      sp.renderOrder = 20;
+      sp.renderOrder = 24;
       sp.visible = false;
-      this.skipStamps.push(sp);
+      if (i === 0) this.skipBig = sp;
+      else this.skipStamps.push(sp);
       this.scene.add(sp);
     }
     skipMat.dispose();
+    // the "+N" penalty mark: its own canvas, redrawn only when the total changes
+    this.penMarkCanvas = document.createElement('canvas');
+    this.penMarkCanvas.width = this.penMarkCanvas.height = 256;
+    this.penMarkTex = A.makeTexture(this.penMarkCanvas, false);
+    this.penBig = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.penMarkTex, depthTest: false, depthWrite: false, transparent: true }));
+    this.penBig.renderOrder = 24;
+    this.penBig.visible = false;
+    this.scene.add(this.penBig);
     this.scene.add(this.penBadge, this.dome, this.flash);
     this.scene.add(this.camera);
     void S;
@@ -579,34 +980,38 @@ export class CardTable implements TableView {
   }
 
   private syncFelt(force = false): void {
+    // a round table with no rim on a big floor plane that fades into the background
     const d = this.dims;
-    const w = 2 * d.A + 0.3;
-    const h = 2 * d.B + 0.3;
+    const S = ARENA_SIZE;
+    const R = this.portrait ? d.B + 0.4 : d.A + 0.4;
     const tints: A.FeltTint[] = [];
     if (this.teams) {
       this.teams.forEach((team, ti) => {
         for (const st of team) {
           if (!this.seats.includes(st)) continue;
-          // the human's glow sits at their corner / edge, the others' behind their fans
+          // the human's glow sits at their edge, the others' behind their fans
           const an = st === 0 ? { x: 0, z: d.B - 0.55 } : this.anchorOf(st);
-          tints.push({ u: an.x / w + 0.5, v: an.z / h + 0.5, r: 1.5 / Math.min(w, h), color: TEAM_TINT[ti] });
+          tints.push({ u: an.x / S + 0.5, v: an.z / S + 0.5, r: 1.5 / S, color: TEAM_TINT[ti] });
         }
       });
     }
-    const key = `${this.tableStyle}:${w.toFixed(2)}:${h.toFixed(2)}:${this.q.felt}:${tints.map((t) => t.color + t.u.toFixed(2) + t.v.toFixed(2)).join()}`;
-    this.felt.scale.set(w, 1, h);
+    const px = Math.round(this.q.felt * 1.5);
+    const key = `${this.tableStyle}:${R.toFixed(2)}:${px}:${tints.map((t) => t.color + t.u.toFixed(2) + t.v.toFixed(2)).join()}`;
+    this.felt.scale.set(S, 1, S);
     if (!force && key === this.feltKey) return;
     this.feltKey = key;
-    const c = A.drawFelt(this.tableStyle, w / h, this.q.felt, tints);
+    const c = A.drawArena(this.tableStyle, px, R / S, tints);
     const old = this.feltTex;
     this.feltTex = A.makeTexture(c, true);
     this.feltTex.anisotropy = this.q.aniso;
     const m = this.felt.material as THREE.MeshBasicMaterial;
     m.map = this.feltTex;
     m.needsUpdate = true;
+    if (this.refl) (this.refl.material as THREE.ShaderMaterial).uniforms.uFelt.value = this.feltTex;
     old?.dispose();
     this.renderer.setClearColor(A.TABLE_STYLE_DEFS[this.tableStyle].bg, 1);
   }
+
 
   // ───────────────────────── layout ─────────────────────────
 
@@ -633,87 +1038,32 @@ export class CardTable implements TableView {
     this.portrait = H > W * 1.05;
     this.dims = L.tableDims(this.portrait);
     this.fan = L.fanLayout(this.hands[0].length, { W, H });
-    const fan7 = L.fanLayout(7, { W, H });
-    const sep = this.portrait ? 0.58 : 0.66;
-    this.deckPos.set(-sep, 0, 0.05);
-    this.pilePos.set(sep, 0, 0.05);
+    // deck and pile where the fan demo put them
+    const tune = L.tableTune(this.portrait);
+    this.deckPos.set(tune.deck.x, 0, tune.deck.z);
+    this.deckYaw = THREE.MathUtils.degToRad(tune.deck.yaw);
+    this.pilePos.set(tune.pile.x, 0, tune.pile.z);
     this.glowRing.position.set(this.pilePos.x, 0.003, this.pilePos.z);
+    if (this.turnArrow) this.aimTurnArrow();
     const R = this.portrait ? Math.min(1.75, this.dims.A - 0.2) : 1.6;
     this.dirRing.scale.set(R * 2 * this.ringScaleSign(), 1, R * 2);
-    // camera: fixed tilt, distance searched so the felt fits between the HUD and the bottom edge
+    // camera: the tilt, distance and fov tuned in the fan demo (pulled back on narrower screens)
     const cam = this.layoutCam;
-    cam.fov = this.portrait ? 42 : 36;
+    const tc = L.tableCamera(W, H, this.portrait);
+    cam.fov = tc.fov;
     cam.aspect = W / H;
     cam.updateProjectionMatrix();
-    // Codo a codo: a lower camera so the side fans lie flat but read well
-    const tilt = this.portrait ? 0.4 : this.sideMode ? 0.66 : 0.56;
+    const tilt = tc.tilt;
 
-    const dir = tmpV2.set(0, Math.cos(tilt), Math.sin(tilt));
-    const top = HUD_TOP * 0.55;
-    // the human hand covers the felt's near edge; keep the centre above the hand
-    const bottom = H + (H - fan7.top) * (this.portrait ? 0.35 : -0.3);
-    let tz = 0.35;
-    const place = (dist: number) => {
+    const dir = new THREE.Vector3(0, Math.cos(tilt), Math.sin(tilt));
+    const place = (dist: number, tz: number) => {
       cam.position.set(0, 0, tz).addScaledVector(dir, dist);
       cam.lookAt(0, 0, tz);
       cam.updateMatrixWorld(true);
       this.viewProj.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     };
-    const bbox = { x0: 0, x1: 0, y0: 0, y1: 0 };
-    const pts = [[0, 0], [0, 0], [0, 0], [0, 0]];
-    const measure = () => {
-      bbox.x0 = bbox.y0 = Infinity;
-      bbox.x1 = bbox.y1 = -Infinity;
-      for (const [x, z] of pts) {
-        L.projectCss(this.viewProj.elements, x, 0, z, W, H, scr);
-        bbox.x0 = Math.min(bbox.x0, scr.x);
-        bbox.x1 = Math.max(bbox.x1, scr.x);
-        bbox.y0 = Math.min(bbox.y0, scr.y);
-        bbox.y1 = Math.max(bbox.y1, scr.y);
-      }
-    };
-    let dist = 10;
-    /** fit the felt for the current dims; returns the leftover space (px) across and down */
-    const fit = (): { sx: number; sy: number } => {
-      const ex = this.dims.A + 0.15;
-      const ez = this.dims.B + 0.15;
-      pts[0] = [-ex, -ez];
-      pts[1] = [ex, -ez];
-      pts[2] = [-ex, ez];
-      pts[3] = [ex, ez];
-      tz = 0.35;
-      for (let iter = 0; iter < 4; iter++) {
-        let lo = 2;
-        let hi = 80;
-        for (let k = 0; k < 26; k++) {
-          const mid = (lo + hi) / 2;
-          place(mid);
-          measure();
-          const fits = bbox.x1 - bbox.x0 <= W - 8 && bbox.y1 - bbox.y0 <= bottom - top;
-          if (fits) hi = mid;
-          else lo = mid;
-        }
-        dist = hi;
-        place(dist);
-        measure();
-        const cy = (bbox.y0 + bbox.y1) / 2;
-        const want = (top + bottom) / 2;
-        const unitsPerPx = (2 * ez) / Math.max(1, bbox.y1 - bbox.y0);
-        tz += (cy - want) * unitsPerPx * 0.9;
-      }
-      place(dist);
-      measure();
-      return { sx: W - 8 - (bbox.x1 - bbox.x0), sy: bottom - top - (bbox.y1 - bbox.y0) };
-    };
-    // stretch the felt along the free direction so it fills the screen (tall phones: a deeper table)
-    for (let k = 0; k < 30; k++) {
-      const f = fit();
-      if (f.sy > 24 && this.dims.B < 5) this.dims.B += 0.12;
-      else if (f.sx > 24 && this.dims.A < 6.5) this.dims.A += 0.12;
-      else break;
-    }
-    place(dist);
-    this.refreshPartnerArea();
+    this.fitSig = this.fitSigNow();
+    place(tc.dist, 0);
     this.syncFelt();
     this.camera.fov = cam.fov;
     this.camera.aspect = cam.aspect;
@@ -757,96 +1107,117 @@ export class CardTable implements TableView {
     return r.playable.has(o.card.id) ? this.fan.ch * 0.17 : 0;
   }
 
+  private focusMemo: { key: string; fan: L.FanLayout | null } = { key: '', fan: null };
+
+  /**
+   * The human fan with the tapped card in focus: that card rises a little and stands upright at the top of
+   * the arc, and the others take the arc's places around it (the fan turns towards it). In a crowded hand
+   * (more than HAND_FULL cards) its neighbours also step aside so the cards near it can be read.
+   */
+  private focusFan(): L.FanLayout {
+    const f = this.fan;
+    const n = f.slots.length;
+    const pk = n === this.hands[0].length ? this.peekIdx(0) : -1;
+    if (pk < 0 || n < 2) return f;
+    const key = `${n}|${pk}|${f.cw}|${f.slots[0].x}|${f.slots[0].y}`;
+    if (this.focusMemo.key === key && this.focusMemo.fan) return this.focusMemo.fan;
+    const oneRow = f.slots.every((sl) => sl.row === f.slots[0].row);
+    const mid = (n - 1) / 2;
+    // y and turn of the arc at a fractional slot position, carried on past the ends
+    const at = (t: number) => {
+      const a = Math.max(0, Math.min(n - 2, Math.floor(t)));
+      const k = t - a;
+      const sa = f.slots[a];
+      const sb = f.slots[a + 1];
+      return { y: sa.y + (sb.y - sa.y) * k, rot: sa.rot + (sb.rot - sa.rot) * k };
+    };
+    const crowded = n > HAND_FULL;
+    const pr = f.slots[pk].row;
+    const slots = f.slots.map((sl, i) => {
+      const d = i - pk;
+      if (sl.row !== pr) return sl;
+      const arc = oneRow ? at(mid + d) : { y: sl.y, rot: sl.rot };
+      const fall = Math.max(0, 1 - (Math.abs(d) - 1) * 0.25);
+      const dx = d === 0 ? 0 : Math.sign(d) * f.cw * (crowded ? 0.38 : 0.06) * fall;
+      return { ...sl, x: sl.x + dx, y: arc.y - (d === 0 ? f.ch * 0.16 : 0), rot: d === 0 ? 0 : arc.rot };
+    });
+    const fan = { ...f, slots };
+    this.focusMemo = { key, fan };
+    return fan;
+  }
+
   private handPose(seat: number, idx: number, n: number, out: Pose, o?: CardObj): Pose {
     if (seat === 0) {
-      const f = n === this.fan.slots.length ? this.fan : (this.fan = L.fanLayout(n, { W: this.W, H: this.H }));
+      if (n !== this.fan.slots.length) this.fan = L.fanLayout(n, { W: this.W, H: this.H });
+      // a tapped card turns the fan towards it (focusFan); otherwise the plain fan
+      const f = n === this.hands[0].length ? this.focusFan() : this.fan;
       const sl = f.slots[Math.min(idx, f.slots.length - 1)];
       if (!sl) return this.deckTopPose(out);
-      let depth = HAND_D - sl.z * 0.004;
-      // peek: the card comes forward and up, its neighbours in the row ease apart
-      let dx = 0;
-      let lift = 0;
-      let rot = sl.rot;
-      let sMul = 1;
-      const pk = n === this.hands[0].length ? this.peekIdx(0) : -1;
-      if (pk >= 0) {
-        const sp = f.slots[pk];
-        if (idx === pk) {
-          lift = f.ch * 0.3;
-          depth = HAND_D - 0.3;
-          rot *= 0.3;
-          sMul = 1.06;
-        } else if (sp && sp.row === sl.row) {
-          const d = idx - pk;
-          dx = Math.sign(d) * f.cw * 0.2 * Math.max(0, 1 - (Math.abs(d) - 1) * 0.45);
-        }
-      }
-      this.pxToWorld(sl.x + dx, sl.y - (o ? this.liftPx(o) : 0) - lift, depth, out.pos);
-      out.quat.copy(this.layoutCam.quaternion).multiply(tmpQ.setFromAxisAngle(tmpV.set(0, 0, 1), -rot));
-      out.s = ((f.cw * this.worldPerPx(HAND_D)) / L.CARD_W) * sMul;
+      const depth = HAND_D - sl.z * 0.004;
+      this.pxToWorld(sl.x, sl.y - (o ? this.liftPx(o) : 0), depth, out.pos);
+      out.quat.copy(this.layoutCam.quaternion).multiply(tmpQ.setFromAxisAngle(tmpV.set(0, 0, 1), -sl.rot));
+      out.s = (f.cw * this.worldPerPx(HAND_D)) / L.CARD_W;
       return out;
     }
-    const side = this.sideOf(seat);
-    const partnerSide = side === 'lowerLeft' || side === 'lowerRight';
-    if (partnerSide || this.openCards[seat]) {
-      const f = partnerSide ? this.partnerFanFor(seat, n) : this.openFanFor(seat, n);
-      const p = f.poses[Math.min(idx, f.poses.length - 1)];
-      if (!p) return this.deckTopPose(out);
-      out.pos.set(p.x, p.y, p.z);
-      out.s = f.s;
-      if (partnerSide) {
-        // flat on the table, upright for the viewer, turned a touch along the arc
-        if (this.openCards[seat]) faceUpQ(p.yaw ?? 0, out.quat);
-        else return faceDownQ(p.yaw ?? 0, out.quat), out;
-      } else {
-        out.quat.setFromAxisAngle(Q_TMP_X, -Math.PI / 2 + f.tilt);
-        if (!this.openCards[seat]) {
-          out.quat.multiply(Q_FLIP);
-          return out;
-        }
-      }
-      const pk = n === this.hands[seat].length ? this.peekIdx(seat) : -1;
-      if (pk >= 0 && f.poses.length > 1) {
-        if (idx === pk) {
-          // straight at the camera, nearer and bigger
-          tmpV.copy(this.layoutCam.position).sub(out.pos).normalize();
-          out.pos.addScaledVector(tmpV, 1.1);
-          out.quat.copy(this.layoutCam.quaternion);
-          out.s *= 1.15;
-        } else if (Math.abs(idx - pk) <= 2) {
-          const a = f.poses[Math.max(0, pk - 1)];
-          const b = f.poses[Math.min(f.poses.length - 1, pk + 1)];
-          const q = f.poses[pk];
-          const near = Math.hypot(p.x - q.x, p.z - q.z) <= Math.max(f.step * 2.2, 0.01);
-          const len = Math.hypot(b.x - a.x, b.z - a.z);
-          if (near && len > 1e-4) {
-            const k = (Math.sign(idx - pk) * L.CARD_W * f.s * (Math.abs(idx - pk) === 1 ? 0.2 : 0.1)) / len;
-            out.pos.x += (b.x - a.x) * k;
-            out.pos.z += (b.z - a.z) * k;
-          }
-        }
-      }
-      return out;
-    }
-    const poses = L.oppFan(n, side, this.dims, this.fanScratch);
-    const p = poses[Math.min(idx, poses.length - 1)];
+    const f = this.handFor(seat, n);
+    const p = f.poses[Math.min(idx, f.poses.length - 1)];
     if (!p) return this.deckTopPose(out);
     out.pos.set(p.x, p.y, p.z);
-    faceDownQ(p.yaw, out.quat);
-    out.s = L.OPP_SCALE;
+    out.s = f.s;
+    // the tuned pose's full rotation (layout seatHand), else rotY(yaw) * rotX(lean) * rotZ(-roll)
+    if (p.q) out.quat.set(p.q[0], p.q[1], p.q[2], p.q[3]);
+    else out.quat.setFromAxisAngle(UP, p.yaw).multiply(tmpQ.setFromAxisAngle(AX_X, p.lean)).multiply(tmpQ2.setFromAxisAngle(AX_Z, -p.roll));
+    if (!this.openCards[seat]) return out;
+    const pk = n === this.hands[seat].length ? this.peekIdx(seat) : -1;
+    if (pk >= 0 && f.poses.length > 1) {
+      if (idx === pk) {
+        // the peeked card only slides up out of the fan, along its own up direction: same turn, same size
+        tmpV.set(0, 1, 0).applyQuaternion(out.quat);
+        out.pos.addScaledVector(tmpV, L.CARD_H * f.s * 0.15);
+      } else {
+        // every card on each side slides the same small step, so neighbours keep their spacing and never cross
+        const a = f.poses[Math.max(0, pk - 1)];
+        const b = f.poses[Math.min(f.poses.length - 1, pk + 1)];
+        const len = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+        if (len > 1e-4) {
+          const k = (Math.sign(idx - pk) * L.CARD_W * f.s * 0.12) / len;
+          out.pos.x += (b.x - a.x) * k;
+          out.pos.y += (b.y - a.y) * k;
+          out.pos.z += (b.z - a.z) * k;
+        }
+      }
+    }
     return out;
   }
-  private fanScratch: L.TablePose[] = [];
-  private openMemo = { key: '', fan: null as L.OpenFan | null };
 
-  /** the open (face-up) fan of a seat with n cards, memoised per layout */
-  private openFanFor(seat: number, n: number): L.OpenFan {
-    const key = `${seat}:${n}:${this.dims.A.toFixed(3)}:${this.dims.B.toFixed(3)}:${this.portrait}`;
-    if (this.openMemo.key !== key || !this.openMemo.fan) {
-      // tilt the faces towards the camera (its tilt from vertical is 0.4 portrait / 0.56 landscape)
-      this.openMemo = { key, fan: L.openFan(n, this.sideOf(seat), this.dims, this.portrait ? 0.42 : 0.5, L.openScale(this.portrait)) };
+  private handMemo: { key: string; hand: L.SeatHand | null }[] = [0, 1, 2, 3, 4, 5].map(() => ({ key: '', hand: null }));
+
+  /** a seat's hand with n cards (layout seatHand), memoised per layout */
+  private handFor(seat: number, n: number): L.SeatHand {
+    const side = this.sideOf(seat);
+    const open = !!this.openCards[seat];
+    const m = this.handMemo[seat];
+    const key = `${side}:${n}:${+open}:${this.dims.A.toFixed(3)}:${this.dims.B.toFixed(3)}:${+this.portrait}`;
+    if (m.key !== key || !m.hand) {
+      m.key = key;
+      m.hand = L.seatHand(n, side, open, this.dims, this.portrait);
     }
-    return this.openMemo.fan!;
+    return m.hand;
+  }
+
+  /** the seats whose open (bigger) hand the camera framing makes room for: the human's partner, open hands */
+  private openable(seat: number): boolean {
+    return !!this.openCards[seat] || !!this.teams?.find((t) => t.includes(0))?.includes(seat as Seat);
+  }
+  private fitSig = '';
+  private fitSigNow(): string {
+    return this.seats.map((s) => `${s}${this.sideOf(s)}${+this.openable(s)}`).join(',');
+  }
+  /** the hands the camera was framed for changed (teams, an open hand): frame again; true when it did */
+  private refit(): boolean {
+    if (this.W <= 1 || this.fitSig === this.fitSigNow()) return false;
+    this.computeLayout();
+    return true;
   }
 
   private isOpen(seat: number): boolean {
@@ -877,10 +1248,6 @@ export class CardTable implements TableView {
     if (changed) {
       this.sideMode = this.partnerSeat() >= 0;
       if (this.W > 1) this.computeLayout();
-
-      this.openMemo.key = '';
-      this.partnerMemo.key = '';
-      this.refreshPartnerArea();
       this.dirRing.scale.x = Math.abs(this.dirRing.scale.x) * this.ringScaleSign();
     }
     return changed;
@@ -889,16 +1256,12 @@ export class CardTable implements TableView {
   /** where a seat's cards sit on the table (the partner corner uses its real fan centre) */
   private anchorOf(seat: number): L.Anchor {
     const side = this.sideOf(seat);
-    if (side === 'lowerLeft' || side === 'lowerRight') {
-      const f = this.partnerFanFor(seat, Math.max(1, this.hands[seat].length));
+    if (side !== 'bottom' && this.W > 1) {
+      // effects at a seat: the felt under the middle of its row
+      const f = this.handFor(seat, Math.max(1, this.hands[seat].length));
       return { x: f.cx, z: f.cz, yaw: 0 };
     }
     return L.seatAnchor(side, this.dims);
-  }
-
-  /** opponent fan length limit, or undefined for the default */
-  private oppMaxLen(_seat: number): number | undefined {
-    return undefined;
   }
 
   /** direction ring x sign so its chevrons follow play on screen */
@@ -909,37 +1272,6 @@ export class CardTable implements TableView {
 
   /** Codo a codo (the partner on a side edge): a lower, more cinematic camera */
   private sideMode = false;
-  private partnerZ = 1.5;
-  private partnerZFar = -1.5;
-  private partnerMemo = { key: '', fan: null as L.OpenFan | null };
-
-  /** the lowest z the partner fan may reach (just above the human hand); true when it moved */
-  private refreshPartnerArea(): boolean {
-    const ps = this.partnerSeat();
-    if (ps < 0 || this.W <= 1) return false;
-    const left = this.sideOf(ps) === 'lowerLeft';
-    const hf = L.fanLayout(7, { W: this.W, H: this.H });
-    const p = this.pxToTable(this.W / 2 + (left ? -1 : 1) * this.W * 0.2, hf.top - 6, tmpV2);
-    const z = Math.round(Math.min(this.dims.B, p.z + 0.15) * 50) / 50;
-    // the far end leaves a slot under the HUD for the partner's plate (it never covers a card)
-    const pd = L.plateDiameter(this.W, this.H);
-    const pf = this.pxToTable(left ? this.W * 0.1 : this.W * 0.9, HUD_TOP + pd + 20, tmpV2);
-    const zf = Math.round((pf.z + (L.CARD_H * L.partnerScale(this.portrait)) / 2) * 50) / 50;
-    if (z === this.partnerZ && zf === this.partnerZFar) return false;
-    this.partnerZ = z;
-    this.partnerZFar = zf;
-    this.partnerMemo.key = '';
-    return true;
-  }
-
-  private partnerFanFor(seat: number, n: number): L.OpenFan {
-    const side = this.sideOf(seat) === 'lowerRight' ? 'lowerRight' : 'lowerLeft';
-    const key = `${seat}:${side}:${n}:${this.dims.A.toFixed(3)}:${this.dims.B.toFixed(3)}:${this.partnerZ}:${this.partnerZFar}:${this.portrait}`;
-    if (this.partnerMemo.key !== key || !this.partnerMemo.fan) {
-      this.partnerMemo = { key, fan: L.partnerFan(n, side, this.dims, this.partnerZ, L.partnerScale(this.portrait), this.partnerZFar) };
-    }
-    return this.partnerMemo.fan!;
-  }
   // ───── card peek ─────
 
   private peek: { seat: number; o: CardObj } | null = null;
@@ -961,7 +1293,8 @@ export class CardTable implements TableView {
   }
 
   private deckH(): number {
-    return this.deckCount > 0 ? Math.min(0.42, 0.012 + this.deckCount * 0.0035) : 0;
+    // a full deck (about 108 cards) stands 0.25 high, as in the fan demo
+    return this.deckCount > 0 ? Math.min(DECK_MAX_H, 0.012 + this.deckCount * ((DECK_MAX_H - 0.012) / 108)) : 0;
   }
   private pileH(): number {
     const under = Math.max(0, this.discardCount - this.pile.length);
@@ -970,7 +1303,7 @@ export class CardTable implements TableView {
 
   private deckTopPose(out: Pose): Pose {
     out.pos.set(this.deckPos.x, this.deckH() + 0.004, this.deckPos.z);
-    faceDownQ(0, out.quat);
+    faceDownQ(this.deckYaw, out.quat);
     out.s = 1;
     return out;
   }
@@ -992,13 +1325,18 @@ export class CardTable implements TableView {
   private updateDeckVisual(): void {
     const h = this.deckH();
     this.deckBox.visible = h > 0.002;
-    this.deckBox.scale.set(1, Math.max(0.001, h), 1);
-    this.deckBox.position.set(this.deckPos.x, h / 2, this.deckPos.z);
-    this.edgeTex.repeat.set(1, 1);
+    fitStack(this.deckBox, h);
+    this.deckBox.position.set(this.deckPos.x, 0, this.deckPos.z);
+    this.deckBox.rotation.y = this.deckYaw;
+    // its reflection: the same stack mirrored below the felt
+    this.deckRefl.visible = this.deckBox.visible;
+    this.deckRefl.position.copy(this.deckBox.position);
+    this.deckRefl.rotation.copy(this.deckBox.rotation);
+    this.deckRefl.scale.set(this.deckBox.scale.x, -this.deckBox.scale.y, this.deckBox.scale.z);
     const ph = this.pileH();
     this.pileBox.visible = ph > 0.002;
-    this.pileBox.scale.set(1, Math.max(0.001, ph), 1);
-    this.pileBox.position.set(this.pilePos.x, ph / 2, this.pilePos.z);
+    fitStack(this.pileBox, ph);
+    this.pileBox.position.set(this.pilePos.x, 0, this.pilePos.z);
     const top = this.deckTop;
     top.vis = this.deckCount > 0;
     if (top.token === 0 || !this.anim.active) {
@@ -1043,13 +1381,15 @@ export class CardTable implements TableView {
     if (!this.free.includes(o)) this.free.push(o);
   }
 
-  private setFace(o: CardObj, card: Card | null): void {
+  /** `chosen`: the colour picked for a played wild-type card (the pile shows it as the card's field) */
+  private setFace(o: CardObj, card: Card | null, chosen?: Color | null): void {
     o.card = card;
     if (!card) return;
     this.faces.set(card.id, card.face);
-    const r = this.faceMap.index(card.face);
+    const face = A.playedFace(card.face, chosen);
+    const r = this.faceMap.index(face);
     if (r.added) {
-      A.drawCell(this.atlasCanvas.canvas.getContext('2d')!, this.atlasCanvas.size, r.i, card.face);
+      A.drawCell(this.atlasCanvas.canvas.getContext('2d')!, this.atlasCanvas.size, r.i, face);
       this.atlasTex.needsUpdate = true;
     }
     o.cell = r.i;
@@ -1065,6 +1405,7 @@ export class CardTable implements TableView {
     for (let i = POOL - 1; i >= 1; i--) this.free.push(this.pool[i]);
     for (const h of this.hands) h.length = 0;
     this.pile.length = 0;
+    this.preview = null;
     this.deckTop.token++;
     this.deckTop.glow = 0;
     this.discardCount = 0;
@@ -1087,6 +1428,13 @@ export class CardTable implements TableView {
     this.dome.visible = false;
     this.flash.visible = false;
     for (const sp of this.skipStamps) sp.visible = false;
+    this.skipBig.visible = false;
+    this.skipTok++;
+    this.winTok++;
+    this.penBig.visible = false;
+    this.penMarkTok++;
+    this.penMarkTotal = 0;
+    this.penMarkPop = null;
     this.lastPlayKind = '';
     this.lastPlayDraw = 0;
     this.streamDraw = false;
@@ -1154,7 +1502,6 @@ export class CardTable implements TableView {
     if (seat === 0) {
       this.fan = L.fanLayout(n, { W: this.W, H: this.H });
       // the human hand grew a row: the partner corner moves up with it
-      if (this.refreshPartnerArea()) void this.relayout(this.partnerSeat(), Math.max(dur, 0.2));
     }
     const jobs: Promise<void>[] = [];
     const pose = newPose();
@@ -1206,10 +1553,28 @@ export class CardTable implements TableView {
     h.splice(i, 0, o);
   }
 
-  private pileJitter(o: CardObj): void {
-    o.jx = (Math.random() - 0.5) * 0.12;
-    o.jz = (Math.random() - 0.5) * 0.12;
-    o.jyaw = (Math.random() - 0.5) * 0.5;
+  /**
+   * How a card lies on the pile. Thrown by a player, it lands pointing the way it was thrown (from the
+   * right it points left, from the left right, from the top down, yours up) give or take a little, and
+   * slides a touch past the middle; without a thrower, a small random turn.
+   */
+  private pileJitter(o: CardObj, seat: number | null = null): void {
+    if (seat === null || this.W <= 1) {
+      o.jx = (Math.random() - 0.5) * 0.12;
+      o.jz = (Math.random() - 0.5) * 0.12;
+      o.jyaw = (Math.random() - 0.5) * 0.5;
+      return;
+    }
+    const a = seat === 0 ? L.seatAnchor('bottom', this.dims) : this.anchorOf(seat);
+    const yaw = Math.atan2(a.x - this.pilePos.x, a.z - this.pilePos.z);
+    // along the throw (away from the thrower) a little, and a little to either side
+    const along = 0.02 + Math.random() * 0.07;
+    const across = (Math.random() - 0.5) * 0.08;
+    const sx = Math.sin(yaw);
+    const cz = Math.cos(yaw);
+    o.jx = -sx * along + cz * across;
+    o.jz = -cz * along - sx * across;
+    o.jyaw = yaw + (Math.random() - 0.5) * 0.6;
   }
 
   /** keep only the top PILE_KEEP card meshes; older ones become pile height */
@@ -1252,6 +1617,370 @@ export class CardTable implements TableView {
     }
   }
 
+  // ───── power effects: the pile ring (glowRing), the flash sprite and dust; no extra meshes ─────
+
+  private fxP = new THREE.Vector3();
+  private fxQ = new THREE.Vector3();
+  private fxC = new THREE.Color();
+  private ringTok = 0;
+  private flashTok = 0;
+  /** the reverse flourish drives the direction arrows itself */
+  private dirFx = false;
+  private dirTok = 0;
+  /** the human card dropped by drag (it is already out of the fan) */
+  private dropped: CardObj | null = null;
+  /** the human's colour-changing card already on the pile (previewPlay) while the colour is being picked */
+  private preview: { o: CardObj; id: number } | null = null;
+
+  /** the colour in play (white when none), brightened a little */
+  private fxColor(out = this.fxC, white = 0.25): THREE.Color {
+    out.copy(this.activeColor ? COLOR_LIN[this.activeColor] : FX_WHITE);
+    return out.lerp(FX_WHITE, white);
+  }
+
+  /** the ring round the pile scales s0 → s1 (×2.1 units) and fades in and out */
+  private pileRing(col: THREE.Color, s0: number, s1: number, dur: number, peak = 0.9, e: (t: number) => number = ease.outCubic): Promise<void> {
+    const r = this.glowRing;
+    const m = r.material as THREE.MeshBasicMaterial;
+    const tok = ++this.ringTok;
+    m.color.copy(col);
+    r.visible = true;
+    const red = this.reduced;
+    return this.anim.tween(red ? 0.25 : dur, (k, raw) => {
+      if (tok !== this.ringTok) return;
+      r.scale.setScalar(red ? s1 : lerp(s0, s1, k));
+      m.opacity = peak * (red ? Math.sin(Math.PI * raw) : Math.min(1, raw * 6) * (1 - raw * raw));
+      if (raw >= 1) r.visible = false;
+    }, red ? ease.linear : e);
+  }
+
+  /** the additive flash sprite blooms at p (world size) and fades */
+  private flashAt(p: V3, size: number, col: THREE.Color, dur = 0.35): void {
+    const f = this.flash;
+    const fm = f.material;
+    const tok = ++this.flashTok;
+    f.position.copy(p);
+    fm.color.copy(col);
+    f.visible = true;
+    void this.anim.tween(dur, (k) => {
+      if (tok !== this.flashTok) return;
+      fm.opacity = 1 - k;
+      f.scale.setScalar(size * (this.reduced ? 1 : lerp(0.4, 1.4, k)));
+      fm.rotation = k * 0.6;
+      if (k >= 1) f.visible = false;
+    }, ease.outQuad);
+  }
+
+  /** a sparkle comet along a quadratic arc a → b bending through c (a dust trail; nothing allocated per frame) */
+  private comet(a: V3, c: V3, b: V3, col: THREE.Color, dur: number, delay = 0, e: (t: number) => number = ease.inOutQuad): Promise<void> {
+    if (this.reduced) return Promise.resolve();
+    const ax = a.x, ay = a.y, az = a.z, cx = c.x, cy = c.y, cz = c.z, bx = b.x, by = b.y, bz = b.z;
+    const cr = col.r, cg = col.g, cb = col.b;
+    const rate = this.quality === 'low' ? 1 : 2;
+    return this.anim.tween(dur, (k) => {
+      const u = 1 - k;
+      const x = u * u * ax + 2 * u * k * cx + k * k * bx;
+      const y = u * u * ay + 2 * u * k * cy + k * k * by;
+      const z = u * u * az + 2 * u * k * cz + k * k * bz;
+      for (let i = 0; i < rate; i++) {
+        const j = Math.random();
+        this.dust.spawn(x + (j - 0.5) * 0.06, y, z + (Math.random() - 0.5) * 0.06, (j - 0.5) * 0.4, 0.15 + j * 0.3, (Math.random() - 0.5) * 0.4, cr, cg, cb, 0.07 + j * 0.06, 0.3 + j * 0.25);
+      }
+    }, e, delay);
+  }
+
+  /** dust thrown out of a flat ring round p (radius r0), tinted */
+  private sparkRing(p: V3, r0: number, n: number, col: THREE.Color, speed = 1.6, up = 0.5): void {
+    const cnt = Math.round(n * (this.reduced ? 0.4 : 1) * (this.quality === 'low' ? 0.5 : 1));
+    for (let i = 0; i < cnt; i++) {
+      const a = (i / cnt) * Math.PI * 2 + Math.random() * 0.3;
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      const sp = speed * (0.7 + Math.random() * 0.6);
+      this.dust.spawn(p.x + c * r0, p.y + 0.04, p.z + s * r0, c * sp, up * (0.5 + Math.random()), s * sp, col.r, col.g, col.b, 0.08 + Math.random() * 0.05, 0.45 + Math.random() * 0.25);
+    }
+  }
+
+  /** a point high over the pile, for arcs */
+  private overPile(out: V3, y = 0.25): V3 {
+    return out.set(this.pilePos.x, y, this.pilePos.z);
+  }
+
+  /**
+   * skip / Salto total: a big "no entry" mark in the colour in play pops over the table centre, holds, then
+   * small marks split off it and fly (shrinking) to each skipped seat, which shakes as its mark lands.
+   * `big = false` (a seat Salto total missed) skips the pop: one small mark flies from the centre.
+   */
+  private async skipMark(seats: number[], big = true): Promise<void> {
+    if (!seats.length) return;
+    const tok = ++this.skipTok;
+    const red = this.reduced;
+    const low = this.quality === 'low';
+    const col = this.fxColor(new THREE.Color(), 0.12);
+    const c = this.overPile(new THREE.Vector3(), 0.5);
+    const bigS = this.bigMarkSize(c);
+    const smallPx = Math.min(SKIP_SMALL_PX[1], Math.max(SKIP_SMALL_PX[0], Math.min(this.W, this.H) * 0.15));
+    this.sfx('pass');
+    if (big) {
+      void this.pileRing(col, 1.6, 0.45, 0.24, 1, ease.inCubic);
+      const sp = this.skipBig;
+      const m = sp.material;
+      m.color.copy(col);
+      m.opacity = 0;
+      m.rotation = 0;
+      sp.position.copy(c);
+      sp.scale.setScalar(bigS * (red ? 1 : 0.3));
+      sp.visible = true;
+      this.flashAt(c, bigS * 1.7, col, red ? 0.3 : 0.55);
+      await this.anim.tween(red ? 0.14 : 0.3, (k, raw) => {
+        if (tok !== this.skipTok) return;
+        m.opacity = Math.min(1, raw * 2.5);
+        sp.scale.setScalar(bigS * (red ? 1 : lerp(0.3, 1, k)));
+        m.rotation = red ? 0 : (1 - k) * -0.7;
+      }, red ? ease.linear : ease.outBack);
+      // hold, breathing a little
+      await this.anim.tween(red ? 0.4 : 0.32, (_k, raw) => {
+        if (tok !== this.skipTok) return;
+        if (!red) sp.scale.setScalar(bigS * (1 + 0.04 * Math.sin(raw * Math.PI)));
+      }, ease.linear);
+      if (tok !== this.skipTok) return;
+      if (red) {
+        // reduced motion: the mark fades where it is; the seats just get a nudge
+        for (const s of seats) void this.shakeSeat(s as Seat, 0.03);
+        await this.anim.tween(0.2, (k) => {
+          if (tok !== this.skipTok) return;
+          m.opacity = 1 - k;
+          if (k >= 1) sp.visible = false;
+        });
+        return;
+      }
+      sp.visible = false;
+    }
+    // the small marks fly from the centre to each seat (they start as the big mark, so it seems to split)
+    const s0 = big ? bigS : bigS * 0.45;
+    const fly = red ? 0.2 : 0.4;
+    const gap = 0.06;
+    const n = Math.min(seats.length, this.skipStamps.length);
+    const lands: Promise<void>[] = [];
+    for (let i = 0; i < n; i++) {
+      const seat = seats[i];
+      const sp = this.skipStamps[i];
+      const m = sp.material;
+      const to = this.platePoint(seat, new THREE.Vector3(), 6);
+      const s1 = this.worldPerPx(to.distanceTo(this.layoutCam.position)) * smallPx;
+      const ax = c.x, ay = c.y, az = c.z, bx = to.x, by = to.y, bz = to.z;
+      const mx = (ax + bx) / 2, my = Math.max(ay, by) + 0.5, mz = (az + bz) / 2;
+      const spin = (i % 2 ? 1 : -1) * 0.5;
+      m.color.copy(col);
+      m.opacity = big ? 1 : 0;
+      m.rotation = 0;
+      sp.position.copy(c);
+      sp.scale.setScalar(s0);
+      sp.visible = true;
+      lands.push(
+        this.anim
+          .tween(fly, (k, raw) => {
+            if (tok !== this.skipTok) return;
+            const u = 1 - k;
+            sp.position.set(u * u * ax + 2 * u * k * mx + k * k * bx, u * u * ay + 2 * u * k * my + k * k * by, u * u * az + 2 * u * k * mz + k * k * bz);
+            sp.scale.setScalar(lerp(s0, s1, ease.outCubic(raw)));
+            m.rotation = spin * Math.sin(Math.PI * raw);
+            if (!big) m.opacity = Math.min(1, raw * 4);
+          }, ease.inOutCubic, i * gap)
+          .then(() => {
+            if (tok !== this.skipTok) return;
+            void this.shakeSeat(seat as Seat, 0.05);
+            if (!low) this.sparkRing(to, 0.05, 10, col, 0.8, 0.6);
+            // a little landing pop, then it fades
+            return this.anim.tween(0.42, (_k, raw) => {
+              if (tok !== this.skipTok) return;
+              sp.scale.setScalar(s1 * (1 + 0.18 * Math.sin(Math.PI * Math.min(1, raw * 2.5))));
+              m.opacity = raw < 0.55 ? 1 : 1 - (raw - 0.55) / 0.45;
+              if (raw >= 1) sp.visible = false;
+            }, ease.linear);
+          }),
+      );
+    }
+    // the next event may start once the marks have landed (the fades run on)
+    await this.anim.wait(fly + (n - 1) * gap + 0.05);
+    void Promise.all(lands);
+  }
+
+  /** a +N play: a shockwave ring, a bloom and sparks bursting up off the pile */
+  private fxDraw(pen: number): void {
+    const col = this.fxColor(this.fxC, 0.15);
+    void this.pileRing(col, 0.5, 2.3, 0.5, 1, ease.outCubic);
+    const p = this.overPile(this.fxP, 0.12);
+    this.flashAt(p, 1 + Math.min(10, pen) * 0.12, col, 0.4);
+    if (this.reduced) return;
+    this.sparkRing(p, 0.25, 10 + Math.min(10, pen) * 3, col, 1.4 + pen * 0.08, 2.2);
+  }
+
+  /** the big centre marks' size (world units) at c */
+  private bigMarkSize(c: V3): number {
+    return this.worldPerPx(c.distanceTo(this.layoutCam.position)) * Math.min(SKIP_BIG_PX[1], Math.max(SKIP_BIG_PX[0], Math.min(this.W, this.H) * 0.46));
+  }
+
+  /**
+   * +N: the big penalty mark pops over the table centre in the colour in play and waits there for its victim
+   * (penMarkFly). A stacked penalty bumps the same mark with the grown total. Resolves after the pop and a hold.
+   */
+  private penMarkUp(total: number): Promise<void> {
+    const sp = this.penBig;
+    if (total <= 0) return Promise.resolve();
+    if (sp.visible && total === this.penMarkTotal) return this.penMarkPop ?? Promise.resolve();
+    const tok = ++this.penMarkTok;
+    const red = this.reduced;
+    const grow = sp.visible && this.penMarkTotal > 0;
+    drawPenMark(this.penMarkCanvas.getContext('2d')!, 256, `+${total}`);
+    this.penMarkTex.needsUpdate = true;
+    this.penMarkTotal = total;
+    const m = sp.material;
+    m.color.copy(this.fxColor(this.fxC, 0.12));
+    const c = this.overPile(sp.position, 0.5);
+    const S = this.bigMarkSize(c);
+    this.flashAt(c, S * (grow ? 1.4 : 1.7), m.color, red ? 0.3 : 0.5);
+    if (!grow) {
+      m.opacity = 0;
+      sp.scale.setScalar(S * (red ? 1 : 0.3));
+    }
+    sp.visible = true;
+    const run = async () => {
+      // a fresh mark pops and turns in; a stacked one thumps up with its new total
+      await this.anim.tween(red ? 0.14 : grow ? 0.26 : 0.3, (k, raw) => {
+        if (tok !== this.penMarkTok) return;
+        m.opacity = grow ? 1 : Math.min(1, raw * 2.5);
+        sp.scale.setScalar(S * (red ? 1 : grow ? lerp(1.3, 1, k) : lerp(0.3, 1, k)));
+        m.rotation = red || grow ? 0 : (1 - k) * 0.7;
+      }, red ? ease.linear : ease.outBack);
+      await this.anim.tween(red ? 0.4 : 0.3, (_k, raw) => {
+        if (tok !== this.penMarkTok) return;
+        if (!red) sp.scale.setScalar(S * (1 + 0.04 * Math.sin(raw * Math.PI)));
+      }, ease.linear);
+    };
+    const p = run();
+    this.penMarkPop = p;
+    return p;
+  }
+
+  /** the waiting +N mark shrinks and flies to the seat that must draw, landing where its plate badge shows */
+  private async penMarkFly(seat: Seat): Promise<void> {
+    if (!this.penMarkTotal) return;
+    if (this.penMarkPop) await this.penMarkPop;
+    const sp = this.penBig;
+    if (!this.penMarkTotal || !sp.visible) return;
+    const tok = ++this.penMarkTok;
+    this.penMarkPop = null;
+    this.penMarkTotal = 0;
+    const m = sp.material;
+    // the stack counter by the pile keeps the total while the victim decides
+    if (this.stackTotal > 0) this.showBadge(this.stackTotal, false);
+    if (this.reduced) {
+      await this.anim.tween(0.2, (k) => {
+        if (tok !== this.penMarkTok) return;
+        m.opacity = 1 - k;
+        if (k >= 1) sp.visible = false;
+      });
+      return;
+    }
+    const to = this.platePoint(seat, new THREE.Vector3(), 26);
+    const s0 = sp.scale.x;
+    const s1 = this.penSize(to) * 0.95;
+    const ax = sp.position.x, ay = sp.position.y, az = sp.position.z, bx = to.x, by = to.y, bz = to.z;
+    const mx = (ax + bx) / 2, my = Math.max(ay, by) + 0.5, mz = (az + bz) / 2;
+    if (this.quality !== 'low') void this.comet(sp.position, this.fxQ.set(mx, my, mz), to, m.color, 0.4, 0.02, ease.inOutCubic);
+    this.sfx('charge');
+    await this.anim.tween(0.4, (k, raw) => {
+      if (tok !== this.penMarkTok) return;
+      const u = 1 - k;
+      sp.position.set(u * u * ax + 2 * u * k * mx + k * k * bx, u * u * ay + 2 * u * k * my + k * k * by, u * u * az + 2 * u * k * mz + k * k * bz);
+      sp.scale.setScalar(lerp(s0, s1, ease.outCubic(raw)));
+      m.rotation = 0.35 * Math.sin(Math.PI * raw);
+    }, ease.inOutCubic);
+    if (tok !== this.penMarkTok) return;
+    void this.shakeSeat(seat, 0.05);
+    if (this.quality !== 'low') this.sparkRing(to, 0.05, 12, m.color, 0.9, 0.6);
+    // land with a thump, then fade (the plate badge, if a response window opens, takes over here)
+    void this.anim.tween(0.36, (_k, raw) => {
+      if (tok !== this.penMarkTok) return;
+      sp.scale.setScalar(s1 * (1 + 0.2 * Math.sin(Math.PI * Math.min(1, raw * 2.5))));
+      m.opacity = raw < 0.45 ? 1 : 1 - (raw - 0.45) / 0.55;
+      if (raw >= 1) sp.visible = false;
+    }, ease.linear);
+    await this.anim.wait(0.1);
+  }
+
+  /** the penalty is gone (shield, round over): a waiting +N mark fades where it is */
+  private penMarkOff(): void {
+    const sp = this.penBig;
+    if (!this.penMarkTotal) return;
+    const tok = ++this.penMarkTok;
+    this.penMarkPop = null;
+    this.penMarkTotal = 0;
+    const m = sp.material;
+    const o0 = m.opacity;
+    void this.anim.tween(0.2, (k) => {
+      if (tok !== this.penMarkTok) return;
+      m.opacity = o0 * (1 - k);
+      if (k >= 1) sp.visible = false;
+    });
+  }
+
+  /** a wild colour pick (and "draw until the colour"): a two-armed swirl in the new colour */
+  private fxSwirl(big: boolean): void {
+    const col = this.fxColor(this.fxC, 0.2);
+    void this.pileRing(col, 0.6, big ? 2 : 1.6, big ? 0.7 : 0.5, 0.85, ease.outQuad);
+    if (this.reduced) return;
+    const px = this.pilePos.x, pz = this.pilePos.z;
+    const cr = col.r, cg = col.g, cb = col.b;
+    const turns = big ? 2 : 1.25;
+    const rate = this.quality === 'low' ? 1 : 2;
+    void this.anim.tween(big ? 0.75 : 0.55, (k) => {
+      for (let arm = 0; arm < 2; arm++) {
+        const a = k * turns * Math.PI * 2 + arm * Math.PI;
+        const rr = lerp(0.15, big ? 1.5 : 1.2, k);
+        const c = Math.cos(a), s = Math.sin(a);
+        for (let i = 0; i < rate; i++) this.dust.spawn(px + c * rr, 0.08 + Math.random() * 0.05, pz + s * rr, -s * 1.2, 0.35 + Math.random() * 0.3, c * 1.2, cr, cg, cb, 0.08 + Math.random() * 0.05, 0.4 + Math.random() * 0.2);
+      }
+    }, ease.outQuad);
+  }
+
+  /** two seats trade: two comets cross over the pile, a bloom where they meet */
+  private fxCross(a: Seat, b: Seat): void {
+    const col = this.fxColor(this.fxC, 0.3);
+    const pa = this.seatPoint(a, new THREE.Vector3());
+    const pb = this.seatPoint(b, new THREE.Vector3());
+    if (a !== 0) pa.y = 0.6;
+    if (b !== 0) pb.y = 0.6;
+    const side = new THREE.Vector3(pb.z - pa.z, 0, pa.x - pb.x).normalize();
+    const c1 = this.overPile(new THREE.Vector3(), 1).addScaledVector(side, 0.9);
+    const c2 = this.overPile(new THREE.Vector3(), 1).addScaledVector(side, -0.9);
+    void this.comet(pa, c1, pb, col, 0.6);
+    void this.comet(pb, c2, pa, col, 0.6);
+    void this.pileRing(col, 0.8, 1.5, 0.5, 0.7);
+    void this.anim.wait(this.reduced ? 0 : 0.3).then(() => this.flashAt(this.overPile(this.fxP, 0.7), 1.3, col, 0.35));
+  }
+
+  /** the hands go round: a comet from each live seat to the next, bending round the pile */
+  private fxRotate(direction: Direction): void {
+    const col = this.fxColor(this.fxC, 0.3);
+    void this.pileRing(col, 1.6, 0.7, 0.6, 0.8, ease.inOutQuad);
+    if (this.reduced) return;
+    const live = this.seats.filter((s) => !this.eliminated[s]);
+    const p = this.overPile(new THREE.Vector3());
+    live.forEach((s, i) => {
+      const t = live[(i + direction + live.length) % live.length];
+      const pa = this.seatPoint(s, new THREE.Vector3());
+      const pb = this.seatPoint(t, new THREE.Vector3());
+      if (s !== 0) pa.y = 0.55;
+      if (t !== 0) pb.y = 0.55;
+      // bend outward, away from the pile, so the comets swirl round it
+      const mid = new THREE.Vector3().lerpVectors(pa, pb, 0.5);
+      mid.sub(p).setY(0).multiplyScalar(0.6).add(mid).setY(0.9);
+      void this.comet(pa, mid, pb, col, 0.7, i * 0.04);
+    });
+  }
+
   /** a stamp pops over a seat (skip / shield / caught / out) */
   private async stampAt(seat: number, kind: A.StampKind, hold = 0.35): Promise<void> {
     A.drawStamp(this.stampCanvas.getContext('2d')!, 128, kind);
@@ -1291,29 +2020,26 @@ export class CardTable implements TableView {
     });
   }
 
+  /** the colour in play tints the direction arrows (no glow round the pile) */
   private setActiveColor(c: Color | null | undefined, instant = false): void {
     if (!c) return;
-    const m = this.glowRing.material as THREE.MeshBasicMaterial;
+    const m = this.dirRing.material as THREE.MeshBasicMaterial;
     const to = COLOR_LIN[c];
     this.activeColor = c;
-    this.glowRing.visible = true;
+    this.glowRing.visible = false;
     if (instant) {
       m.color.copy(to);
-      m.opacity = 0.9;
       return;
     }
     const from = m.color.clone();
-    void this.anim.tween(0.35, (k) => {
-      m.color.lerpColors(from, to, k);
-      m.opacity = 0.9 * (0.6 + 0.4 * Math.sin(Math.PI * Math.min(1, k * 1.5)) + 0.0) + 0.0;
-      this.glowRing.scale.setScalar(1 + 0.25 * Math.sin(Math.PI * k));
-    }, ease.outQuad);
+    void this.anim.tween(0.5, (k) => m.color.lerpColors(from, to, k), ease.outQuad);
   }
 
   private showBadge(total: number, pop = true): void {
     this.stackTotal = total;
     if (total <= 0) {
       this.badge.visible = false;
+      this.penMarkOff();
       return;
     }
     A.drawBadge(this.badgeCanvas.getContext('2d')!, 128, 72, `+${total}`);
@@ -1327,9 +2053,13 @@ export class CardTable implements TableView {
       this.badge.scale.set(w, w * 0.5625, 1);
       return;
     }
-    void this.anim.tween(this.reduced ? 0.1 : 0.32, (k) => {
-      const s = this.reduced ? 1 : lerp(1.8, 1, k);
+    // the count bursts up off the pile into its place
+    const x1 = p.x, y1 = p.y, z1 = p.z;
+    const x0 = this.pilePos.x, z0 = this.pilePos.z;
+    void this.anim.tween(this.reduced ? 0.1 : 0.4, (k) => {
+      const s = this.reduced ? 1 : lerp(0.3, 1, k);
       this.badge.scale.set(w * s, w * 0.5625 * s, 1);
+      if (!this.reduced) this.badge.position.set(lerp(x0, x1, k), lerp(0.1, y1, k), lerp(z0, z1, k));
     }, ease.outBack);
   }
 
@@ -1363,6 +2093,8 @@ export class CardTable implements TableView {
   }
 
   private async doHandle(ev: GameEvent, g: number): Promise<void> {
+    // a previewed card that is not what got played (timer, server or a reset decided otherwise) goes back to the hand
+    if (this.preview && PREVIEW_UNDO.has(ev.type) && !(ev.type === 'play' && ev.card.id === this.preview.id)) this.undoPreview(0.25);
     switch (ev.type) {
       case 'deal':
         return this.onDeal(ev, g);
@@ -1372,20 +2104,20 @@ export class CardTable implements TableView {
         return this.onDraw(ev.seat, ev.count, ev.cards, ev.reason, g);
       case 'skip':
         if (this.lastPlayKind === 'skipAll') {
-          // Salto total: the play already stamped the seats; stamp any seat it missed
+          // Salto total: the play already marked the seats; send a small mark to any seat it missed
           if (this.skipAllDone.has(ev.seat)) return;
           this.skipAllDone.add(ev.seat);
-          return this.quickSkip([ev.seat]);
+          return this.skipMark([ev.seat], false);
         }
-        this.sfx('pass');
-        void this.shakeSeat(ev.seat, 0.05);
-        return this.stampAt(ev.seat, 'skip', 0.3);
+        return this.skipMark([ev.seat]);
       case 'reverse':
         return this.onReverse(ev.direction);
       case 'stack':
-        this.sfx('charge');
-        this.showBadge(ev.total);
-        return this.anim.wait(0.3);
+        // the big +N mark (already popping from the play) shows the grown total; the counter by the pile
+        // appears once the mark flies off to its victim
+        this.stackTotal = ev.total;
+        this.badge.visible = false;
+        return this.penMarkUp(ev.total);
       case 'window':
         return this.onWindow(ev.window);
       case 'shield':
@@ -1411,11 +2143,12 @@ export class CardTable implements TableView {
       case 'matchEnd': {
         const won = ev.winnerTeam != null ? ev.winnerTeam === 0 : ev.winner === 0;
         this.sfx(won ? 'winMatch' : 'loseMatch');
-        this.confettiBurst(this.seatPoint(ev.winner ?? 0, new THREE.Vector3()), 120, 1.2);
-        return this.anim.wait(0.6);
+        return this.celebrate(ev.winner ?? this.winner ?? 0, true);
       }
       case 'turn':
         this.setTurn(ev.seat);
+        // a pending penalty stays over the pile while it can still be stacked: the +N mark only flies to
+        // whoever finally draws it (onDraw)
         return;
       case 'flip':
       default:
@@ -1426,6 +2159,7 @@ export class CardTable implements TableView {
   private async onDeal(ev: Extract<GameEvent, { type: 'deal' }>, g: number): Promise<void> {
     this.anim.finishAll();
     this.clearTable();
+    this.chosen.clear();
     this.platesOn = true;
     const hand0 = L.sortHand(((ev as { hand?: Card[] }).hand ?? []).slice());
     for (const c of hand0) this.remember(c);
@@ -1453,6 +2187,7 @@ export class CardTable implements TableView {
     const step = Math.min(0.07, (this.reduced ? 0.7 : 1.5) / Math.max(1, order.length));
     const jobs: Promise<void>[] = [];
     const pose = newPose();
+    const prev = newPose();
     order.forEach(({ s, r }, k) => {
       const o = this.alloc();
       if (!o) return;
@@ -1463,12 +2198,22 @@ export class CardTable implements TableView {
       if (s === 0 && hand0[r]) this.setFace(o, hand0[r]);
       this.hands[s].push(o);
       this.handPose(s, r, ev.counts[s] ?? 0, pose, o);
+      // the side of the fan this card lies on top of: away from the card dealt before it
+      // (first card: from the camera for the human, from the table's centre for an opponent)
+      const n = new THREE.Vector3(0, 0, 1).applyQuaternion(pose.quat);
+      const d =
+        r > 0
+          ? this.handPose(s, r - 1, ev.counts[s] ?? 0, prev).pos.negate().add(pose.pos)
+          : s === 0
+            ? prev.pos.copy(this.layoutCam.position).sub(pose.pos)
+            : prev.pos.copy(pose.pos).negate();
+      const side = n.dot(d);
+      n.multiplyScalar((side < 0 ? -1 : 1) * L.CARD_H * pose.s * 0.45);
       jobs.push(
-        this.fly(o, pose, {
-          dur: 0.42,
+        this.dealFly(o, pose, n, {
+          dur: 0.46,
           arc: s === 0 ? 0.2 : 0.45,
           delay: k * step,
-          ease: ease.outCubic,
           onStart: () => {
             this.setDeckCount(this.deckCount - 1);
             this.platesDirty();
@@ -1501,6 +2246,52 @@ export class CardTable implements TableView {
     this.platesDirty();
   }
 
+  /**
+   * A deal flight that never cuts through the hand: the card arcs to a point `off` in front of its slot
+   * (on the side it lies on top of), already turned to its final orientation, then drops straight
+   * into the slot along its own facing.
+   */
+  private dealFly(o: CardObj, to: Pose, off: V3, opt: FlyOpts): Promise<void> {
+    const tok = ++o.token;
+    const p1 = to.pos.clone();
+    const q1 = to.quat.clone();
+    const s1 = to.s;
+    const pa = p1.clone().add(off);
+    const p0 = new THREE.Vector3();
+    const q0 = new THREE.Quaternion();
+    let s0 = 1;
+    const arc = opt.arc ?? 0;
+    const SPLIT = 0.68;
+    return this.anim.tween(
+      opt.dur ?? 0.45,
+      (_k, raw) => {
+        if (o.token !== tok) return;
+        if (raw < SPLIT) {
+          const t = raw / SPLIT;
+          const k = 1 - (1 - t) * (1 - t);
+          o.pos.lerpVectors(p0, pa, k);
+          o.pos.y += Math.sin(Math.PI * t) * arc;
+          o.quat.slerpQuaternions(q0, q1, Math.min(1, k * 1.15));
+          o.s = lerp(s0, s1, k);
+        } else {
+          const t = (raw - SPLIT) / (1 - SPLIT);
+          o.pos.lerpVectors(pa, p1, 1 - (1 - t) * (1 - t) * (1 - t));
+          o.quat.copy(q1);
+          o.s = s1;
+        }
+      },
+      (x) => x,
+      opt.delay ?? 0,
+      () => {
+        p0.copy(o.pos);
+        q0.copy(o.quat);
+        s0 = o.s;
+        o.vis = true;
+        opt.onStart?.();
+      },
+    );
+  }
+
   private land(o: CardObj, slam: boolean, big = false): void {
     this.sfx(big ? 'thump' : slam ? 'slam' : 'clack');
     this.puff(o.pos, slam ? 16 : 9);
@@ -1522,61 +2313,171 @@ export class CardTable implements TableView {
       await this.anim.tween(this.reduced ? 0.12 : 0.22, (_k, raw) => {
         if (o.token !== tok) return;
         o.pos.y = y0 + Math.sin(Math.PI * raw) * 0.18;
-        o.quat.copy(faceDownQ(Math.sin(Math.PI * raw) * 0.25, tmpQ));
+        o.quat.copy(faceDownQ(this.deckYaw + Math.sin(Math.PI * raw) * 0.25, tmpQ));
       });
     }
   }
 
+  /**
+   * The human's colour-changing card goes from the hand onto the pile before the colour is asked; resolves when it
+   * has landed (face up, still black). The play event that follows only applies the colour and effects.
+   */
+  previewPlay(cardId: number): Promise<void> {
+    const g = this.gen;
+    const run = async () => {
+      if (!this.live(g) || this.preview) return;
+      const h = this.hands[0];
+      const idx = h.findIndex((o) => o.card?.id === cardId);
+      if (idx < 0) return;
+      const o = h.splice(idx, 1)[0];
+      const dragged = this.dropped === o;
+      this.dropped = null;
+      this.preview = { o, id: cardId };
+      o.held = false;
+      o.fxToken++;
+      o.glow = 0;
+      o.dim = 0;
+      this.pileJitter(o, 0);
+      this.pile.push(o);
+      this.discardCount++;
+      void this.relayout(0, 0.3, { delay: 0.1 });
+      await this.flyToPile(0, o, true, dragged, h.length === 0, g);
+      if (!this.live(g) || this.preview?.o !== o) return;
+      this.land(o, false);
+      this.platesDirty();
+    };
+    this.queue = this.queue.then(run, run);
+    this.kick();
+    return this.queue;
+  }
+
+  /** put a previewed card back into the human hand (no play followed) */
+  cancelPreview(): void {
+    const run = () => {
+      if (this.preview) this.undoPreview(0.3);
+    };
+    this.queue = this.queue.then(run, run);
+    this.kick();
+  }
+
+  private undoPreview(dur: number): void {
+    const p = this.preview;
+    this.preview = null;
+    if (!p) return;
+    const i = this.pile.indexOf(p.o);
+    if (i < 0) return;
+    this.pile.splice(i, 1);
+    this.discardCount = Math.max(0, this.discardCount - 1);
+    this.insertSorted(p.o, 0);
+    void this.relayout(0, dur);
+    this.platesDirty();
+  }
+
   private async onPlay(seat: Seat, card: Card, color: Color | undefined, g: number): Promise<void> {
     this.remember(card);
+    // already on the pile (previewPlay): only the colour and the effects are left
+    const pre = this.preview && seat === 0 && this.preview.id === card.id ? this.preview.o : null;
+    this.preview = null;
     const h = this.hands[seat];
     let idx = -1;
-    if (seat === 0) idx = h.findIndex((o) => o.card?.id === card.id);
-    if (idx < 0) idx = h.findIndex((o) => o.card?.id === card.id);
-    if (idx < 0 && h.length) idx = seat === 0 ? h.findIndex((o) => !o.card) : Math.floor(h.length / 2);
-    if (idx < 0 && h.length) idx = h.length - 1;
-    let o: CardObj | null = idx >= 0 ? h.splice(idx, 1)[0] : null;
+    if (!pre && seat === 0) idx = h.findIndex((o) => o.card?.id === card.id);
+    if (!pre && idx < 0) idx = h.findIndex((o) => o.card?.id === card.id);
+    if (!pre && idx < 0 && h.length) idx = seat === 0 ? h.findIndex((o) => !o.card) : Math.floor(h.length / 2);
+    if (!pre && idx < 0 && h.length) idx = h.length - 1;
+    let o: CardObj | null = pre ?? (idx >= 0 ? h.splice(idx, 1)[0] : null);
+    // the winning card: the hand's last one
+    const last = !!o && h.length === 0;
+    const dragged = !!o && this.dropped === o;
+    this.dropped = null;
+    const inHand = !!o;
     if (!o) {
       o = this.alloc();
       if (!o) return;
       this.seatPoint(seat, o.pos);
       faceDownQ(0, o.quat);
-      o.s = seat === 0 ? 1 : L.OPP_SCALE;
+      o.s = seat === 0 ? 1 : L.oppScale(this.portrait);
     }
     o.held = false;
     o.fxToken++;
     o.glow = 0;
     o.dim = 0;
     this.setFace(o, card);
-    this.pileJitter(o);
-    this.pile.push(o);
-    this.discardCount++;
-    const pose = this.pilePose(this.pile.length - 1, o, newPose());
+    if (color && card.face.color === null) this.chosen.set(card.id, color);
     const pen = card.face.draw ?? KIND_DRAW[card.face.kind] ?? 0;
     this.lastPlayKind = card.face.kind;
     this.lastPlayDraw = pen;
     this.streamDraw = card.face.kind === 'wildColor';
     this.skipAllDone.clear();
     const slam = pen > 0 || h.length <= 1;
-    void this.relayout(seat, 0.3, { delay: 0.05 });
-    const spin = (Math.random() < 0.5 ? -1 : 1) * Math.PI * 2 * (seat === 0 ? 1 : 1.25);
-    await this.fly(o, pose, { dur: 0.5, arc: seat === 0 ? 0.5 : 0.9, spin, ease: ease.inOutQuad });
-    if (!this.live(g)) return;
+    if (!pre) {
+      this.pileJitter(o, seat);
+      this.pile.push(o);
+      this.discardCount++;
+      void this.relayout(seat, 0.3, { delay: 0.1 });
+      await this.flyToPile(seat, o, inHand, dragged, last, g);
+      if (!this.live(g)) return;
+    }
     this.land(o, slam, pen >= 4);
+    if (o.card === card && this.chosen.has(card.id)) this.setFace(o, card, this.chosen.get(card.id));
     this.trimPile();
     this.setActiveColor(color ?? card.face.color);
     this.platesDirty();
+    if (pen > 0) {
+      this.fxDraw(pen);
+      // the big +N mark pops now (a stack event that follows confirms or grows the total)
+      void this.penMarkUp(this.stackTotal > 0 ? this.stackTotal + pen : pen);
+    } else if (card.face.kind === 'wildColor' || card.face.kind === 'wild') this.fxSwirl(card.face.kind === 'wildColor');
     if (card.face.kind === 'skipAll') {
       const others = this.seats.filter((x) => x !== seat && !this.eliminated[x]);
       for (const x of others) this.skipAllDone.add(x);
-      await this.quickSkip(others);
+      await this.skipMark(others);
       return;
     }
     await this.anim.wait(0.08);
   }
 
+  /** lift out of the fan, then a quick arc onto the pile top (the winning card spins); o is already on this.pile */
+  private async flyToPile(seat: Seat, o: CardObj, inHand: boolean, dragged: boolean, last: boolean, g: number): Promise<void> {
+    const pose = this.pilePose(this.pile.length - 1, o, newPose());
+    // 1) the card lifts out of its fan first (along its own up, away from its neighbours; opponents also lean
+    //    towards the table centre), so it never cuts through the cards beside it
+    if (inHand && !dragged && !this.reduced) {
+      const lift = newPose();
+      lift.pos.copy(o.pos);
+      lift.quat.copy(o.quat);
+      lift.s = o.s;
+      const up = tmpV.set(0, 1, 0).applyQuaternion(o.quat);
+      if (seat === 0) {
+        lift.pos.addScaledVector(up, this.fan.ch * this.worldPerPx(HAND_D) * 0.32);
+        lift.pos.addScaledVector(tmpV2.set(0, 0, 1).applyQuaternion(this.layoutCam.quaternion), 0.04);
+      } else {
+        lift.pos.addScaledVector(up, L.CARD_H * o.s * 0.45);
+        const dx = this.pilePos.x - o.pos.x;
+        const dz = this.pilePos.z - o.pos.z;
+        const d = Math.hypot(dx, dz) || 1;
+        lift.pos.x += (dx / d) * 0.2;
+        lift.pos.z += (dz / d) * 0.2;
+        lift.pos.y += 0.1;
+      }
+      await this.fly(o, lift, { dur: 0.12, ease: ease.outQuad });
+      if (!this.live(g)) return;
+    }
+    // 2) a quick, clean arc onto the pile with a small natural turn and a little variety;
+    //    only the winning card gets the big spinning flight
+    const r1 = Math.random();
+    const r2 = Math.random();
+    const opt: FlyOpts = last
+      ? { dur: 0.62, arc: seat === 0 ? 0.7 : 1.1, spin: (r1 < 0.5 ? -1 : 1) * Math.PI * 2.5, ease: ease.inOutQuad }
+      : { dur: 0.34 + r1 * 0.08, arc: (seat === 0 ? 0.26 : 0.4) * (0.8 + r2 * 0.45), spin: (r1 - 0.5) * 0.7, ease: ease.inOutQuad };
+    if (last) this.tweenFx(o, 1, 0, 0.2);
+    await this.fly(o, pose, opt);
+    if (!this.live(g)) return;
+    if (last) this.tweenFx(o, 0, 0, 0.5);
+  }
+
   private async onDraw(seat: Seat, count: number, cards: Card[] | undefined, reason: string, g: number): Promise<void> {
     if (reason === 'penalty' || reason === 'catch') {
+      if (this.penMarkTotal) await this.penMarkFly(seat);
       this.showBadge(0);
       this.hidePenBadge();
     }
@@ -1648,13 +2549,19 @@ export class CardTable implements TableView {
           const k = h.indexOf(o);
           if (k < 0) return undefined;
           const to = this.handPose(seat, k, h.length, newPose(), o);
-          return this.fly(o, to, { dur: 0.38, arc: (seat === 0 ? 0.15 : 0.35) + catchArc, ease: ease.outCubic });
+          if (seat === 0) return this.fly(o, to, { dur: 0.38, arc: 0.15 + catchArc, ease: ease.outCubic });
+          // an opponent's fan: come in on the side this card lies on top of, then drop straight into the
+          // slot along its own facing, so it never passes through the cards already held
+          const nb = k > 0 ? k - 1 : k + 1 < h.length ? k + 1 : -1;
+          const nrm = new THREE.Vector3(0, 0, 1).applyQuaternion(to.quat);
+          const away = nb >= 0 ? this.handPose(seat, nb, h.length, newPose()).pos.negate().add(to.pos) : to.pos.clone().negate();
+          nrm.multiplyScalar((nrm.dot(away) < 0 ? -1 : 1) * L.CARD_H * to.s * 0.45);
+          return this.dealFly(o, to, nrm, { dur: 0.42, arc: 0.35 + catchArc });
         }),
       );
     });
     await Promise.all(jobs);
     if (!this.live(g)) return;
-    if (seat === 0 && this.refreshPartnerArea()) void this.relayout(this.partnerSeat(), 0.25);
     if (seat === 0 && this.req) this.applyPickFx();
     this.platesDirty();
   }
@@ -1663,29 +2570,83 @@ export class CardTable implements TableView {
     this.sfx('select');
     this.direction = direction;
     const r = this.dirRing;
-    const sx = Math.abs(r.scale.x);
-    const want = sx * this.ringScaleSign(direction);
     const m = r.material as THREE.MeshBasicMaterial;
+    const B = 2 * (this.portrait ? Math.min(1.75, this.dims.A - 0.2) : 1.6);
+    // mirror signs of the ring (which way the arrows point) and the spin that follows them (the opposite sign)
+    const mOld = Math.sign(r.scale.x) || 1;
+    const mNew = this.ringScaleSign(direction);
+    const sOld = -mOld;
+    const sNew = -mNew;
     if (this.reduced) {
-      r.scale.x = want;
-      await this.anim.tween(0.3, (k) => (m.opacity = 0.28 + 0.4 * Math.sin(Math.PI * k)));
+      // a plain fade through the swap
+      let flipped = false;
+      await this.anim.tween(0.3, (k) => {
+        if (!flipped && k > 0.5) {
+          flipped = true;
+          r.scale.x = B * mNew;
+        }
+        m.opacity = DIR_OPACITY * Math.abs(Math.cos(Math.PI * k));
+      });
+      m.opacity = DIR_OPACITY;
       return;
     }
-    let flipped = false;
-    await this.anim.tween(0.6, (k) => {
-      r.rotation.y = k * Math.PI;
-      if (!flipped && k > 0.5) {
-        flipped = true;
-        r.scale.x = want;
+    // the arrows swell and brighten, whirl the old way and slow to a stop, turn over,
+    // spin up the new way trailing a shimmer, then settle back to the slow turn
+    this.dirFx = true;
+    const tok = ++this.dirTok;
+    const col = this.fxColor(this.fxC, 0.45);
+    const cr = col.r, cg = col.g, cb = col.b;
+    this.flashAt(this.fxP.set(r.position.x, 0.12, r.position.z), B * 0.5, col, 0.6);
+    const T = 1.4;
+    const peak = 7;
+    const rate = this.quality === 'low' ? 1 : this.quality === 'high' ? 3 : 2;
+    const cx = r.position.x, cz = r.position.z;
+    let last = 0;
+    const done = this.anim.tween(T, (_k, raw) => {
+      if (tok !== this.dirTok) return;
+      const dt = (raw - last) * T;
+      last = raw;
+      let v: number;
+      let sx: number;
+      if (raw < 0.42) {
+        const u = raw / 0.42;
+        v = sOld * (DIR_SPIN + peak * Math.sin(Math.PI * u)) * (1 - u);
+        sx = mOld;
+      } else if (raw < 0.56) {
+        const u = (raw - 0.42) / 0.14;
+        v = 0;
+        sx = lerp(mOld, mNew, (1 - Math.cos(Math.PI * u)) / 2);
+      } else {
+        const u = (raw - 0.56) / 0.44;
+        v = sNew * (DIR_SPIN + peak * 0.75 * Math.sin(Math.PI * u) * (1 - u * 0.3));
+        sx = mNew;
       }
-      m.opacity = 0.28 + 0.45 * Math.sin(Math.PI * k);
-      const b = 1 + 0.1 * Math.sin(Math.PI * k);
-      r.scale.z = sx * b;
-      r.scale.x = (r.scale.x < 0 ? -sx : sx) * b;
-    }, ease.inOutCubic);
-    r.rotation.y = 0;
-    r.scale.set(want, 1, sx);
+      r.rotation.y += v * dt;
+      const sw = 1 + 0.16 * Math.sin(Math.PI * raw);
+      r.scale.set(B * sw * sx, 1, B * sw);
+      m.opacity = DIR_OPACITY + (0.95 - DIR_OPACITY) * Math.sin(Math.PI * Math.min(1, raw * 1.15));
+      // shimmer: sparks shed along the arrows, swept the way they turn
+      const av = Math.abs(v);
+      if (av < 0.5 || raw > 0.95) return;
+      const dir = Math.sign(v);
+      for (let i = 0; i < rate; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const rad = B * 0.5 * (0.74 + Math.random() * 0.14) * sw;
+        const c = Math.cos(a), s = Math.sin(a);
+        const sp = 0.15 + av * rad * 0.35;
+        this.dust.spawn(cx + c * rad, 0.04, cz + s * rad, dir * s * sp, 0.15 + Math.random() * 0.25, -dir * c * sp, cr, cg, cb, 0.07 + Math.random() * 0.05, 0.45 + Math.random() * 0.25);
+      }
+    }, ease.linear).then(() => {
+      if (tok !== this.dirTok) return;
+      r.scale.set(B * mNew, 1, B);
+      m.opacity = DIR_OPACITY;
+      this.dirFx = false;
+    });
+    // play may go on once the arrows have turned over; the settle runs on
+    await this.anim.wait(0.85);
+    void done;
   }
+
 
   /** a world point just above a seat's HTML plate (falls back to the seat point when plates are off) */
   private platePoint(seat: number, out: V3, abovePx = 0): V3 {
@@ -1749,9 +2710,9 @@ export class CardTable implements TableView {
       this.windowVictim = w.victim;
       const total = this.stackTotal > 0 ? this.stackTotal : this.lastPlayDraw;
       if (total > 0) {
-        if (this.stackTotal !== total) this.showBadge(total);
+        // the big +N mark stays over the pile (the victim may still stack); it flies when someone draws
+        if (this.stackTotal !== total) this.showBadge(total, false);
         this.showPenBadge(w.victim, total);
-        this.sfx('charge');
       }
       return this.anim.wait(0.15);
     }
@@ -1779,6 +2740,9 @@ export class CardTable implements TableView {
       r = this.isOpen(seat) ? 1.3 : 1.05;
     }
     d.visible = true;
+    // the dome lands with a bloom at its crown and a ring of sparks round its rim
+    this.flashAt(this.fxP.copy(d.position).addScaledVector(tmpV.set(0, 1, 0).applyQuaternion(d.quaternion), r * 0.6), r * 1.8, FX_SHIELD, 0.4);
+    if (seat !== 0) this.sparkRing(d.position, r * 0.95, 22, FX_SHIELD, 0.9, 0.8);
     const tok = ++this.domeTok;
     const k0 = this.reduced ? 1 : 0.2;
     await this.anim.tween(this.reduced ? 0.15 : 0.32, (k) => {
@@ -1812,18 +2776,7 @@ export class CardTable implements TableView {
     const p1 = this.platePoint(to, new THREE.Vector3(), 26);
     const w0 = this.penSize(p0);
     const w1 = this.penSize(p1);
-    // flash
-    const f = this.flash;
-    const fm = f.material;
-    f.position.copy(p0);
-    f.visible = true;
-    const fw = w0 * 2.2;
-    void this.anim.tween(this.reduced ? 0.2 : 0.35, (k) => {
-      fm.opacity = 1 - k;
-      f.scale.setScalar(fw * (this.reduced ? 1 : lerp(0.4, 1.4, k)));
-      fm.rotation = k * 0.6;
-      if (k >= 1) f.visible = false;
-    }, ease.outQuad);
+    this.flashAt(p0, w0 * 2.2, FX_WHITE, this.reduced ? 0.2 : 0.35);
     if (this.reduced) {
       b.position.copy(p1);
       b.scale.set(w1, w1 * 0.5625, 1);
@@ -1831,6 +2784,10 @@ export class CardTable implements TableView {
       return this.anim.wait(0.25);
     }
     await this.anim.wait(0.12);
+    // a red sparkle trail follows the badge home
+    const mid = this.fxQ.lerpVectors(p0, p1, 0.5);
+    mid.y += 1.2;
+    void this.comet(p0, mid, p1, this.fxC.set('#ff6a55'), 0.5, 0, ease.inOutCubic);
     await this.anim.tween(0.5, (k, raw) => {
       b.position.lerpVectors(p0, p1, k);
       b.position.y += Math.sin(Math.PI * raw) * 0.6;
@@ -1841,45 +2798,6 @@ export class CardTable implements TableView {
     b.material.rotation = 0;
     this.penSeat = to;
     this.windowVictim = null;
-  }
-
-  /** Salto total: a stamp on every skipped seat, popping in sequence and fading together */
-  private async quickSkip(seats: number[]): Promise<void> {
-    if (!seats.length) return;
-    const gap = this.reduced ? 0.08 : 0.16;
-    const pops: Promise<void>[] = [];
-    seats.slice(0, this.skipStamps.length).forEach((seat, i) => {
-      const sp = this.skipStamps[i];
-      const p = this.seatPoint(seat, new THREE.Vector3());
-      if (seat !== 0) p.y = 0.6;
-      sp.position.copy(p);
-      const size = this.worldPerPx(p.distanceTo(this.layoutCam.position)) * Math.min(84, Math.max(56, this.W * 0.14));
-      const m = sp.material;
-      m.opacity = 0;
-      sp.scale.setScalar(size);
-      sp.visible = true;
-      pops.push(
-        this.anim
-          .tween(this.reduced ? 0.12 : 0.24, (k) => {
-            m.opacity = k;
-            sp.scale.setScalar(size * (this.reduced ? 1 : lerp(2, 1, k)));
-            m.rotation = this.reduced ? 0 : (1 - k) * 0.5;
-          }, ease.outBack, i * gap, () => {
-            this.sfx('pass');
-            if (seat !== 0) void this.shakeSeat(seat as Seat, 0.04);
-          })
-          .then(() => this.anim.wait(0.45 + (seats.length - 1 - i) * gap))
-          .then(() =>
-            this.anim.tween(0.2, (k) => {
-              m.opacity = 1 - k;
-              if (k >= 1) sp.visible = false;
-            }),
-          ),
-      );
-    });
-    // the next event may start once the last stamp has popped
-    await this.anim.wait(seats.length * gap + 0.25);
-    void Promise.all(pops);
   }
 
   /** missed ¡Ku!: the offender's plate shakes (the two catch cards follow as a draw event) */
@@ -1926,6 +2844,7 @@ export class CardTable implements TableView {
     const next = this.hands.map((h) => h.slice());
     next[a] = this.hands[b].slice();
     next[b] = this.hands[a].slice();
+    this.fxCross(a, b);
     return this.moveHands(next, a === 0 || b === 0 ? cards : undefined, g);
   }
 
@@ -1936,6 +2855,7 @@ export class CardTable implements TableView {
       const to = live[(i + direction + live.length) % live.length];
       next[to] = this.hands[s].slice();
     });
+    this.fxRotate(direction);
     return this.moveHands(next, cards, g);
   }
 
@@ -1957,6 +2877,8 @@ export class CardTable implements TableView {
     }
     void this.relayout(seat, 0.3);
     if (!taken.length) return;
+    // the pile ring pulls in, like a broom gathering
+    void this.pileRing(this.fxColor(), 2.3, 0.55, 0.55, 0.8, ease.inQuad);
     // 1) the swept cards fan out of the hand, face up
     const n = taken.length;
     const pose = newPose();
@@ -2000,6 +2922,7 @@ export class CardTable implements TableView {
     await Promise.all(jobs);
     if (!this.live(g)) return;
     this.puff(this.pilePos, 10);
+    this.flashAt(this.overPile(this.fxP, 0.15), 1.2, this.fxColor(), 0.35);
     this.sfx('clack');
     this.trimPile();
     await this.relayoutPile(0.15);
@@ -2090,42 +3013,107 @@ export class CardTable implements TableView {
     const won = this.teams ? !!this.teams.find((t) => t.includes(0))?.includes(winner) : winner === 0;
     this.sfx(won ? 'winHand' : 'loseHand');
     this.hidePenBadge();
-    const p = this.seatPoint(winner, new THREE.Vector3());
-    if (winner === 0) p.copy(this.pxToTable(this.W / 2, this.H * 0.62, new THREE.Vector3()));
-    this.confettiBurst(p, 90, 1);
-    // card fountain
-    const n = this.reduced ? Math.min(6, this.q.fountain) : this.q.fountain;
-    const base = this.faceMap.faces;
-    const jobs: Promise<void>[] = [];
-    for (let j = 0; j < n; j++) {
-      const o = this.alloc();
-      if (!o) break;
-      const face = base[Math.floor(Math.random() * Math.min(base.length, 72))];
-      this.setFace(o, { id: -1 - j, face });
-      o.pos.copy(p);
-      faceUpQ(Math.random() * 6.28, o.quat);
-      o.s = 0.01;
-      const vx = (Math.random() - 0.5) * 3.2;
-      const vz = (Math.random() - 0.5) * 2.4;
-      const vy = 4.2 + Math.random() * 2.2;
-      const spinAx = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-      const spinV = (Math.random() < 0.5 ? -1 : 1) * (5 + Math.random() * 6);
-      const q0 = o.quat.clone();
-      const dur = 1.5;
-      const p0 = p.clone();
-      const tok = o.token;
-      jobs.push(
-        this.anim.tween(dur, (_k, raw) => {
-          if (o.token !== tok) return;
-          const t = raw * dur;
-          o.pos.set(p0.x + vx * t, Math.max(0.02, p0.y + vy * t - 4.9 * t * t), p0.z + vz * t);
-          o.quat.copy(q0).premultiply(tmpQ.setFromAxisAngle(spinAx, spinV * t));
-          o.s = raw < 0.1 ? raw * 10 * 0.8 : raw > 0.75 ? 0.8 * (1 - (raw - 0.75) * 4) : 0.8;
-        }, ease.linear, j * 0.035, () => (o.vis = true)).then(() => this.release(o)),
-      );
+    await this.celebrate(winner, false);
+  }
+
+  /**
+   * the win: the last card bursts on the pile (gold bloom, shockwave, a ring of sparks in the four colours),
+   * gold light streams from the pile to the winner's plate, which flares and pulses, while confetti in the
+   * four colours is tossed up and flutters down, fading; a short camera push and settle. A match win is
+   * bigger and longer (more rays, three plate beats, a second confetti wave and a rain over the table).
+   * Reduced motion: two soft glows and the plate's highlight only.
+   */
+  private async celebrate(winner: Seat, match: boolean): Promise<void> {
+    const tok = ++this.winTok;
+    const red = this.reduced;
+    const low = this.quality === 'low';
+    const pp = this.overPile(new THREE.Vector3(), 0.14);
+    const tp = this.platePoint(winner, new THREE.Vector3(), 0);
+    if (red) {
+      this.flashAt(pp, match ? 2.6 : 2.1, FX_GOLD, 0.5);
+      void this.anim.wait(0.35).then(() => tok === this.winTok && this.flashAt(tp, match ? 1.8 : 1.4, FX_GOLD, 0.6));
+      return this.anim.wait(match ? 1 : 0.7);
     }
-    await this.anim.wait(0.5);
-    void Promise.all(jobs);
+    // 1) the last card bursts on the pile; its rim glows gold and settles
+    const top = this.pile[this.pile.length - 1];
+    if (top) {
+      const ft = ++top.fxToken;
+      void this.anim.tween(match ? 1.6 : 1.1, (_k, raw) => {
+        if (top.fxToken !== ft) return;
+        top.glow = (1 - raw) * (0.65 + 0.35 * Math.cos(raw * Math.PI * 5));
+      }, ease.linear);
+    }
+    this.flashAt(pp, match ? 3.4 : 2.6, FX_GOLD, match ? 0.7 : 0.5);
+    void this.pileRing(FX_GOLD, 0.4, match ? 3 : 2.4, match ? 0.8 : 0.6, 1, ease.outCubic);
+    const nb = Math.round((low ? 16 : 34) * (match ? 1.4 : 1));
+    for (let i = 0; i < nb; i++) {
+      const cc = KU_COLS[i % 4];
+      const a = (i / nb) * Math.PI * 2 + Math.random() * 0.2;
+      const sp = 2 + Math.random() * 1.4;
+      this.dust.spawn(pp.x, 0.16, pp.z, Math.cos(a) * sp, 0.5 + Math.random() * 0.7, Math.sin(a) * sp, cc[0], cc[1], cc[2], 0.1 + Math.random() * 0.05, 0.5 + Math.random() * 0.25);
+    }
+    // 2) a warm sweep: gold streams fan out from the pile and converge on the winner's plate
+    const rays = low ? 3 : match ? 7 : 5;
+    const side = this.fxQ.set(tp.z - pp.z, 0, pp.x - tp.x).normalize();
+    const mid = new THREE.Vector3();
+    const rayDur = match ? 0.6 : 0.5;
+    for (let i = 0; i < rays; i++) {
+      const t = rays > 1 ? i / (rays - 1) - 0.5 : 0;
+      mid.lerpVectors(pp, tp, 0.5).addScaledVector(side, t * 1.8).setY(Math.max(pp.y, tp.y) + 0.8);
+      void this.comet(pp, mid, tp, FX_GOLD, rayDur, Math.abs(t) * 0.12, ease.inOutQuad);
+    }
+    // 3) the rays arrive: the plate flares and pulses (one beat for a round, three for the match)
+    void this.anim.wait(rayDur * 0.9).then(() => {
+      if (tok !== this.winTok) return;
+      this.flashAt(tp, match ? 2 : 1.5, FX_GOLD, 0.6);
+      if (!low) this.sparkRing(tp, 0.1, match ? 22 : 14, FX_GOLD, 1.1, 0.9);
+      const pulse = ++this.platePulse;
+      const beats = match ? 3 : 1;
+      const amp = match ? 0.3 : 0.26;
+      void this.anim.tween(match ? 2.4 : 0.9, (_k, raw) => {
+        if (pulse !== this.platePulse) return;
+        const f = raw * beats - Math.floor(raw * beats);
+        this.plateScale[winner] = raw >= 1 ? 1 : 1 + amp * Math.sin(Math.PI * f) * (1 - raw * 0.45);
+      }, ease.linear);
+    });
+    // 4) confetti in the four colours: tossed up off the pile over a moment (not one spray), then it
+    //    flutters down on drag and wobble and fades before it lands; the match adds a rain over the table
+    const toss = Math.round(this.q.confetti * (match ? 0.5 : 0.35));
+    let tossed = 0;
+    void this.anim.tween(match ? 1.1 : 0.4, (k) => {
+      if (tok !== this.winTok) return;
+      const want = Math.round(k * toss);
+      for (; tossed < want; tossed++) {
+        const cc = KU_COLS[tossed % 4];
+        const a = Math.random() * Math.PI * 2;
+        const h = (0.4 + Math.random() * 1.4) * (match ? 1.15 : 1);
+        this.confetti.spawn(pp.x + Math.cos(a) * 0.2, pp.y, pp.z + Math.sin(a) * 0.2, Math.cos(a) * h, 4.6 + Math.random() * 2, Math.sin(a) * h, cc[0], cc[1], cc[2], 0.11 + Math.random() * 0.05, 1.5 + Math.random() * 0.6, (Math.random() - 0.5) * 12);
+      }
+    }, ease.linear);
+    if (match) {
+      const rain = Math.round(this.q.confetti * 0.4);
+      const skyY = Math.max(2.2, this.layoutCam.position.y * 0.38);
+      let rained = 0;
+      void this.anim.tween(1.6, (k) => {
+        if (tok !== this.winTok) return;
+        const want = Math.round(k * rain);
+        for (; rained < want; rained++) {
+          const cc = KU_COLS[rained % 4];
+          const a = Math.random() * Math.PI * 2;
+          const r = Math.sqrt(Math.random()) * 2.8;
+          this.confetti.spawn(pp.x + Math.cos(a) * r, skyY, pp.z + Math.sin(a) * r, (Math.random() - 0.5) * 0.6, -0.4, (Math.random() - 0.5) * 0.6, cc[0], cc[1], cc[2], 0.11 + Math.random() * 0.05, 1.8 + Math.random() * 0.7, (Math.random() - 0.5) * 10);
+        }
+      }, ease.linear, 0.35);
+    }
+    // 5) a short camera push towards the pile (the match: towards the winner) and a soft settle
+    if (low) return this.anim.wait(match ? 1.4 : 0.9);
+    this.pushTarget.copy(match ? tp : pp);
+    const depth = match ? 1 : 0.6;
+    await this.anim.tween(0.3, (k) => tok === this.winTok && (this.push = depth * k), ease.outCubic);
+    await this.anim.wait(match ? 0.6 : 0.15);
+    if (tok !== this.winTok) return;
+    await this.anim.tween(match ? 0.7 : 0.5, (k) => tok === this.winTok && (this.push = depth * (1 - k)), ease.inOutQuad);
+    if (tok === this.winTok) this.push = 0;
   }
 
   private pxToTable(x: number, y: number, out: V3): V3 {
@@ -2157,14 +3145,27 @@ export class CardTable implements TableView {
     }
   }
 
+  /** the pile's top centre in viewport CSS px (anchors the colour pane); null before the first layout */
+  pileScreenPoint(): { x: number; y: number } | null {
+    if (!this.W || !this.H) return null;
+    const out = { x: 0, y: 0 };
+    this.toScreen(tmpV.set(this.pilePos.x, this.pileH(), this.pilePos.z), out);
+    const r = this.container.getBoundingClientRect();
+    return { x: out.x + r.left, y: out.y + r.top };
+  }
+
   private applyPickFx(): void {
     const r = this.req;
     if (!r) return;
+    // no play at all: only the pyramid over the deck says "draw" (no dimmed hand, no deck glow)
+    const mustDraw = r.canDraw && r.playable.size === 0;
     for (const o of this.hands[0]) {
       const ok = !!o.card && r.playable.has(o.card.id);
-      this.tweenFx(o, ok ? 1 : 0, ok ? 0 : 1);
+      this.tweenFx(o, ok ? 1 : 0, ok || mustDraw ? 0 : 1);
     }
-    this.tweenFx(this.deckTop, r.canDraw ? 1 : 0, 0);
+    this.tweenFx(this.deckTop, r.canDraw && !mustDraw ? 1 : 0, 0);
+    this.drawCue.visible = mustDraw;
+    this.cueT = 0;
     void this.relayout(0, 0.18);
     this.kick();
   }
@@ -2172,6 +3173,7 @@ export class CardTable implements TableView {
   private clearPickFx(keep: number): void {
     for (const o of this.hands[0]) if (!o.card || o.card.id !== keep) this.tweenFx(o, 0, 0);
     this.tweenFx(this.deckTop, 0, 0);
+    this.drawCue.visible = false;
     const h = this.hands[0];
     const pose = newPose();
     for (let i = 0; i < h.length; i++) {
@@ -2194,7 +3196,8 @@ export class CardTable implements TableView {
       const o = this.hands[0].find((x) => x.card?.id === v);
       if (o) {
         this.tweenFx(o, 0.6, 0);
-        if (!o.held) {
+        if (o.held) this.dropped = o;
+        else {
           // a little pop forward so the pick reads before the throw
           const p = o.pos.clone().addScaledVector(tmpV.set(0, 1, 0.3).applyQuaternion(this.layoutCam.quaternion), this.fan.ch * this.worldPerPx(HAND_D) * 0.12);
           void this.fly(o, { pos: p, quat: o.quat.clone(), s: o.s }, { dur: 0.1 });
@@ -2258,7 +3261,7 @@ export class CardTable implements TableView {
     if (this.fan.slots.length !== h.length) this.fan = L.fanLayout(h.length, { W: this.W, H: this.H });
     this.lifts.length = h.length;
     for (let i = 0; i < h.length; i++) this.lifts[i] = this.liftPx(h[i]);
-    return L.hitFan(this.fan, x, y, this.lifts);
+    return L.hitFan(this.focusFan(), x, y, this.lifts);
   }
 
   private hitDeck(x: number, y: number): boolean {
@@ -2271,15 +3274,8 @@ export class CardTable implements TableView {
     return Math.abs(x - cx) < r * 0.85 && Math.abs(y - cy) < r;
   }
 
-  /** own hand hit, sticky on the peeked card (it is raised, so test its raised rect first) */
+  /** own hand hit (on the fan as drawn, the focused card included) */
   private hitHandPeek(x: number, y: number): number {
-    const pk = this.peekIdx(0);
-    if (pk >= 0 && this.fan.slots.length === this.hands[0].length) {
-      const s = this.fan.slots[pk];
-      const o = this.hands[0][pk];
-      const lift = this.liftPx(o) + this.fan.ch * 0.3;
-      if (L.inSlot({ ...s, rot: s.rot * 0.3 }, this.fan.cw * 1.2, this.fan.ch * 1.15, x, y, lift)) return pk;
-    }
     return this.hitHand(x, y);
   }
 
@@ -2293,8 +3289,12 @@ export class CardTable implements TableView {
     const cam = this.camera;
     for (const s of this.seats) {
       if (!this.isOpen(s)) continue;
-      for (const o of this.hands[s]) {
-        if (!o.vis || !o.card || o.pos.y <= bestY) continue;
+      const h = this.hands[s];
+      for (let i = 0; i < h.length; i++) {
+        const o = h[i];
+        // each card stands in front of its left neighbour; a peeked card is in front of all
+        const rank = this.peek?.o === o ? 1e9 : s * 1000 + i;
+        if (!o.vis || !o.card || rank <= bestY) continue;
         const hw = (L.CARD_W / 2) * o.s;
         const hh = (L.CARD_H / 2) * o.s;
         const c = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
@@ -2315,20 +3315,11 @@ export class CardTable implements TableView {
         }
         if (pos === 0 || neg === 0) {
           best = { seat: s, o };
-          bestY = o.pos.y;
+          bestY = rank;
         }
       }
     }
     return best;
-  }
-
-  /** mouse hover: peek whatever card is under the cursor */
-  private hover(x: number, y: number): void {
-    const i = this.hitHandPeek(x, y);
-    if (i >= 0) return this.setPeek(0, this.hands[0][i]);
-    const op = this.hitOpen(x, y);
-    if (op) return this.setPeek(op.seat, op.o);
-    this.setPeek(0, null);
   }
 
   private onDown = (e: PointerEvent): void => {
@@ -2340,7 +3331,6 @@ export class CardTable implements TableView {
     let wasPeek = false;
     if (idx >= 0) {
       kind = 'hand';
-      this.setPeek(0, this.hands[0][idx]);
     } else {
       const op = this.hitOpen(x, y);
       if (op) {
@@ -2350,7 +3340,8 @@ export class CardTable implements TableView {
       } else if (this.req && this.hitDeck(x, y)) kind = 'deck';
     }
     if (!kind) {
-      if (touch) this.setPeek(0, null);
+      // a tap on the table lets go of the focused card
+      this.setPeek(0, null);
       return;
     }
     this.ptr = { id: e.pointerId, x0: x, y0: y, x, y, idx, deck: kind === 'deck', dragging: false, t: performance.now(), kind, slid: false, touch, wasPeek };
@@ -2363,13 +3354,7 @@ export class CardTable implements TableView {
 
   private onMove = (e: PointerEvent): void => {
     const p = this.ptr;
-    if (e.pointerId !== p.id) {
-      if (p.id === -1 && e.pointerType === 'mouse' && e.buttons === 0) {
-        const { x, y } = this.localXY(e);
-        this.hover(x, y);
-      }
-      return;
-    }
+    if (e.pointerId !== p.id) return;
     const { x, y } = this.localXY(e);
     p.x = x;
     p.y = y;
@@ -2386,7 +3371,8 @@ export class CardTable implements TableView {
     const o = this.hands[0][p.idx];
     if (!p.dragging && !p.slid) {
       const up = p.y0 - y;
-      if (up > 14 && up > dxAbs && o && o.card && this.req && this.req.playable.has(o.card.id)) {
+      // any card can be dragged on your turn; only a playable one is played when dropped
+      if (up > 14 && up > dxAbs && o && o.card && this.req) {
         p.dragging = true;
         this.peek = null;
         o.held = true;
@@ -2430,32 +3416,27 @@ export class CardTable implements TableView {
     }
     if (p.kind === 'open') {
       // partner cards are never playable: a tap toggles the peek, a slide just ends it
-      if (p.touch && (p.slid || p.wasPeek)) this.setPeek(0, null);
+      if (p.slid || p.wasPeek) this.setPeek(0, null);
       return;
     }
     const o = this.hands[0][p.idx];
     if (!o) return;
     const ok = !!r && !!o.card && r.playable.has(o.card.id);
     if (p.dragging) {
-      if (p.y0 - y > Math.max(50, this.fan.ch * 0.6) && ok) this.resolvePick(o.card!.id);
-      else {
-        o.held = false;
-        void this.relayout(0, 0.2);
-        this.kick();
+      const far = p.y0 - y > Math.max(50, this.fan.ch * 0.6);
+      if (far && ok) return this.resolvePick(o.card!.id);
+      o.held = false;
+      if (far) {
+        this.sfx('invalid');
+        this.shakeCard(o);
       }
-      if (p.touch) this.setPeek(0, null);
+      void this.relayout(0, 0.2);
+      this.kick();
       return;
     }
-    if (p.slid) {
-      if (p.touch) this.setPeek(0, null);
-      return;
-    }
-    if (moved < 16 && r) {
-      if (ok) return this.resolvePick(o.card!.id);
-      this.sfx('invalid');
-      this.shakeCard(o);
-    }
-    if (p.touch) this.setPeek(0, null);
+    if (p.slid) return;
+    // a tap only focuses the card (tap it again to let go); playing takes a drag
+    if (moved < 16) this.setPeek(0, this.peek?.seat === 0 && this.peek.o === o ? null : o);
   };
 
   private onCancel = (e: PointerEvent): void => {
@@ -2466,12 +3447,11 @@ export class CardTable implements TableView {
       o.held = false;
       void this.relayout(0, 0.2);
     }
-    this.setPeek(0, null);
     this.kick();
   };
 
-  private onLeave = (e: PointerEvent): void => {
-    if (e.pointerType === 'mouse' && this.ptr.id === -1) this.setPeek(0, null);
+  private onLeave = (_e: PointerEvent): void => {
+    // the focus stays when the mouse leaves (no hover behaviour)
   };
   // ───────────────────────── plates ─────────────────────────
 
@@ -2482,84 +3462,28 @@ export class CardTable implements TableView {
   private emitPlates(): void {
     const cb = this.opts.onPlates;
     if (!cb || this.disposed) return;
-    const hf = L.fanLayout(Math.max(7, this.hands[0].length), { W: this.W, H: this.H });
-    const ps = this.partnerSeat();
-    const env: L.PlateEnv = {
-      W: this.W, H: this.H, hudTop: HUD_TOP, handTop: hf.top, handLeft: L.fanLeft(hf), portrait: this.portrait,
-      humanRight: ps >= 0 && this.sideOf(ps) === 'lowerLeft',
-      topPlateSide: ps < 0 ? undefined : this.sideOf(ps) === 'lowerLeft' ? 'right' : 'left',
-      sidePlateBelow: ps >= 0 && !this.portrait,
-    };
-    const out: SeatPlate[] = [];
-    const fanBoxes: L.Box[] = [];
-    for (const s of this.seats) {
+    const list: L.PlateSeat[] = this.seats.map((s) => {
       const side = this.sideOf(s);
       const n = this.hands[s].length;
-      let ax = 0;
-      let ay = 0;
-      let hx = 0;
-      let hy = 0;
-      const pside = side === 'lowerLeft' || side === 'lowerRight';
-      if (side !== 'bottom' && (pside || this.isOpen(s))) {
-        const f = pside ? this.partnerFanFor(s, Math.max(1, n)) : this.openFanFor(s, Math.max(1, n));
-        // screen bbox of the fan's table rectangle (all four corners: perspective widens the near side)
-        let x0 = Infinity;
-        let x1 = -Infinity;
-        let y0 = Infinity;
-        let y1 = -Infinity;
-        for (const [sx, sz] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
-          this.toScreen(tmpV.set(f.cx + sx * f.hx, 0.02, f.cz + sz * f.hz), scr);
-          x0 = Math.min(x0, scr.x);
-          x1 = Math.max(x1, scr.x);
-          y0 = Math.min(y0, scr.y);
-          y1 = Math.max(y1, scr.y);
-        }
-        ax = (x0 + x1) / 2;
-        ay = (y0 + y1) / 2;
-        hx = (x1 - x0) / 2;
-        hy = (y1 - y0) / 2 + 4;
-      } else if (side !== 'bottom') {
-        const a = this.anchorOf(s);
-        this.toScreen(tmpV.set(a.x, 0, a.z), scr);
-        ax = scr.x;
-        ay = scr.y;
-        const len = Math.max(L.oppFanLen(Math.max(n, 1), side, this.dims, this.oppMaxLen(s)), L.CARD_W * L.OPP_SCALE) / 2;
-        const across = (L.CARD_H * L.OPP_SCALE) / 2;
-        const along = side === 'top';
-        const dx = along ? len : across;
-        const dz = along ? across : len;
-        this.toScreen(tmpV.set(a.x - dx, 0, a.z - dz), scr);
-        const x0 = scr.x;
-        const y0 = scr.y;
-        this.toScreen(tmpV.set(a.x + dx, 0, a.z + dz), scr);
-        hx = Math.abs(scr.x - x0) / 2;
-        hy = Math.abs(scr.y - y0) / 2;
-      }
-      if (side !== 'bottom' && n > 0) fanBoxes.push({ x: ax, y: ay, w: 2 * hx, h: 2 * hy, seat: s });
-      out.push(
-        L.plateBox(
-          { seat: s, side, ax, ay, halfX: hx, halfY: hy, count: n, active: this.turnSeat === s, winner: this.winner === s, scale: this.plateScale[s], visible: this.platesOn },
-          env,
-        ),
-      );
+      return {
+        seat: s, side, count: n, hand: side === 'bottom' ? null : this.handFor(s, Math.max(1, n)),
+        active: this.turnSeat === s, winner: this.winner === s, scale: this.plateScale[s], visible: this.platesOn,
+      };
+    });
+    // the deck / pile on screen
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (const [x, z] of [[this.deckPos.x - 0.4, -0.55], [this.pilePos.x + 0.4, -0.55], [this.deckPos.x - 0.4, 0.6], [this.pilePos.x + 0.4, 0.6]]) {
+      this.toScreen(tmpV.set(x, 0.1, z), scr);
+      x0 = Math.min(x0, scr.x);
+      x1 = Math.max(x1, scr.x);
+      y0 = Math.min(y0, scr.y);
+      y1 = Math.max(y1, scr.y);
     }
-    // plates never sit on each other or on the deck / pile
-    {
-      let bx0 = Infinity;
-      let bx1 = -Infinity;
-      let by0 = Infinity;
-      let by1 = -Infinity;
-      for (const [x, z] of [[this.deckPos.x - 0.4, -0.55], [this.pilePos.x + 0.4, -0.55], [this.deckPos.x - 0.4, 0.6], [this.pilePos.x + 0.4, 0.6]]) {
-        this.toScreen(tmpV.set(x, 0.1, z), scr);
-        bx0 = Math.min(bx0, scr.x);
-        bx1 = Math.max(bx1, scr.x);
-        by0 = Math.min(by0, scr.y);
-        by1 = Math.max(by1, scr.y);
-      }
-      L.separatePlates(out, [{ x: (bx0 + bx1) / 2, y: (by0 + by1) / 2, w: bx1 - bx0, h: by1 - by0 }, ...fanBoxes], this.W, this.H, HUD_TOP, 6,
-        // side seating: the partner's slot first, then the side opponent, the top seat last
-        ps >= 0 ? [0, ps, ...this.seats.filter((x) => x !== 0 && x !== ps && this.sideOf(x) !== 'top'), ...this.seats.filter((x) => this.sideOf(x) === 'top')] : undefined);
-    }
+    const pile: L.Box = { x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 };
+    const out = L.layoutPlates(this.W, this.H, this.portrait, (x, y, z, o) => L.projectCss(this.viewProj.elements, x, y, z, this.W, this.H, o), list, this.hands[0].length, pile).plates;
     for (const p of out) {
       const sh = this.plateShake[p.seat];
       if (sh) {
@@ -2585,6 +3509,15 @@ export class CardTable implements TableView {
 
   // ───────────────────────── loop ─────────────────────────
 
+  /** the direction arrows turn slowly while a round is on (not with reduced motion) */
+  private spinning(): boolean {
+    return this.platesOn && !this.reduced && !this.paused;
+  }
+
+  private arrowMoving(): boolean {
+    return this.turnArrow.visible && Math.abs(this.arrowTarget - this.arrowYaw) > 0.002;
+  }
+
   private kick(): void {
     this.loop.kick();
   }
@@ -2597,7 +3530,7 @@ export class CardTable implements TableView {
   };
 
   private loopFrame(now: number): boolean {
-    const hard = this.anim.active || this.dust.busy || this.confetti.busy || this.ptr.dragging || this.push > 0;
+    const hard = this.anim.active || this.dust.busy || this.confetti.busy || this.ptr.dragging || this.push > 0 || this.drawCue.visible || this.arrowMoving() || this.spinning();
     const woke = this.lastT === 0;
     const minGap = hard ? this.q.frameMs : 0;
     if (!woke && minGap > 0 && now - this.lastRender < minGap && now >= this.lastRender) return true;
@@ -2612,7 +3545,7 @@ export class CardTable implements TableView {
     this.renderer.render(this.scene, this.camera);
     if (this.perf) this.perf.frame(now, performance.now() - w0, this.renderer, this.quality, [this.scene], this.q.aa);
     if (this.opts.onFrameStats) this.sampleFrame(now, hard && !woke);
-    const more = this.anim.active || this.dust.busy || this.confetti.busy || this.ptr.dragging || this.push > 0;
+    const more = this.anim.active || this.dust.busy || this.confetti.busy || this.ptr.dragging || this.push > 0 || this.drawCue.visible || this.arrowMoving() || this.spinning();
     if (!more) this.lastT = 0;
     return more;
   }
@@ -2653,6 +3586,26 @@ export class CardTable implements TableView {
   }
 
   private update(dt: number): void {
+    if (this.spinning() && !this.dirFx) this.dirRing.rotation.y += dt * DIR_SPIN * -Math.sign(this.dirRing.scale.x || 1); // along the way the arrows point (mirrored ring: minus)
+    if (this.turnArrow.visible) {
+      this.arrowYaw += (this.arrowTarget - this.arrowYaw) * Math.min(1, dt * (this.reduced ? 60 : 9));
+      const r = this.portrait ? 0.95 : 1.05;
+      this.turnArrow.position.set(this.pilePos.x + Math.sin(this.arrowYaw) * r, 0.006, this.pilePos.z + Math.cos(this.arrowYaw) * r);
+      this.turnArrow.rotation.y = this.arrowYaw;
+      if (!this.reduced) {
+        // a gentle breath: a touch larger and brighter, about every two seconds
+        const k = Math.sin((this.turnArrow.userData.t = (this.turnArrow.userData.t + dt * 3.1) % (Math.PI * 2)));
+        this.turnArrow.scale.setScalar(1 + 0.07 * k);
+        (this.turnArrow.material as THREE.MeshBasicMaterial).opacity = 0.84 + 0.14 * k;
+      }
+    }
+    if (this.drawCue.visible) {
+      // hop over the deck: a bounce (fast up, ease down) and a slow spin
+      this.cueT += dt;
+      const hop = Math.abs(Math.sin(this.cueT * 3.2));
+      this.drawCue.position.set(this.deckPos.x, this.deckH() + 0.5 + hop * 0.28, this.deckPos.z);
+      this.drawCue.rotation.y = this.cueT * 1.4;
+    }
     this.anim.update(dt);
     if (this.needsSettle && this.busy === 0 && !this.anim.active) {
       this.needsSettle = false;
@@ -2703,13 +3656,58 @@ export class CardTable implements TableView {
     mesh.instanceMatrix.needsUpdate = true;
     this.aCell.needsUpdate = true;
     this.aFx.needsUpdate = true;
+    this.writeReflections();
+  }
+
+  /** mirror every opponent's hand card under the felt */
+  private writeReflections(): void {
+    const r = this.refl;
+    const rc = this.reflCell.array as Float32Array;
+    const rf = this.reflFace.array as Float32Array;
+    let k = 0;
+    for (let s = 1; s < this.hands.length && k < REFL_MAX; s++) {
+      for (const o of this.hands[s]) {
+        if (!o.vis || k >= REFL_MAX) continue;
+        tmpS.set(o.s * o.sqx, o.s * o.sqy, o.s);
+        tmpM.compose(o.pos, o.quat, tmpS).premultiply(MIRROR_Y);
+        r.setMatrixAt(k, tmpM);
+        rc[k * 2] = CELL_UV[o.cell * 2];
+        rc[k * 2 + 1] = CELL_UV[o.cell * 2 + 1];
+        rf[k] = o.card ? 1 : 0;
+        k++;
+      }
+    }
+    r.count = k;
+    r.instanceMatrix.needsUpdate = true;
+    this.reflCell.needsUpdate = true;
+    this.reflFace.needsUpdate = true;
   }
 
   // ───────────────────────── public API ─────────────────────────
 
   setTurn(seat: Seat | null): void {
     this.turnSeat = seat;
+    this.aimTurnArrow();
     this.emitPlates();
+  }
+
+  /** point the turn triangle at the current seat (it glides there in update) */
+  private aimTurnArrow(): void {
+    const seat = this.turnSeat;
+    this.turnArrow.visible = seat !== null && this.platesOn;
+    if (seat === null) return;
+    const a = this.anchorOf(seat);
+    const target = Math.atan2(a.x - this.pilePos.x, a.z - this.pilePos.z);
+    if (!this.turnArrow.userData.aimed) {
+      this.arrowYaw = target;
+      this.turnArrow.userData.aimed = true;
+    }
+    // the shortest way round
+    let d = target - this.arrowYaw;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    this.arrowTarget = this.arrowYaw + d;
+    this.kick();
   }
 
   reset(): void {
@@ -2717,8 +3715,11 @@ export class CardTable implements TableView {
     this.anim.finishAll();
     this.cancelHumanPick();
     this.clearTable();
+    this.chosen.clear();
     this.platesOn = false;
     this.turnSeat = null;
+    this.turnArrow.visible = false;
+    this.turnArrow.userData.aimed = false;
     this.push = 0;
     this.direction = 1;
     this.dirRing.scale.x = Math.abs(this.dirRing.scale.x) * this.ringScaleSign(1);
@@ -2755,10 +3756,11 @@ export class CardTable implements TableView {
       }
       for (const c of R.discard) this.remember(c);
       this.discardCount = R.discard.length;
+      const topId = R.discard[R.discard.length - 1]?.id;
       for (const c of R.discard.slice(-PILE_KEEP)) {
         const o = this.alloc();
         if (!o) break;
-        this.setFace(o, c);
+        this.setFace(o, c, this.chosen.get(c.id) ?? (c.id === topId ? R.activeColor : null));
         this.pileJitter(o);
         this.pile.push(o);
       }
@@ -2769,8 +3771,10 @@ export class CardTable implements TableView {
       this.setActiveColor(R.activeColor, true);
       this.showBadge(R.pendingDraw, false);
       this.turnSeat = R.turn;
+      this.turnArrow.userData.aimed = false;
       this.fan = L.fanLayout(this.hands[0].length, { W: this.W, H: this.H });
       this.snapAll();
+      this.aimTurnArrow();
       this.emitPlates();
       this.kick();
     };
@@ -2850,6 +3854,8 @@ export class CardTable implements TableView {
       else o.card = null;
     });
     this.sortOpen(seat);
+    // an open hand the camera framing did not expect: frame again and move everything to the new view
+    if (this.refit()) void this.settleAll(0.3);
     const sig = h.map((o) => o.card?.id ?? -1).join(',');
     if (was && sig === this.openSig[seat]) return;
     this.openSig[seat] = sig;
@@ -2872,7 +3878,8 @@ export class CardTable implements TableView {
 
   /** seats / teams changed: move fans, plates, ring and the felt tint to the new arrangement */
   private applyArrangement(): void {
-    const changed = this.updateArrangement();
+    let changed = this.updateArrangement();
+    changed = this.refit() || changed;
     this.syncFelt();
     if (changed) {
       if (this.busy === 0 && !this.anim.active) this.snapAll();
@@ -2970,6 +3977,13 @@ export class CardTable implements TableView {
     this.felt.geometry.dispose();
     (this.felt.material as THREE.Material).dispose();
     this.feltTex?.dispose();
+    this.refl.geometry.dispose();
+    (this.refl.material as THREE.Material).dispose();
+    this.turnArrow.geometry.dispose();
+    (this.turnArrow.material as THREE.MeshBasicMaterial).map?.dispose();
+    (this.turnArrow.material as THREE.Material).dispose();
+    this.drawCue.geometry.dispose();
+    (this.drawCue.material as THREE.Material).dispose();
     this.glowRing.geometry.dispose();
     (this.glowRing.material as THREE.Material).dispose();
     this.glowTex.dispose();
@@ -2977,8 +3991,9 @@ export class CardTable implements TableView {
     (this.dirRing.material as THREE.Material).dispose();
     this.dirTex.dispose();
     this.boxGeo.dispose();
+    this.pileGeo.dispose();
     this.boxMat.dispose();
-    this.edgeTex.dispose();
+    (this.deckRefl.material as THREE.Material).dispose();
     this.stamp.material.dispose();
     this.stampTex.dispose();
     this.badge.material.dispose();
@@ -2990,7 +4005,10 @@ export class CardTable implements TableView {
     this.flash.material.dispose();
     this.flashTex.dispose();
     for (const sp of this.skipStamps) sp.material.dispose();
+    this.skipBig.material.dispose();
     this.skipTex.dispose();
+    this.penBig.material.dispose();
+    this.penMarkTex.dispose();
 
     this.dust.dispose();
     this.confetti.dispose();

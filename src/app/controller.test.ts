@@ -11,9 +11,15 @@ function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seati
   const match = engine.createMatch(rules, { mode, players, seating: opts.seating, partnerSide: opts.partnerSide }, seed);
   const events: GameEvent[] = [];
   let picks = 0;
+  /** colour flow: preview:<id> → color → the play event */
+  const flow: string[] = [];
   const view: GameView = {
+    previewPlay: async (id) => {
+      flow.push(`preview:${id}`);
+    },
     handle: async (ev) => {
       events.push(ev);
+      if (ev.type === 'play' && ev.seat === 0 && ev.card.face.color === null) flow.push(`play:${ev.card.id}`);
     },
     requestHumanPick: async (playable, canDraw) => {
       picks++;
@@ -45,7 +51,10 @@ function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seati
       kuState = s;
       if (opts.tapKu && s === 'armed') queueMicrotask(() => hud.onKu?.());
     },
-    pickColor: async () => 'mar',
+    pickColor: async () => {
+      flow.push('color');
+      return 'mar';
+    },
     pickTarget: async (seats) => seats[0],
     kuPop: async () => {},
     showResponse: async (o) => (o.canShield ? 'shield' : o.canMirror ? 'mirror' : 'accept'),
@@ -84,7 +93,7 @@ function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seati
     sleep: () => Promise.resolve(),
     random: () => 0.5,
   });
-  return { c, events, open, get summaries() { return summaries; }, get ended() { return ended; }, get exited() { return exited; }, get kuState() { return kuState; } };
+  return { c, events, open, flow, get summaries() { return summaries; }, get ended() { return ended; }, get exited() { return exited; }, get kuState() { return kuState; } };
 }
 
 describe('GameController (offline loop)', () => {
@@ -127,6 +136,18 @@ describe('GameController (offline loop)', () => {
     const h = harness('partners', 4, 13, { partnerOpen: false });
     await h.c.run();
     expect(h.open.every((o) => o.n === null)).toBe(true);
+  }, 20_000);
+
+  it('puts a human wild on the pile before asking its colour', async () => {
+    const h = harness('classic', 2, 9, { tapKu: true });
+    await h.c.run();
+    const pre = h.flow.filter((f) => f.startsWith('preview:'));
+    expect(pre.length).toBeGreaterThan(0);
+    for (let i = 0; i < h.flow.length; i++) {
+      if (!h.flow[i].startsWith('preview:')) continue;
+      expect(h.flow[i + 1]).toBe('color');
+      expect(h.flow[i + 2]).toBe(`play:${h.flow[i].slice(8)}`);
+    }
   }, 20_000);
 
   it('ignores a move that is not legal', async () => {

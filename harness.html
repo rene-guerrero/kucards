@@ -1,68 +1,120 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>KuCards render harness</title>
     <style>
-      html, body { margin: 0; height: 100%; background: #111; color: #eee; font: 13px system-ui, sans-serif; overflow: hidden; }
-      #wrap { position: absolute; inset: 0 0 132px 0; display: flex; align-items: center; justify-content: center; }
-      #app { position: relative; width: 100%; height: 100%; overflow: hidden; }
-      #app.phoneP { width: 390px; height: 844px; max-height: 100%; }
-      #app.phoneL { width: 844px; height: 390px; max-width: 100%; }
-      #bar { position: absolute; left: 0; right: 0; bottom: 28px; height: 104px; display: flex; flex-wrap: wrap; gap: 4px; align-content: center; padding: 0 6px; background: #222; overflow-y: auto; }
-      button, select { background: #3a3a3a; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 3px 7px; font: inherit; cursor: pointer; }
-      #log { position: absolute; top: 4px; left: 6px; pointer-events: none; color: #ffd; text-shadow: 0 1px 2px #000; font-size: 12px; z-index: 5; white-space: pre; }
-      .plate { position: absolute; z-index: 4; pointer-events: none; box-sizing: border-box; border: 1px solid rgba(255,246,230,.5); border-radius: 10px; background: rgba(19,35,46,.72); color: #fff6e6; font: 600 11px system-ui; display: flex; align-items: center; justify-content: center; gap: 4px; transition: none; }
-      .plate.active { border-color: #ffb627; box-shadow: 0 0 10px #ffb627; }
-      .plate.winner { background: rgba(255,182,39,.5); }
-      #snd { position: absolute; left: 0; right: 0; bottom: 0; height: 28px; display: flex; gap: 3px; align-items: center; padding: 0 6px; background: #1a1a1a; overflow-x: auto; white-space: nowrap; }
-      #snd button { padding: 1px 6px; font-size: 11px; }
-      .plate b { background: #ff6f61; border-radius: 8px; padding: 0 5px; }
+      body#hb { background: #0c1820; color: #e8eef2; font: 13px system-ui, sans-serif; }
+      #app { position: fixed; inset: 0; overflow: hidden; }
+      #app.phoneP { inset: 50% auto auto 50%; width: 390px; height: 844px; max-height: 100%; transform: translate(-50%, -50%); }
+      #app.phoneL { inset: 50% auto auto 50%; width: 844px; height: 390px; max-width: 100%; transform: translate(-50%, -50%); }
+      #log { position: fixed; left: 8px; bottom: 6px; pointer-events: none; color: rgba(255,255,230,.6); text-shadow: 0 1px 2px #000; font: 11px/1.35 ui-monospace, monospace; z-index: 5; white-space: pre; max-width: 60vw; overflow: hidden; }
+      #hb .plate { position: absolute; z-index: 4; pointer-events: none; box-sizing: border-box; border: 1px solid rgba(255,246,230,.5); border-radius: 10px; background: rgba(19,35,46,.72); color: #fff6e6; font: 600 11px system-ui; display: flex; align-items: center; justify-content: center; gap: 4px; }
+      #hb .plate.active { border-color: #ffb627; box-shadow: 0 0 10px #ffb627; }
+      #hb .plate.winner { background: rgba(255,182,39,.5); }
+      #hb .plate b { background: #ff6f61; border-radius: 8px; padding: 0 5px; }
+      /* the real HUD is mounted only for its colour pane */
+      #ui .hud > :not(.color-pane) { display: none !important; }
+
+      #hb #tgl { position: fixed; top: 8px; right: 8px; z-index: 40; width: 36px; height: 36px; padding: 0; border-radius: 10px; font-size: 18px; line-height: 1; }
+      #panel { position: fixed; top: 8px; right: 8px; bottom: 8px; width: 264px; z-index: 30; padding: 52px 10px 10px; box-sizing: border-box; overflow-y: auto; border-radius: 14px; background: rgba(14,22,28,.82); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.1); box-shadow: 0 8px 30px rgba(0,0,0,.45); transition: transform .22s ease, opacity .22s; scrollbar-width: thin; }
+      #panel.closed { transform: translateX(calc(100% + 16px)); opacity: 0; pointer-events: none; }
+      #panel h1 { position: absolute; top: 0; left: 0; margin: 0; padding: 18px 12px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #9fb4c0; }
+      #hb button:not(.color-quad), #hb select { background: rgba(255,255,255,.08); color: #e8eef2; border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: 5px 9px; font: inherit; cursor: pointer; }
+      #hb button:not(.color-quad):hover { background: rgba(255,255,255,.16); }
+      #hb button.pri { background: #ffb627; border-color: #ffb627; color: #2b1c00; font-weight: 700; }
+      .g { border-top: 1px solid rgba(255,255,255,.08); padding: 6px 0; }
+      .g summary { cursor: pointer; font-weight: 700; font-size: 12px; color: #c9d6dd; padding: 4px 2px; user-select: none; }
+      .row { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 0 4px; align-items: center; }
+      .row label { display: flex; align-items: center; gap: 4px; color: #9fb4c0; font-size: 12px; }
+      .hint { flex-basis: 100%; margin: 2px 0 0; color: #8aa0ad; font-size: 11px; line-height: 1.35; }
+      #snd button { padding: 2px 7px; font-size: 11px; }
+      @media (max-width: 700px), (max-height: 500px) {
+        #panel { width: min(78vw, 300px); background: rgba(14,22,28,.94); }
+      }
     </style>
   </head>
-  <body>
-    <div id="wrap"><div id="app"></div></div>
+  <body id="hb">
+    <div id="app"></div>
+    <div id="ui"></div>
     <div id="log"></div>
-    <div id="bar">
-      <button id="bDeal">Deal</button>
-      <button id="bPick">Human pick</button>
-      <button id="bPlay">Human plays random</button>
-      <button id="bOpp">Opponents play</button>
-      <button id="bDraw">Draw (you 2, opp 1)</button>
-      <button id="bStack">+4 stack</button>
-      <button id="bSkip">Skip</button>
-      <button id="bRev">Reverse</button>
-      <button id="bSwap">Swap 0↔2</button>
-      <button id="bRot">Rotate</button>
-      <button id="bSweep">Sweep</button>
-      <button id="bKu">¡Ku! moment</button>
-      <button id="bCaught">Ku caught</button>
-      <button id="bOpen">Open partner hand</button>
-      <button id="bTeams">Teams: none</button>
-      <button id="bSideDeal">Codo a codo deal (big)</button>
-      <button id="bPen">Penalty window</button>
-      <button id="bTake">Take penalty</button>
-      <button id="bShield">Shield</button>
-      <button id="bMirror">Mirror</button>
-      <button id="bSkipAll">Skip all</button>
-      <button id="bWildColor">WildColor stream</button>
-      <button id="bCyclone">Cyclone cards</button>
-      <button id="bShuffle">Reshuffle</button>
-      <button id="bOut">Eliminate</button>
-      <button id="bEnd">Round end</button>
-      <button id="bReset">Reset</button>
-      <button id="bRestore">Restore</button>
-      <select id="sPlayers"><option>2</option><option>3</option><option selected>4</option></select>
-      <select id="sFrame"><option value="">fill</option><option value="phoneP">phone portrait</option><option value="phoneL">phone landscape</option></select>
-      <select id="sQ"><option>low</option><option selected>medium</option><option>high</option></select>
-      <select id="sSpeed"><option value="1">1x</option><option value="1.8">fast</option><option value="0.4">slow</option></select>
-      <select id="sTable"><option>teal</option><option>navy</option><option>wine</option><option>charcoal</option><option>wood</option><option>sand</option></select>
-      <select id="sBack"><option>ku</option><option>weave</option><option>sun</option><option>night</option></select>
-      <label><input type="checkbox" id="cReduced" /> reduced</label>
-    </div>
-    <div id="snd"><b style="font-size:11px">sfx:</b></div>
+    <button id="tgl" title="Toggle controls" aria-label="Toggle controls">&#9776;</button>
+    <aside id="panel">
+      <h1>Render harness</h1>
+      <div class="row" style="margin:6px 0 10px"><button id="bNext" class="primary" style="flex:1;font-weight:700">▶ Next turn (current player plays)</button></div>
+      <details class="g" open><summary>Deal &amp; setup</summary><div class="row">
+        <label>Players <select id="sPlayers"><option>2</option><option>3</option><option selected>4</option></select></label>
+        <button id="bDeal" class="pri">Deal</button>
+        <button id="bSideDeal">Codo a codo deal</button>
+        <button id="bBig">Big hands (25)</button>
+        <button id="bTeams">Teams: none</button>
+        <button id="bOpen">Open partner hand</button>
+        <button id="bShuffle">Reshuffle</button>
+        <button id="bReset">Reset</button>
+        <button id="bRestore">Restore</button>
+      </div></details>
+      <details class="g" open><summary>Your turn</summary><div class="row">
+        <button id="bPick" class="pri">Human pick</button>
+        <button id="bMustDraw">Must draw</button>
+        <button id="bPlay">Play random</button>
+        <button id="bDraw">Draw (you 2, opp 1)</button>
+        <p class="hint">Drag a playable card up toward the pile or tap it; tap the deck to draw.</p>
+      </div></details>
+      <details class="g" open><summary>Choose colour</summary><div class="row">
+        <button id="bPickColor" class="pri">Play wild + pick colour</button>
+        <button id="bPickKind">Card kind: random</button>
+        <button id="bOppWild">Opponent wild (random colour)</button>
+        <p class="hint">Opens the real HUD colour pane over the pile; the card lands in the colour you tap.</p>
+      </div></details>
+      <details class="g"><summary>Cards</summary><div class="row">
+        <label>Kind <select id="pKind"></select></label>
+        <label>Colour <select id="pCol"><option>sol</option><option>mar</option><option>palma</option><option>coral</option></select></label>
+        <label>Value <select id="pVal"></select></label>
+        <span id="pPrev" style="display:inline-block;min-width:54px"></span>
+        <button id="pHand" class="pri">Add to my hand</button>
+        <button id="pPile">Put on pile</button>
+        <button id="pOpp">Give to opponent</button><select id="pSeat" title="Opponent seat"></select>
+        <input id="pText" placeholder="r5 g+2 wild wild4 b-skip" style="width:100%;box-sizing:border-box" />
+        <button id="pSet">Set my hand</button>
+        <small style="opacity:.7">Colour letter + value or kind: y=sol m/b=mar g=palma r=coral. Value 0-9 (r5), kind after optional "-": skip skipall rev +2 +6 shield sweep mirror flip (g+2, b-skip). Colourless: wild wild4 wildcolor draw10 swap.</small>
+      </div></details>
+      <details class="g"><summary>Opponents</summary><div class="row">
+        <button id="bOpp">Opponents play</button>
+        <button id="bOppDraw">Opponent draws</button>
+      </div></details>
+      <details class="g"><summary>Powers</summary><div class="row">
+        <button id="bStack">+2/+4 stack</button>
+        <button id="bSkip">Skip</button>
+        <button id="bRev">Reverse</button>
+        <button id="bSwap">Swap 0↔2</button>
+        <button id="bRot">Rotate</button>
+        <button id="bSweep">Sweep</button>
+        <button id="bShield">Shield</button>
+        <button id="bMirror">Mirror</button>
+        <button id="bSkipAll">Skip all</button>
+        <button id="bCyclone">Cyclone cards</button>
+        <button id="bWildColor">Wild colour stream</button>
+      </div></details>
+      <details class="g"><summary>Moments</summary><div class="row">
+        <button id="bKu">¡Ku!</button>
+        <button id="bCaught">Ku caught</button>
+        <button id="bCatchWin">¡Ku! catch window (tap avatar)</button>
+        <button id="bPen">Penalty window</button>
+        <button id="bTake">Take penalty</button>
+        <button id="bOut">Eliminate</button>
+        <button id="bEnd">Round end</button>
+      </div></details>
+      <details class="g"><summary>Look</summary><div class="row">
+        <label>Quality <select id="sQ"><option>low</option><option selected>medium</option><option>high</option></select></label>
+        <label>Speed <select id="sSpeed"><option value="1">1x</option><option value="1.8">fast</option><option value="0.4">slow</option></select></label>
+        <label>Table <select id="sTable"><option>teal</option><option>navy</option><option>wine</option><option>charcoal</option><option>wood</option><option>sand</option></select></label>
+        <label>Back <select id="sBack"><option>ku</option><option>weave</option><option>sun</option><option>night</option></select></label>
+        <label>Frame <select id="sFrame"><option value="">fill</option><option value="phoneP">phone portrait</option><option value="phoneL">phone landscape</option></select></label>
+        <label><input type="checkbox" id="cReduced" /> Reduced motion</label>
+      </div></details>
+      <details class="g"><summary>Sounds</summary><div class="row" id="snd"></div></details>
+    </aside>
     <script type="module" src="/src/render/harness.ts"></script>
-
   </body>
 </html>
