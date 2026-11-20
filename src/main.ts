@@ -6,27 +6,27 @@
 import 'kuavatars/avatars.css';
 import 'kuavatars/editor.css';
 import './ui/styles.css';
-import type { AppSettings, GameMode, Lineup, MatchState } from './contracts';
+import type { AppSettings, GameMode, Lineup, MatchState, RuleSettings } from './contracts';
 import { installErrorLog } from './app/errorLog';
 import { resolveQuality } from './app/perf';
-import { enterFullscreen } from './app/fullscreen';
 import { loadSettings, rulesFor, saveSettings, withMode } from './app/settings';
 import { clearSave, loadSave, saveSummary } from './app/save';
 import { startSession, type GameSession } from './app/session';
-import { createMatch, startRound } from './engine';
-import { initAudio, setAudioPrefs } from './audio/sfx';
+import { createMatch, sanitizeClock, startRound } from './engine';
+import { initAudio, setAudioPrefs, setMusicScene } from './audio/sfx';
 import { RULE_PRESETS, RULE_SETTINGS } from './engine/rules';
 import { buildAbout } from './ui/about';
 import { h, setReducedMotionPref, setUiQuality } from './ui/dom';
 import { buildHowto } from './ui/howto';
-import { setLang, t } from './ui/i18n';
+import { loc, setLang, t } from './ui/i18n';
 import { buildMenu } from './ui/menu';
 import { onlineAvailable } from './net/config';
 import { rememberedRoom } from './net/identity';
 import type { OnlineController } from './app/online';
 import { buildNewGame, type NewGameStart } from './ui/newgame';
 import { btn, confirmDialog, Overlay } from './ui/overlay';
-import { buildSettings, descriptorsForMode, presetName, rulesSummary } from './ui/settings';
+import { allPresets, loadProfiles } from './app/ruleProfiles';
+import { buildSettings, type RuleSelectItem, descriptorsForMode, presetName, rulesSummary, sameAs } from './ui/settings';
 
 installErrorLog();
 
@@ -37,7 +37,7 @@ function applySettings(prev: AppSettings | null): void {
   setLang(settings.language);
   setReducedMotionPref(!!settings.reducedMotion);
   setUiQuality(settings.quality);
-  if (prev) setAudioPrefs({ sound: settings.sound, music: settings.music, vibration: settings.vibration });
+  if (prev) setAudioPrefs({ sound: settings.sound, voice: settings.voice, music: settings.music, vibration: settings.vibration });
 }
 applySettings(null);
 initAudio(settings);
@@ -64,6 +64,7 @@ function backToGame(): void {
 
 async function play(match: MatchState, lineup: Lineup, restored: boolean): Promise<void> {
   stopBackdrop();
+  setMusicScene('game');
   current = 'game';
   backTo = 'game';
   overlay.showScreen(null);
@@ -75,6 +76,7 @@ async function play(match: MatchState, lineup: Lineup, restored: boolean): Promi
       updateSettings: (next) => update(next, 'sound'),
       onExit: () => {
         session = null;
+        setMusicScene('menu');
         backTo = 'menu';
         startBackdrop();
         show('menu');
@@ -87,21 +89,20 @@ async function play(match: MatchState, lineup: Lineup, restored: boolean): Promi
   );
 }
 
+/** Codo a codo partner side picked on the new-game screen (kept for the session) */
+let ngPartnerSide: 'after' | 'before' = 'after';
+
 function newGame(o: NewGameStart): void {
-  // starting a game is a tap: go fullscreen where the browser allows it (Android)
-  void enterFullscreen();
   clearSave();
-  const rules = { ...rulesFor(settings, o.mode), ...(o.seating ? { seating: o.seating } : {}) };
-  // Codo a codo: the partner is the left or the right neighbour, at random each match
-  const partnerSide = o.seating === 'side' ? (Math.random() < 0.5 ? 'after' : 'before') : undefined;
-  const match = createMatch(rules, { mode: o.mode, players: o.players, seating: o.seating, partnerSide });
-  // the character picked as partner (seat 1 on the new-game screen) moves to seat 3 when the partner plays before you
-  const lineup = partnerSide === 'before' ? { ...o.lineup, 1: o.lineup[3], 3: o.lineup[1] } : o.lineup;
-  void play(match, lineup, false);
+  const rules = rulesFor(settings, o.mode);
+  // Codo a codo: the partner sits where the new-game screen shows them (right = 'after', left = 'before');
+  // the lineup is already by seat (the screen moves the partner's character with the side)
+  const partnerSide = o.mode === 'sideBySide' ? (o.partnerSide ?? 'after') : undefined;
+  const match = { ...createMatch(rules, { mode: o.mode, players: o.players, teams: o.teams, partnerSide }), clock: sanitizeClock(o.clock) };
+  void play(match, o.lineup, false);
 }
 
 function continueGame(): void {
-  void enterFullscreen();
   const saved = loadSave();
   if (saved) void play(saved.match, saved.lineup, true);
   else show('newgame');
@@ -144,26 +145,45 @@ function screen(id: ScreenId): HTMLElement {
         presets: RULE_PRESETS,
         mode: settings.mode ?? 'classic',
         players: settings.players ?? 4,
+        teams: settings.teamPlay === true,
         lineup: settings.lineup ?? {},
+        partnerSide: ngPartnerSide,
+        onPartnerSide: (s) => (ngPartnerSide = s),
         avatars: settings.avatars !== false,
         humanFace: settings.avatarFace ?? 0,
         humanName: humanName(),
         rulesFor: (m) => rulesFor(settings, m),
-        presetName: (m) => presetName(RULE_PRESETS, RULE_SETTINGS, rulesFor(settings, m), m),
+        presetName: (m) => presetName(allPresets(), RULE_SETTINGS, rulesFor(settings, m), m),
         rulesSummary: (m) => rulesSummary(descriptorsForMode(RULE_SETTINGS, m), rulesFor(settings, m)),
+        ruleChoices: (m) => {
+          const ds = descriptorsForMode(RULE_SETTINGS, m);
+          const cur = rulesFor(settings, m);
+          const base = RULE_PRESETS.find((p) => p.id === m);
+          const sets = [...(base ? [{ label: loc(base.label), rules: base.rules }] : []), ...loadProfiles().filter((p) => p.mode === m).map((p) => ({ label: p.name, rules: p.rules }))];
+          const apply = (rules: RuleSettings) => {
+            const byMode = { ...settings.rulesByMode, [m]: { ...rules } };
+            update({ ...settings, rulesByMode: byMode, rules: settings.mode === m ? { ...rules } : settings.rules }, 'rulesByMode');
+          };
+          let seen = false;
+          const items: RuleSelectItem[] = sets.map((x) => {
+            const on = !seen && sameAs(cur, x.rules, ds);
+            seen ||= on;
+            return { label: x.label, on, pick: () => apply(x.rules) };
+          });
+          if (!seen) items.push({ label: t('settings.preset.custom'), on: true, custom: true });
+          return items;
+        },
         onMode: (m) => update(withMode(settings, m), 'mode'),
         onPlayers: (n) => update({ ...settings, players: n }, 'players'),
         onLineup: (l) => update({ ...settings, lineup: l }, 'lineup'),
-        onSeating: (seat) => {
-          const r = { ...rulesFor(settings, 'partners'), seating: seat };
-          const byMode = { ...settings.rulesByMode, partners: r };
-          update({ ...settings, rulesByMode: byMode, rules: settings.mode === 'partners' ? r : settings.rules }, 'rulesByMode');
-        },
+        onTeams: (on) => update({ ...settings, teamPlay: on }, 'teamPlay'),
         onRules: (m) => {
           backTo = 'newgame';
           rulesModeOnOpen = m;
           show('settings');
         },
+        clock: sanitizeClock(settings.clock),
+        onClock: (c) => update({ ...settings, clock: c }, 'clock'),
         onStart: newGame,
         onBack: () => show('menu'),
       });
@@ -251,7 +271,6 @@ if (!preview) startBackdrop();
 // ───────── online play (the controller and its screens load lazily) ─────────
 let online: OnlineController | null = null;
 async function openOnline(code?: string, quiet = false): Promise<void> {
-  if (!quiet) void enterFullscreen();
   if (!online) {
     const { OnlineController } = await import('./app/online');
     online = new OnlineController({

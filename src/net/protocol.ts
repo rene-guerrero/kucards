@@ -23,6 +23,7 @@ import type { FaceSpec } from 'kuavatars/faces';
  * Adding OPTIONAL fields is fine; renaming/removing anything requires updating both sides.
  */
 import type { Card, Difficulty, GameEvent, GameMode, Move, RuleSettings, Seat } from '../contracts';
+import type { ClockSettings } from '../engine/clock';
 
 /** KuCards speaks its own protocol (Kudominoes is v1) */
 export const PROTOCOL_VERSION = 2;
@@ -69,14 +70,18 @@ export interface PublicRoom {
   phase: RoomPhase;
   hostId: string; // playerId of the host (creator; passes to the next connected human if they leave)
   mode: GameMode;
-  /** 2–4 (always 4 in Parejas) */
+  /** 2–4 (always 4 in Codo a codo) */
   playerCount: number;
+  /** 2 vs 2 Enfrente (4 players, Clásico / Pura acción / Ciclón; absent from older servers = off) */
+  teamPlay?: boolean;
   /** index = Seat (0..3). Seats in play: SEATS_FOR[playerCount] ({2: [0,2], 3: [0,1,3], 4: [0,1,2,3]}). */
   seats: SeatOccupant[];
   rules: RuleSettings;
+  /** round limit / move times picked by the host (absent from older servers = no limit, 30 s) */
+  clock?: ClockSettings;
   /** running match scores by seat (null in the lobby) */
   scores: number[] | null;
-  /** Parejas: the two teams as seat lists (seating from rules.seating: across [[0,2],[1,3]], side [[0,1],[2,3]]) */
+  /** team play: the two teams as seat lists (2 vs 2 across [[0,2],[1,3]], Codo a codo [[0,1],[2,3]]) */
   teams?: [Seat[], Seat[]] | null;
 }
 
@@ -99,6 +104,10 @@ export interface SeatView {
   turnDeadline: number | null;
   /** absolute deadline (server ms) of the open response window, if any */
   windowEnds: number | null;
+  /** absolute end (server ms) of the round clock; null = no round limit */
+  roundEnds?: number | null;
+  /** the full time of the current move (ms), for the ring */
+  moveMs?: number;
 }
 
 /**
@@ -125,8 +134,10 @@ export type ClientMsg =
   /** lobby, host only: put a roster CPU in a seat (null = empty it) */
   | { t: 'setCpu'; seat: Seat; characterId: string | null }
   /** lobby, host only (Parejas is always 4 players) */
-  | { t: 'setMode'; mode: GameMode; playerCount: number }
+  | { t: 'setMode'; mode: GameMode; playerCount: number; teamPlay?: boolean }
   | { t: 'setRules'; rules: RuleSettings }
+  /** lobby, host only: round limit / move times (clamped by the server) */
+  | { t: 'setClock'; clock: ClockSettings }
   /** lobby/finished, host only: start (empty seats are auto-filled with roster CPUs) */
   | { t: 'start' }
   /**
@@ -156,7 +167,7 @@ export type ServerMsg =
    * The state after every change: whose turn it is, the deadlines, and the receiving seat's legal moves
    * (turn moves when it is theirs, out-of-turn moves any time; [] while a CPU covers them).
    */
-  | { t: 'turn'; seat: Seat; deadline: number | null; legal: Move[]; windowEnds: number | null }
+  | { t: 'turn'; seat: Seat; deadline: number | null; legal: Move[]; windowEnds: number | null; roundEnds?: number | null; moveMs?: number; /** final minute only: [seat, position] badges (1 = fewest card points) */ ranks?: [Seat, number][] }
   /** full private resync (after reconnect, or if the client reports it's out of sync) */
   | { t: 'sync'; room: PublicRoom; view: SeatView }
   | { t: 'phrase'; seat: Seat; id: string }
@@ -186,19 +197,34 @@ export const COVER_LEVEL: Difficulty = 'normal';
 /** quick phrases (ids are stable; text lives in the client i18n) — neutral Spanish, no slang */
 export const QUICK_PHRASES = ['hello', 'nice', 'oops', 'thinking', 'hurry', 'gg', 'thanks', 'wow'] as const;
 export type QuickPhraseId = (typeof QUICK_PHRASES)[number];
+/** avatar hand gestures sent through the same 'phrase' message as `g:<gesture>` (names as in KuAvatars) */
+export const CHAT_GESTURES = ['thumbsUp', 'thumbsDown', 'rub', 'clap', 'wave', 'shrug', 'facepalm', 'chin', 'mewing'] as const;
+export type ChatGesture = (typeof CHAT_GESTURES)[number];
+/** a quick phrase id or a gesture id ('g:wave') */
+export const isChatId = (id: string): boolean =>
+  (QUICK_PHRASES as readonly string[]).includes(id) || (id.startsWith('g:') && (CHAT_GESTURES as readonly string[]).includes(id.slice(2)));
+export const MAX_GESTURES = 5;
+export const DEFAULT_GESTURES: ChatGesture[] = ['thumbsUp', 'clap', 'wave', 'shrug', 'facepalm'];
+/** the stored gesture picks: known gestures, no repeats, at most 5 (not a list: the defaults) */
+export function sanitizeGestures(v: unknown): ChatGesture[] {
+  if (!Array.isArray(v)) return [...DEFAULT_GESTURES];
+  const out: ChatGesture[] = [];
+  for (const g of v) if ((CHAT_GESTURES as readonly string[]).includes(g) && !out.includes(g) && out.length < MAX_GESTURES) out.push(g);
+  return out;
+}
 
 /** seats in play by player count (same as the engine) */
 export const SEATS_FOR: Record<2 | 3 | 4, Seat[]> = { 2: [0, 2], 3: [0, 1, 3], 4: [0, 1, 2, 3] };
 
 /** the seats in play of a room */
 export function activeSeatsOf(room: { mode: GameMode; playerCount: number }): Seat[] {
-  if (room.mode === 'partners') return [0, 1, 2, 3];
+  if (room.mode === 'sideBySide') return [0, 1, 2, 3];
   const n = room.playerCount === 2 || room.playerCount === 3 ? room.playerCount : 4;
   return SEATS_FOR[n].slice();
 }
 
-/** Parejas teams of a room (seating from the rules; Codo a codo always pairs 0+1 and 2+3 online) */
-export function teamsFor(mode: GameMode, rules: RuleSettings): [Seat[], Seat[]] | null {
-  if (mode !== 'partners') return null;
-  return rules.seating === 'side' ? [[0, 1], [2, 3]] : [[0, 2], [1, 3]];
+/** teams of a room (Codo a codo always pairs 0+1 and 2+3 online; 2 vs 2 across pairs 0+2 and 1+3) */
+export function teamsFor(room: { mode: GameMode; playerCount: number; teamPlay?: boolean }): [Seat[], Seat[]] | null {
+  if (room.mode === 'sideBySide') return [[0, 1], [2, 3]];
+  return room.teamPlay && room.playerCount === 4 ? [[0, 2], [1, 3]] : null;
 }

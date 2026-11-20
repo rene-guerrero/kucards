@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import type { Difficulty, GameMode, MatchSetup, MatchState, Move, RuleSettings, Seat } from '../contracts';
 import { applyMove, buildDeck, cardCount, chooseMove, closeWindow, createMatch, giveOptions, isLegal, legalMoves, RULE_PRESETS, startRound } from '.';
 import { Rng } from './rng';
+import { setupOf } from './testutil';
 
 // the Cyclone deck without elimination can run long rounds (huge stacks): a few thousand moves seen
 const MAX_MOVES_PER_ROUND = 10000;
@@ -36,9 +37,16 @@ function variedRules(base: RuleSettings, rng: Rng, all: boolean): RuleSettings {
     partnerShield: all || rng.next() < 0.3,
     partnerPass: all || rng.next() < 0.3,
   };
+  // Día y Noche: the night side's stacked +5s and Comodín +6 can, with random CPUs and 2 players,
+  // pull the whole deck into the hands (deck and pile empty, penalties drawing nothing): elimination keeps
+  // such rounds finite, as in Ciclón (balancing note: the preset itself has no elimination yet)
+  if (base.deck === 'dayNight' && !rules.eliminateAt) rules.eliminateAt = 30;
   if (all) {
     Object.assign(rules, { deck: 'cyclone', 'power.swap': true, 'power.shield': true, 'power.sweep': true, 'power.mirror': true });
     rules.stacking = pick(['off', 'same', 'any']);
+    // always-on stacking (Codo a codo) with every power card can grow hands until the deck runs dry:
+    // elimination keeps those rounds finite, as in Ciclón
+    if (base.stacking === 'any') rules.eliminateAt = 25;
   }
   return rules;
 }
@@ -137,13 +145,14 @@ interface Config {
 }
 const configs: Config[] = [];
 for (const p of RULE_PRESETS) {
-  if (p.id === 'partners') {
-    configs.push({ name: 'partners across', mode: 'partners', players: 4, seating: 'across' });
-    configs.push({ name: 'partners side', mode: 'partners', players: 4, seating: 'side' });
-  } else for (const n of [2, 3, 4] as const) configs.push({ name: `${p.id} ${n}p`, mode: p.id, players: n });
+  if (p.id === 'sideBySide') configs.push({ name: 'sideBySide', mode: p.id, players: 4, seating: 'side' });
+  else {
+    for (const n of [2, 3, 4] as const) configs.push({ name: `${p.id} ${n}p`, mode: p.id, players: n });
+    configs.push({ name: `${p.id} 2v2`, mode: p.id, players: 4, seating: 'across' });
+  }
 }
 for (const n of [2, 3, 4] as const) configs.push({ name: `cyclone + everything ${n}p`, mode: 'cyclone', players: n, all: true });
-for (const seating of ['across', 'side'] as const) configs.push({ name: `partners + everything ${seating}`, mode: 'partners', players: 4, seating, all: true });
+for (const seating of ['across', 'side'] as const) configs.push({ name: `partners + everything ${seating}`, mode: seating === 'side' ? 'sideBySide' : 'classic', players: 4, seating, all: true });
 
 describe(`fuzz: ${MATCHES} CPU matches per configuration`, () => {
   for (const cfg of configs) {
@@ -153,10 +162,10 @@ describe(`fuzz: ${MATCHES} CPU matches per configuration`, () => {
       for (let seed = 1; seed <= MATCHES; seed++) {
         const rng = new Rng(seed * 7919);
         const rules = variedRules(base, rng, !!cfg.all);
-        const m = playMatch(rules, { mode: cfg.mode, players: cfg.players, seating: cfg.seating }, seed, stats);
+        const m = playMatch(rules, setupOf(cfg.mode, cfg.players, cfg.seating), seed, stats);
         expect(m.over).toBe(true);
         expect(m.winner).not.toBeNull();
-        if (cfg.mode === 'partners') {
+        if (cfg.seating) {
           const [a, b] = m.teams!;
           expect(m.scores[a[0]]).toBe(m.scores[a[1]]);
           expect(m.scores[b[0]]).toBe(m.scores[b[1]]);
@@ -164,12 +173,12 @@ describe(`fuzz: ${MATCHES} CPU matches per configuration`, () => {
         }
       }
       expect(stats.rounds).toBeGreaterThanOrEqual(MATCHES);
-      expect(stats.moves / stats.rounds).toBeLessThan(300); // rounds stay a sane length on average
+      expect(stats.moves / stats.rounds).toBeLessThan(400); // rounds stay a sane length on average (mandatory stacking makes them longer)
       if (cfg.all) {
         expect(stats.responds).toBeGreaterThan(0);
         expect(stats.challenges).toBeGreaterThan(0);
       }
-      if (cfg.all && cfg.mode === 'partners') expect(stats.gives).toBeGreaterThan(0);
+      if (cfg.all && cfg.seating) expect(stats.gives).toBeGreaterThan(0);
     }, 60_000);
   }
 });

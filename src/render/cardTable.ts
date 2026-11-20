@@ -204,13 +204,10 @@ void main() {
   gl_FragColor = vec4(uColor * a, 1.0);
 }`;
 
-const COLOR_LIN: Record<Color, THREE.Color> = {
-  sol: new THREE.Color(A.COLOR_GLOW.sol),
-  mar: new THREE.Color(A.COLOR_GLOW.mar),
-  palma: new THREE.Color(A.COLOR_GLOW.palma),
-  coral: new THREE.Color(A.COLOR_GLOW.coral),
-};
+const COLOR_LIN = Object.fromEntries(Object.entries(A.COLOR_GLOW).map(([k, v]) => [k, new THREE.Color(v)])) as Record<Color, THREE.Color>;
 
+/** a card turns over around its own long axis */
+const FLIP_AXIS = new THREE.Vector3(0, 1, 0);
 const tmpV = new THREE.Vector3();
 const tmpV2 = new THREE.Vector3();
 const tmpQ = new THREE.Quaternion();
@@ -230,10 +227,10 @@ const CELL_UV = (() => {
 })();
 
 const VERT = /* glsl */ `
-attribute vec2 aCell;
+attribute vec4 aCell;
 attribute vec3 aFx;
 varying vec2 vUv;
-varying vec2 vCell;
+varying vec4 vCell;
 varying vec3 vFx;
 void main() {
   vUv = uv;
@@ -248,17 +245,23 @@ uniform sampler2D uBack;
 uniform vec2 uCell;
 uniform vec3 uGlow;
 varying vec2 vUv;
-varying vec2 vCell;
+varying vec4 vCell;
 varying vec3 vFx;
 void main() {
   vec3 c;
-  if (gl_FrontFacing && vFx.z > 0.5) c = texture2D(uAtlas, vCell + vUv * uCell).rgb;
-  else c = texture2D(uBack, gl_FrontFacing ? vUv : vec2(1.0 - vUv.x, vUv.y)).rgb;
+  // vFx.z: +1 the front shows an atlas face, +2 the back shows one (Dia y Noche: the card's other side)
+  bool hasBack = vFx.z > 1.5;
+  bool hasFront = vFx.z - (hasBack ? 2.0 : 0.0) > 0.5;
+  vec2 bUv = vec2(1.0 - vUv.x, vUv.y);
+  if (gl_FrontFacing && hasFront) c = texture2D(uAtlas, vCell.xy + vUv * uCell).rgb;
+  else if (!gl_FrontFacing && hasBack) c = texture2D(uAtlas, vCell.zw + bUv * uCell).rgb;
+  else c = texture2D(uBack, gl_FrontFacing ? vUv : bUv).rgb;
   vec2 e = min(vUv, 1.0 - vUv);
   float edge = min(e.x * 0.667, e.y);
   // bevel: the rim darkens a touch, so cards read as objects without lighting
   c *= 0.82 + 0.18 * smoothstep(0.0, 0.03, edge);
   float g = vFx.x;
+  // glow (playable pick / ¡Ku! / win): a thin rim plus a brightened face
   c = mix(c, uGlow, (1.0 - smoothstep(0.012, 0.05, edge)) * g);
   c += uGlow * (g * 0.06);
   c *= 1.0 - vFx.y * 0.5;
@@ -268,10 +271,10 @@ void main() {
 
 /** the opponents' hands mirrored under the table: same faces / backs, fading with depth below the felt */
 const REFL_VERT = /* glsl */ `
-attribute vec2 aCell;
+attribute vec4 aCell;
 attribute float aFace;
 varying vec2 vUv;
-varying vec2 vCell;
+varying vec4 vCell;
 varying float vFace;
 varying float vDepth;
 varying vec3 vWorld;
@@ -294,7 +297,7 @@ uniform float uFade;
 uniform sampler2D uFelt;
 uniform float uArena;
 varying vec2 vUv;
-varying vec2 vCell;
+varying vec4 vCell;
 varying float vFace;
 varying float vDepth;
 varying vec3 vWorld;
@@ -302,8 +305,12 @@ void main() {
   // the mirror flips the winding, so the sides swap
   bool front = !gl_FrontFacing;
   vec3 c;
-  if (front && vFace > 0.5) c = texture2D(uAtlas, vCell + vUv * uCell).rgb;
-  else c = texture2D(uBack, front ? vUv : vec2(1.0 - vUv.x, vUv.y)).rgb;
+  bool hasBack = vFace > 1.5;
+  bool hasFront = vFace - (hasBack ? 2.0 : 0.0) > 0.5;
+  vec2 bUv = vec2(1.0 - vUv.x, vUv.y);
+  if (front && hasFront) c = texture2D(uAtlas, vCell.xy + vUv * uCell).rgb;
+  else if (!front && hasBack) c = texture2D(uAtlas, vCell.zw + bUv * uCell).rgb;
+  else c = texture2D(uBack, front ? vUv : bUv).rgb;
   float a = uStrength * (1.0 - smoothstep(0.0, uFade, vDepth));
   if (a < 0.004) discard;
   // solid, not see-through: blend with the floor seen along this ray (where it meets the felt), so
@@ -323,6 +330,10 @@ interface CardObj {
   i: number;
   card: Card | null;
   cell: number;
+  /** Día y Noche: atlas cell of the face on the card's back (its other side), -1 = the plain card back */
+  back: number;
+  /** the face behind `back` (null = plain back) */
+  bk: CardFace | null;
   pos: V3;
   quat: Q;
   s: number;
@@ -537,6 +548,8 @@ export class CardTable implements TableView {
   private faceMap = new A.FaceMap();
   private atlasCanvas!: A.AtlasCanvas;
   private atlasTex!: THREE.CanvasTexture;
+  /** double-sided (Día y Noche) faces seen: bigger atlas + more anisotropy (see atlasSize) */
+  private nightAtlas = false;
   private backTex!: THREE.CanvasTexture;
   private cardGeo!: THREE.BufferGeometry;
   private cardMat!: THREE.ShaderMaterial;
@@ -845,7 +858,7 @@ export class CardTable implements TableView {
       },
       side: THREE.DoubleSide,
     });
-    this.aCell = new THREE.InstancedBufferAttribute(new Float32Array(POOL * 2), 2).setUsage(THREE.DynamicDrawUsage);
+    this.aCell = new THREE.InstancedBufferAttribute(new Float32Array(POOL * 4), 4).setUsage(THREE.DynamicDrawUsage);
     this.aFx = new THREE.InstancedBufferAttribute(new Float32Array(POOL * 3), 3).setUsage(THREE.DynamicDrawUsage);
     this.cardGeo.setAttribute('aCell', this.aCell);
     this.cardGeo.setAttribute('aFx', this.aFx);
@@ -855,7 +868,7 @@ export class CardTable implements TableView {
     this.scene.add(this.cards);
     {
       const geo = buildCardGeometry();
-      this.reflCell = new THREE.InstancedBufferAttribute(new Float32Array(REFL_MAX * 2), 2).setUsage(THREE.DynamicDrawUsage);
+      this.reflCell = new THREE.InstancedBufferAttribute(new Float32Array(REFL_MAX * 4), 4).setUsage(THREE.DynamicDrawUsage);
       this.reflFace = new THREE.InstancedBufferAttribute(new Float32Array(REFL_MAX), 1).setUsage(THREE.DynamicDrawUsage);
       geo.setAttribute('aCell', this.reflCell);
       geo.setAttribute('aFace', this.reflFace);
@@ -881,7 +894,7 @@ export class CardTable implements TableView {
     for (let i = 0; i < POOL; i++) {
       const o: CardObj = {
         i, card: null, cell: 0, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), s: 1, sqx: 1, sqy: 1, glow: 0, dim: 0,
-        vis: false, token: 0, fxToken: 0, jx: 0, jz: 0, jyaw: 0, held: false,
+        vis: false, token: 0, fxToken: 0, jx: 0, jz: 0, jyaw: 0, held: false, back: -1, bk: null,
       };
       this.pool.push(o);
     }
@@ -974,7 +987,7 @@ export class CardTable implements TableView {
     const q = this.q;
     this.dust.limit = q.particles;
     this.confetti.limit = q.confetti;
-    this.atlasTex.anisotropy = q.aniso;
+    this.atlasTex.anisotropy = this.atlasAniso();
     this.backTex.anisotropy = q.aniso;
     this.syncFelt(true);
   }
@@ -1036,10 +1049,12 @@ export class CardTable implements TableView {
     const W = this.W;
     const H = this.H;
     this.portrait = H > W * 1.05;
-    this.dims = L.tableDims(this.portrait);
+    this.dims = L.tableDims(this.portrait, W, H);
+    // the hands follow the screen too (tableFit): build them again
+    for (const m of this.handMemo) m.key = '';
     this.fan = L.fanLayout(this.hands[0].length, { W, H });
     // deck and pile where the fan demo put them
-    const tune = L.tableTune(this.portrait);
+    const tune = L.tableTune(this.portrait, this.dims);
     this.deckPos.set(tune.deck.x, 0, tune.deck.z);
     this.deckYaw = THREE.MathUtils.degToRad(tune.deck.yaw);
     this.pilePos.set(tune.pile.x, 0, tune.pile.z);
@@ -1360,6 +1375,8 @@ export class CardTable implements TableView {
     if (!o) return null;
     o.card = null;
     o.cell = 0;
+    o.back = -1;
+    o.bk = null;
     o.s = 1;
     o.sqx = o.sqy = 1;
     o.glow = o.dim = 0;
@@ -1375,6 +1392,8 @@ export class CardTable implements TableView {
     if (o === this.deckTop) return;
     o.vis = false;
     o.card = null;
+    o.back = -1;
+    o.bk = null;
     o.held = false;
     o.token++;
     o.fxToken++;
@@ -1386,13 +1405,54 @@ export class CardTable implements TableView {
     o.card = card;
     if (!card) return;
     this.faces.set(card.id, card.face);
-    const face = A.playedFace(card.face, chosen);
+    o.cell = this.cellOf(card.face, chosen);
+    if (card.other) this.setBack(o, card.other);
+  }
+
+  /** atlas cell of a face (drawn into a spare cell on first use; night faces carry their own colours / flag) */
+  private cellOf(f: CardFace, chosen?: Color | null): number {
+    const face = A.playedFace(f, chosen);
     const r = this.faceMap.index(face);
     if (r.added) {
       A.drawCell(this.atlasCanvas.canvas.getContext('2d')!, this.atlasCanvas.size, r.i, face);
       this.atlasTex.needsUpdate = true;
     }
-    o.cell = r.i;
+    return r.i;
+  }
+
+  /** Día y Noche: the face shown on a card's back (its other side); null = the plain card back */
+  private setBack(o: CardObj, f: CardFace | null | undefined): void {
+    if (f && !this.nightAtlas) {
+      this.nightAtlas = true;
+      this.rebuildAtlas();
+    }
+    o.bk = f ?? null;
+    o.back = f ? this.cellOf(f) : -1;
+  }
+
+  /**
+   * Día y Noche shows atlas faces on the backs too, often on side fans seen edge-on: a 1024² cell (~56 px)
+   * then drops to tiny mips and looks far softer than the 256 px plain back. So that mode gets a bigger
+   * atlas (still one texture) and stronger anisotropic filtering on it.
+   */
+  private atlasSize(): number {
+    return this.nightAtlas ? Math.max(this.q.atlas, this.quality === 'low' ? 1536 : 2048) : this.q.atlas;
+  }
+
+  private rebuildAtlas(): void {
+    const size = this.atlasSize();
+    if (this.atlasCanvas && this.atlasCanvas.size === size) return;
+    this.atlasCanvas = A.drawAtlas(size, this.faceMap);
+    const old = this.atlasTex;
+    this.atlasTex = A.makeTexture(this.atlasCanvas.canvas, true);
+    this.atlasTex.anisotropy = this.atlasAniso();
+    if (this.cardMat) this.cardMat.uniforms.uAtlas.value = this.atlasTex;
+    old?.dispose();
+  }
+
+  private atlasAniso(): number {
+    const max = this.renderer?.capabilities.getMaxAnisotropy() ?? 1;
+    return Math.min(max, this.nightAtlas ? Math.max(this.q.aniso, this.quality === 'low' ? 4 : 8) : this.q.aniso);
   }
 
   private remember(card: Card | undefined | null): void {
@@ -1406,6 +1466,7 @@ export class CardTable implements TableView {
     for (const h of this.hands) h.length = 0;
     this.pile.length = 0;
     this.preview = null;
+    this.sweepHeld = null;
     this.deckTop.token++;
     this.deckTop.glow = 0;
     this.discardCount = 0;
@@ -1631,6 +1692,8 @@ export class CardTable implements TableView {
   private dropped: CardObj | null = null;
   /** the human's colour-changing card already on the pile (previewPlay) while the colour is being picked */
   private preview: { o: CardObj; id: number } | null = null;
+  /** a played sweep card still in its hand: it flies with the swept cards (or alone if no 'sweep' event follows) */
+  private sweepHeld: { o: CardObj; seat: Seat; card: Card; dragged: boolean } | null = null;
 
   /** the colour in play (white when none), brightened a little */
   private fxColor(out = this.fxC, white = 0.25): THREE.Color {
@@ -2095,13 +2158,15 @@ export class CardTable implements TableView {
   private async doHandle(ev: GameEvent, g: number): Promise<void> {
     // a previewed card that is not what got played (timer, server or a reset decided otherwise) goes back to the hand
     if (this.preview && PREVIEW_UNDO.has(ev.type) && !(ev.type === 'play' && ev.card.id === this.preview.id)) this.undoPreview(0.25);
+    // a held sweep card with nothing swept after it: it is a plain play after all
+    if (this.sweepHeld && ev.type !== 'sweep') await this.flushSweep(g);
     switch (ev.type) {
       case 'deal':
         return this.onDeal(ev, g);
       case 'play':
         return this.onPlay(ev.seat, ev.card, ev.color, g);
       case 'draw':
-        return this.onDraw(ev.seat, ev.count, ev.cards, ev.reason, g);
+        return this.onDraw(ev.seat, ev.count, ev.cards, ev.reason, g, ev.backs);
       case 'skip':
         if (this.lastPlayKind === 'skipAll') {
           // Salto total: the play already marked the seats; send a small mark to any seat it missed
@@ -2146,14 +2211,109 @@ export class CardTable implements TableView {
         return this.celebrate(ev.winner ?? this.winner ?? 0, true);
       }
       case 'turn':
+        if (ev.deckBack !== undefined) this.setBack(this.deckTop, ev.deckBack);
         this.setTurn(ev.seat);
         // a pending penalty stays over the pile while it can still be stacked: the +N mark only flies to
         // whoever finally draws it (onDraw)
         return;
       case 'flip':
+        return this.onFlip(ev, g);
       default:
         return;
     }
+  }
+
+  /**
+   * Día y Noche: every card on the table turns over, staggered (pile, deck top, then each hand). The new
+   * faces are set at once and each card spins from half a turn back to its pose, so it starts out showing
+   * its old face (now on its back) and lands on the new one. One small tween per card, nothing per frame.
+   */
+  private async onFlip(ev: Extract<GameEvent, { type: 'flip' }>, g: number): Promise<void> {
+    const objs: CardObj[] = [];
+    const turn = (c: Card): Card => (c.other ? { id: c.id, face: c.other, other: c.face } : c);
+    const topO = this.pile[this.pile.length - 1];
+    for (const o of this.pile) {
+      if (!o.card) continue;
+      const c = turn(o.card);
+      const wildTop = o === topO && c.face.color === null;
+      this.chosen.delete(c.id);
+      if (wildTop) this.chosen.set(c.id, ev.color);
+      this.setFace(o, c, wildTop ? ev.color : null);
+      objs.push(o);
+    }
+    if (this.deckCount > 0) {
+      this.setBack(this.deckTop, ev.deckBack);
+      objs.push(this.deckTop);
+    }
+    const mine = new Map((ev.hand ?? []).map((c) => [c.id, c]));
+    for (const s of this.seats) {
+      const backs = ev.backs?.[s];
+      this.hands[s].forEach((o, i) => {
+        if (o.card) this.setFace(o, mine.get(o.card.id) ?? turn(o.card));
+        else this.setBack(o, backs?.[i]);
+        objs.push(o);
+      });
+    }
+    this.setActiveColor(ev.color);
+    this.sfx('flip');
+    if (this.reduced) return;
+    // Collision-free: a card spinning about its own vertical axis sweeps a disc of radius W/2, so it first
+    // leaves its neighbours (lift), turns where nothing else is, then comes straight back. Each card: one tween.
+    const jobs: Promise<void>[] = [];
+    const flip = (o: CardObj, lift: THREE.Vector3, delay: number, dur: number): void => {
+      if (!o.vis) return;
+      const tok = ++o.token;
+      const q0 = o.quat.clone();
+      const p0 = o.pos.clone();
+      const a = 0.24; // share of the time spent lifting (and again dropping)
+      jobs.push(
+        this.anim.tween(
+          dur,
+          (_e, t) => {
+            if (o.token !== tok) return;
+            const up = t < a ? ease.inOutQuad(t / a) : t > 1 - a ? ease.inOutQuad((1 - t) / a) : 1;
+            const r = ease.inOutQuad(Math.min(1, Math.max(0, (t - a) / (1 - 2 * a))));
+            o.pos.copy(p0).addScaledVector(lift, up);
+            o.quat.copy(q0).multiply(tmpQ.setFromAxisAngle(FLIP_AXIS, Math.PI * (1 - r)));
+          },
+          ease.linear,
+          delay,
+        ),
+      );
+    };
+    // deck top and pile: a little tower along world up, the top card highest, every level a card width
+    // apart (two parallel spinning cards never meet then); the first level clears the stack under it.
+    // Only the top cards of the pile rise; the ones under them turn in place, covered.
+    const stack = (list: CardObj[]): void => {
+      list.reverse().forEach((o, j) => {
+        const w = L.CARD_W * o.s;
+        flip(o, new THREE.Vector3(0, w * (0.58 + 1.08 * (list.length - 1 - j)), 0), 0, 0.5);
+      });
+    };
+    if (this.deckCount > 0) stack([this.deckTop]);
+    stack(this.pile.filter((o) => o.vis).slice(-3));
+    // fans: each card slides out of the fan along its own up (a card height and a bit: clear of every resting
+    // card), spins there and slides back into its place. Cards spinning at the same time are at least a card
+    // width apart (every m-th card of the fan); the groups go one after the other.
+    for (const s of this.seats) {
+      const hand = this.hands[s].filter((o) => o.vis);
+      if (!hand.length) continue;
+      let sp = Infinity;
+      for (let i = 1; i < hand.length; i++) sp = Math.min(sp, hand[i].pos.distanceTo(hand[i - 1].pos));
+      const w = L.CARD_W * hand[0].s;
+      const m = Math.min(hand.length, Math.max(1, Math.ceil((1.12 * w) / Math.max(sp, 1e-4))));
+      const dur = Math.min(0.42, 1.9 / m); // a big hand keeps the whole flip under ~2 s
+      const a = 0.24;
+      hand.forEach((o, i) => {
+        const g = i % m;
+        const lift = new THREE.Vector3(0, 1, 0).applyQuaternion(o.quat).multiplyScalar(L.CARD_H * o.s * 1.22);
+        // the next group starts sliding out once this one has finished spinning (it is only sliding back then)
+        flip(o, lift, g * dur * (1 - a), dur);
+      });
+    }
+    await Promise.all(jobs);
+    if (!this.live(g)) return;
+    this.platesDirty();
   }
 
   private async onDeal(ev: Extract<GameEvent, { type: 'deal' }>, g: number): Promise<void> {
@@ -2162,6 +2322,7 @@ export class CardTable implements TableView {
     this.chosen.clear();
     this.platesOn = true;
     const hand0 = L.sortHand(((ev as { hand?: Card[] }).hand ?? []).slice());
+    this.setBack(this.deckTop, ev.deckBack);
     for (const c of hand0) this.remember(c);
     this.remember(ev.firstCard);
     const seats = this.seats.filter((s) => (ev.counts[s] ?? 0) > 0 || s === 0);
@@ -2196,6 +2357,7 @@ export class CardTable implements TableView {
       o.quat.copy(top.quat);
       o.s = 1;
       if (s === 0 && hand0[r]) this.setFace(o, hand0[r]);
+      else if (s !== 0) this.setBack(o, ev.backs?.[s]?.[r]);
       this.hands[s].push(o);
       this.handPose(s, r, ev.counts[s] ?? 0, pose, o);
       // the side of the fan this card lies on top of: away from the card dealt before it
@@ -2382,6 +2544,11 @@ export class CardTable implements TableView {
     let idx = -1;
     if (!pre && seat === 0) idx = h.findIndex((o) => o.card?.id === card.id);
     if (!pre && idx < 0) idx = h.findIndex((o) => o.card?.id === card.id);
+    // Día y Noche: everybody saw the card's back, so it is that card leaving the hand
+    if (!pre && idx < 0 && card.other) {
+      const key = A.faceKey(card.other);
+      idx = h.findIndex((o) => !o.card && !!o.bk && A.faceKey(o.bk) === key);
+    }
     if (!pre && idx < 0 && h.length) idx = seat === 0 ? h.findIndex((o) => !o.card) : Math.floor(h.length / 2);
     if (!pre && idx < 0 && h.length) idx = h.length - 1;
     let o: CardObj | null = pre ?? (idx >= 0 ? h.splice(idx, 1)[0] : null);
@@ -2409,6 +2576,11 @@ export class CardTable implements TableView {
     this.streamDraw = card.face.kind === 'wildColor';
     this.skipAllDone.clear();
     const slam = pen > 0 || h.length <= 1;
+    // a sweep card that may take others with it waits in the hand: onSweep throws them all together
+    if (!pre && inHand && card.face.kind === 'sweep' && h.some((x) => !x.card || x.card.face.color === card.face.color)) {
+      this.sweepHeld = { o, seat, card, dragged };
+      return;
+    }
     if (!pre) {
       this.pileJitter(o, seat);
       this.pile.push(o);
@@ -2475,7 +2647,7 @@ export class CardTable implements TableView {
     if (last) this.tweenFx(o, 0, 0, 0.5);
   }
 
-  private async onDraw(seat: Seat, count: number, cards: Card[] | undefined, reason: string, g: number): Promise<void> {
+  private async onDraw(seat: Seat, count: number, cards: Card[] | undefined, reason: string, g: number, backs?: CardFace[]): Promise<void> {
     if (reason === 'penalty' || reason === 'catch') {
       if (this.penMarkTotal) await this.penMarkFly(seat);
       this.showBadge(0);
@@ -2489,7 +2661,7 @@ export class CardTable implements TableView {
       pending = this.openCards[seat]!.filter((c) => !shown.has(c.id));
     }
     // the ku rim goes when the last card is no longer the last
-    for (const o of this.hands[seat]) if (o.glow > 0 && seat !== 0) this.tweenFx(o, 0, 0, 0.2);
+    for (const o of this.hands[seat]) if (o.glow > 0.5 && seat !== 0) this.tweenFx(o, 0, 0, 0.2);
     // "draw until the colour" (wildColor) streams card by card
     const stream = this.streamDraw;
     // the stream ends when the chosen colour arrives (or at the next play)
@@ -2508,6 +2680,7 @@ export class CardTable implements TableView {
       const c = seat === 0 || open ? cards?.[j] ?? (open ? pending[j] : undefined) : undefined;
       if (c) this.setFace(o, c);
       else if (cards?.[j]) this.remember(cards[j]);
+      if (!c) this.setBack(o, cards?.[j]?.other ?? backs?.[j]);
       if (seat === 0 || open) this.insertSorted(o, seat);
       else this.hands[seat].push(o);
       news.push(o);
@@ -2832,7 +3005,7 @@ export class CardTable implements TableView {
       o.glow = 0;
       o.dim = 0;
     }
-    this.sfx('shuffle');
+    this.sfx('swap');
     for (const s of this.seats) if (this.isOpen(s)) this.sortOpen(s);
     const jobs = this.seats.map((s, i) => this.relayout(s, this.reduced ? 0.3 : 0.75, { arc: this.reduced ? 0 : 0.6 + 0.35 * (i % 2), ease: ease.inOutCubic }));
     await Promise.all(jobs);
@@ -2876,56 +3049,99 @@ export class CardTable implements TableView {
       taken.push(o);
     }
     void this.relayout(seat, 0.3);
-    if (!taken.length) return;
+    const held = this.sweepHeld && this.sweepHeld.seat === seat ? this.sweepHeld : null;
+    if (!taken.length) {
+      if (held) await this.flushSweep(g);
+      return;
+    }
+    this.sweepHeld = null;
     // the pile ring pulls in, like a broom gathering
     void this.pileRing(this.fxColor(), 2.3, 0.55, 0.55, 0.8, ease.inQuad);
-    // 1) the swept cards fan out of the hand, face up
-    const n = taken.length;
-    const pose = newPose();
-    if (!this.reduced) {
-      const fanJobs: Promise<void>[] = [];
-      const wpp = this.worldPerPx(HAND_D * 1.2);
-      const cwPx = Math.min(64, this.W * 0.14);
-      taken.forEach((o, j) => {
-        const t = n > 1 ? j / (n - 1) - 0.5 : 0;
-        if (seat === 0) {
-          const spread = Math.min(this.W * 0.6, cwPx * 0.7 * n);
-          this.pxToWorld(this.W / 2 + t * spread, this.fan.top - cwPx * 0.9, HAND_D * 1.2 - j * 0.004, pose.pos);
-          pose.quat.copy(this.layoutCam.quaternion).multiply(tmpQ.setFromAxisAngle(tmpV.set(0, 0, 1), -t * 0.6));
-          pose.s = (cwPx * wpp) / L.CARD_W;
-        } else {
-          const an = this.anchorOf(seat);
-          const spread = Math.min(2.2, 0.32 * n);
-          pose.pos.set(an.x * 0.8 + t * spread, 0.55 - Math.abs(t) * 0.12 + j * 0.004, an.z * 0.8);
-          pose.quat.setFromAxisAngle(Q_TMP_X, -Math.PI / 2 + 0.7).premultiply(tmpQ.setFromAxisAngle(UP, -t * 0.5));
-          pose.s = 0.8;
-        }
-        fanJobs.push(this.fly(o, pose, { dur: 0.3, delay: j * 0.04, ease: ease.outCubic, onStart: () => j === 0 && this.sfx('shuffle') }));
-      });
-      await Promise.all(fanJobs);
-      if (!this.live(g)) return;
-      await this.anim.wait(0.18);
-    }
-    // 2) they slide under the sweep card on the pile
+    // pile order: the swept cards under the sweep card (it lands last, on top)
     for (const o of taken) {
       this.pileJitter(o);
-      this.pile.splice(Math.max(0, this.pile.length - 1), 0, o);
+      if (held) this.pile.push(o);
+      else this.pile.splice(Math.max(0, this.pile.length - 1), 0, o);
       this.discardCount++;
     }
+    if (held) {
+      this.pileJitter(held.o, seat);
+      this.pile.push(held.o);
+      this.discardCount++;
+      taken.push(held.o);
+    }
+    const n = taken.length;
+    const pose = newPose();
+    const red = this.reduced;
     const jobs: Promise<void>[] = [];
+    // 1) all of them lift out of the fan together, higher (and nearer) the higher they end in the stack
+    if (!red) {
+      const lift = seat === 0 ? this.fan.ch * this.worldPerPx(HAND_D) : 0;
+      taken.forEach((o, j) => {
+        if (held && o === held.o && held.dragged) return;
+        const k = n > 1 ? j / (n - 1) : 1;
+        pose.pos.copy(o.pos);
+        pose.quat.copy(o.quat);
+        pose.s = o.s;
+        const up = tmpV.set(0, 1, 0).applyQuaternion(o.quat);
+        if (seat === 0) {
+          pose.pos.addScaledVector(up, lift * (0.3 + 0.25 * k));
+          pose.pos.addScaledVector(tmpV2.set(0, 0, 1).applyQuaternion(this.layoutCam.quaternion), 0.04 + 0.05 * k);
+        } else {
+          pose.pos.addScaledVector(up, L.CARD_H * o.s * 0.45);
+          const dx = this.pilePos.x - o.pos.x;
+          const dz = this.pilePos.z - o.pos.z;
+          const d = Math.hypot(dx, dz) || 1;
+          pose.pos.x += (dx / d) * 0.2;
+          pose.pos.z += (dz / d) * 0.2;
+          pose.pos.y += 0.1 + 0.25 * k;
+        }
+        jobs.push(this.fly(o, pose, { dur: 0.14, ease: ease.outQuad }));
+      });
+      this.sfx('sweep');
+      await Promise.all(jobs);
+      if (!this.live(g)) return;
+      jobs.length = 0;
+    }
+    // 2) together onto the pile: the higher in the stack, the higher the arc and the later the landing
     taken.forEach((o, j) => {
+      const k = n > 1 ? j / (n - 1) : 1;
       this.pilePose(this.pile.indexOf(o), o, pose);
-      jobs.push(this.fly(o, pose, { dur: 0.32, arc: 0.12, delay: j * 0.06, ease: ease.inOutQuad, onStart: () => j % 2 === 0 && this.sfxAt('deal', 0.2) }));
+      const opt: FlyOpts = red
+        ? { dur: 0.22 + 0.04 * k, arc: 0.06 * k }
+        : { dur: 0.36 + 0.1 * k, arc: (seat === 0 ? 0.2 : 0.3) + 0.35 * k, ease: ease.inOutQuad, onStart: j % 2 === 0 ? () => this.sfxAt('deal', 0.2) : undefined };
+      jobs.push(this.fly(o, pose, opt));
     });
     const top = this.pile[this.pile.length - 1];
     if (top && !taken.includes(top)) jobs.push(this.fly(top, this.pilePose(this.pile.length - 1, top, newPose()), { dur: 0.3 }));
     await Promise.all(jobs);
     if (!this.live(g)) return;
-    this.puff(this.pilePos, 10);
+    if (held) {
+      this.land(held.o, h.length <= 1);
+      this.setActiveColor(held.card.face.color);
+    } else {
+      this.puff(this.pilePos, 10);
+      this.sfx('clack');
+    }
     this.flashAt(this.overPile(this.fxP, 0.15), 1.2, this.fxColor(), 0.35);
-    this.sfx('clack');
     this.trimPile();
     await this.relayoutPile(0.15);
+    this.platesDirty();
+  }
+
+  /** a held sweep card that swept nothing: the plain play flight */
+  private async flushSweep(g: number): Promise<void> {
+    const s = this.sweepHeld!;
+    this.sweepHeld = null;
+    this.pileJitter(s.o, s.seat);
+    this.pile.push(s.o);
+    this.discardCount++;
+    void this.relayout(s.seat, 0.3, { delay: 0.1 });
+    await this.flyToPile(s.seat, s.o, true, s.dragged, false, g);
+    if (!this.live(g)) return;
+    this.land(s.o, this.hands[s.seat].length <= 1);
+    this.trimPile();
+    this.setActiveColor(s.card.face.color);
     this.platesDirty();
   }
   private async onKu(seat: Seat): Promise<void> {
@@ -3637,11 +3853,15 @@ export class CardTable implements TableView {
       tmpS.set(o.s * o.sqx, o.s * o.sqy, o.s);
       tmpM.compose(o.pos, o.quat, tmpS);
       mesh.setMatrixAt(i, tmpM);
-      cells[i * 2] = CELL_UV[o.cell * 2];
-      cells[i * 2 + 1] = CELL_UV[o.cell * 2 + 1];
+      cells[i * 4] = CELL_UV[o.cell * 2];
+      cells[i * 4 + 1] = CELL_UV[o.cell * 2 + 1];
+      if (o.back >= 0) {
+        cells[i * 4 + 2] = CELL_UV[o.back * 2];
+        cells[i * 4 + 3] = CELL_UV[o.back * 2 + 1];
+      }
       fx[i * 3] = o.glow;
       fx[i * 3 + 1] = o.dim;
-      fx[i * 3 + 2] = o.card ? 1 : 0;
+      fx[i * 3 + 2] = (o.card ? 1 : 0) + (o.back >= 0 ? 2 : 0);
     }
     // camera push-in (Ku): the human hand lives in front of the un-pushed camera, so it rides along
     if (this.push > 0) {
@@ -3671,9 +3891,13 @@ export class CardTable implements TableView {
         tmpS.set(o.s * o.sqx, o.s * o.sqy, o.s);
         tmpM.compose(o.pos, o.quat, tmpS).premultiply(MIRROR_Y);
         r.setMatrixAt(k, tmpM);
-        rc[k * 2] = CELL_UV[o.cell * 2];
-        rc[k * 2 + 1] = CELL_UV[o.cell * 2 + 1];
-        rf[k] = o.card ? 1 : 0;
+        rc[k * 4] = CELL_UV[o.cell * 2];
+        rc[k * 4 + 1] = CELL_UV[o.cell * 2 + 1];
+        if (o.back >= 0) {
+          rc[k * 4 + 2] = CELL_UV[o.back * 2];
+          rc[k * 4 + 3] = CELL_UV[o.back * 2 + 1];
+        }
+        rf[k] = (o.card ? 1 : 0) + (o.back >= 0 ? 2 : 0);
         k++;
       }
     }
@@ -3686,6 +3910,7 @@ export class CardTable implements TableView {
   // ───────────────────────── public API ─────────────────────────
 
   setTurn(seat: Seat | null): void {
+    const prev = this.turnSeat;
     this.turnSeat = seat;
     this.aimTurnArrow();
     this.emitPlates();
@@ -3749,7 +3974,10 @@ export class CardTable implements TableView {
           const o = this.alloc();
           if (!o) break;
           if (s === 0) this.setFace(o, c);
-          else this.remember(c);
+          else {
+            this.remember(c);
+            this.setBack(o, c.other);
+          }
           this.hands[s].push(o);
         }
         this.eliminated[s] = !!R.eliminated?.[s];
@@ -3765,6 +3993,7 @@ export class CardTable implements TableView {
         this.pile.push(o);
       }
       this.deckCount = R.deck.length;
+      this.setBack(this.deckTop, R.deck[R.deck.length - 1]?.other);
       this.direction = R.direction;
       this.updateArrangement();
       this.dirRing.scale.x = Math.abs(this.dirRing.scale.x) * this.ringScaleSign(R.direction);
@@ -3902,13 +4131,7 @@ export class CardTable implements TableView {
     if (prev.aa !== this.q.aa) this.createRenderer();
     this.renderer.setPixelRatio(this.pixelRatio());
     this.renderer.setSize(this.W, this.H, false);
-    if (prev.atlas !== this.q.atlas) {
-      this.atlasCanvas = A.drawAtlas(this.q.atlas, this.faceMap);
-      const old = this.atlasTex;
-      this.atlasTex = A.makeTexture(this.atlasCanvas.canvas, true);
-      this.cardMat.uniforms.uAtlas.value = this.atlasTex;
-      old.dispose();
-    }
+    this.rebuildAtlas();
     this.applyQualityKnobs();
     this.computeLayout();
     this.snapAll();

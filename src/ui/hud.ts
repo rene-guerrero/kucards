@@ -3,8 +3,8 @@
  * and animate transform/opacity.
  *
  * Controller API (phase 3):
- *   show(on) · setRound(n) · setTarget(n|null) · setScores(rows, bump?) · setActiveColor(c|null)
- *   setDirection(d) · setPending(n) · notice(text)
+ *   show(on) · setRound(n) · setTarget(n|null) · setScores(rows, bump?)
+ *   setPending(n) · notice(text)
  *   setPlayers(list)                      names / faces / counts, used by the target picker
  *   setKu('hidden' | 'shown' | 'armed')   the big ¡Ku! button; onKu fires on tap (also waitKu())
  *   pickColor(): Promise<Color>
@@ -13,7 +13,7 @@
  *   kuPop(name?): Promise<void>           the big ¡KU! lettering
  *   closeAll()                            drops any open picker / response bar (their promises never resolve)
  */
-import type { Color, Direction, Seat } from '../contracts';
+import type { Color, Seat } from '../contracts';
 import { COLORS } from '../contracts';
 import type { FaceSpec } from '../roster';
 import { staticFace } from './avatarAdapter';
@@ -47,15 +47,14 @@ export interface ResponseOpts {
   canChallenge?: boolean;
   /** stacking: the human may answer with a penalty card from the hand instead (shown as a hint) */
   canStack?: boolean;
+  /** false = no "Robar" button (stacking is mandatory); the ring running out still resolves 'accept' */
+  canAccept?: boolean;
   /** how long the window stays open (ms) */
   ms?: number;
 }
 
 export type KuState = 'hidden' | 'shown' | 'armed';
 export type ResponseChoice = 'shield' | 'mirror' | 'challenge' | 'accept';
-
-const DIR_SVG =
-  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M17.5 3.5v4h-4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 export class Hud {
   readonly el: HTMLElement;
@@ -67,9 +66,11 @@ export class Hud {
 
   private roundEl = h('span.hud-round');
   private targetEl = h('span.hud-target');
+  private clockEl = h('span.hud-clock', { hidden: true, role: 'timer', 'aria-label': t('clock.left') });
+  private clockShown = '';
+  /** the final-minute "hurry" glow around the screen edges (and a warmer table light) */
+  private hurryEl = h('div.hurry-fx', { 'aria-hidden': 'true' });
   private scoresEl = h('div.hud-scores', { role: 'group' });
-  private colorEl = h('span.hud-color', { role: 'status' });
-  private dirEl = h('span.hud-dir', { html: DIR_SVG });
   private pendingEl = h('span.hud-pending', { role: 'status' });
   private noticeEl = h('div.notice', { role: 'status', 'aria-live': 'polite' });
   private kuBtn: HTMLButtonElement;
@@ -118,10 +119,11 @@ export class Hud {
     });
     this.el = h(
       'div.hud',
+      this.hurryEl,
       h(
         'div.hud-top',
         h('div.score-card', this.scoresEl),
-        h('div.hud-center', h('div.hud-info', h('div.hand-line', this.roundEl, h('span.sep', '·'), this.targetEl), h('div.hud-chips', this.colorEl, this.dirEl, this.pendingEl)), this.noticeEl),
+        h('div.hud-center', h('div.hud-info', h('div.hand-line', this.roundEl, this.clockEl), h('div.hud-chips', this.pendingEl)), this.noticeEl),
         this.pauseBtn,
       ),
       this.kuBtn,
@@ -129,7 +131,6 @@ export class Hud {
       this.popLayer,
     );
     this.setKu('hidden');
-    this.setActiveColor(null);
     this.setPending(0);
     this.relabel();
   }
@@ -139,7 +140,6 @@ export class Hud {
     this.pauseBtn.title = t('hud.pause');
     this.kuBtn.setAttribute('aria-label', t('hud.kuAria'));
     this.scoresEl.setAttribute('aria-label', t('hud.scoresAria'));
-    this.dirEl.title = t('hud.direction');
     this.setRound(this.round);
     this.setTarget(this.target);
   }
@@ -151,6 +151,27 @@ export class Hud {
   setRound(n: number): void {
     this.round = n;
     this.roundEl.textContent = n ? t('hud.round', { n }) : '';
+  }
+
+  /** the round countdown next to the round pill (null hides it); urgent = final minute (red, pulsing) */
+  setClock(msLeft: number | null, urgent: boolean): void {
+    this.clockEl.hidden = msLeft === null;
+    const hurry = urgent && msLeft !== null && msLeft > 0;
+    this.clockEl.classList.toggle('urgent', urgent);
+    this.hurryEl.classList.toggle('on', hurry);
+    if (msLeft === null) return void (this.clockShown = '');
+    const sec = Math.ceil(msLeft / 1000);
+    const txt = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+    if (txt === this.clockShown) return;
+    if (sec === 0 && this.clockShown) this.notice(t('clock.timeUp'));
+    this.clockShown = txt;
+    this.clockEl.textContent = txt;
+    this.clockEl.classList.toggle('last10', urgent && sec <= 10);
+    // the final minute ticks: a little kick on every second (harder in the last ten)
+    if (urgent && sec > 0 && !prefersReducedMotion()) {
+      const k = sec <= 10 ? 1.32 : 1.18;
+      this.clockEl.animate([{ transform: `scale(${k})` }, { transform: 'scale(1)' }], { duration: 320, easing: 'cubic-bezier(.2,1.5,.4,1)' });
+    }
   }
 
   setTarget(n: number | null): void {
@@ -169,6 +190,7 @@ export class Hud {
           requestAnimationFrame(() => pts.animate([{ transform: 'scale(1.6)' }, { transform: 'scale(1)' }], { duration: 450, easing: 'cubic-bezier(.2,1.6,.4,1)' }));
         return h(
           'div.hs-row',
+          // one compact line in partners mode: "Nosotros 0 · Ellos 0,
           { class: `${r.me ? 'me' : ''}${top > 0 && r.value === top ? ' lead' : ''}${r.team !== undefined ? ` team-${r.team}` : ''}` },
           h('span.hs-name', r.label),
           pts,
@@ -176,21 +198,7 @@ export class Hud {
       }),
     );
     this.scoresEl.classList.toggle('many', rows.length > 2);
-  }
-
-  /** the colour in play (after a wild it differs from the top card) */
-  setActiveColor(c: Color | null): void {
-    this.colorEl.hidden = !c;
-    if (!c) return;
-    this.colorEl.style.setProperty('--c', COLOR_HEX[c]);
-    this.colorEl.innerHTML = symbolSvg(c, 16, '#fff6e6');
-    this.colorEl.setAttribute('aria-label', t('hud.activeColor', { color: t(`color.${c}` as Key) }));
-    this.colorEl.title = t(`color.${c}` as Key);
-  }
-
-  setDirection(d: Direction): void {
-    this.dirEl.classList.toggle('ccw', d === -1);
-    if (!prefersReducedMotion()) this.dirEl.animate([{ transform: `scaleX(${d === -1 ? 1 : -1})` }, { transform: `scaleX(${d === -1 ? -1 : 1})` }], { duration: 300 });
+    this.scoresEl.classList.toggle('teams', rows.length === 2 && rows[0].team !== undefined);
   }
 
   /** the stacked penalty waiting to be drawn (0 hides it) */
@@ -226,61 +234,101 @@ export class Hud {
    * played wild has landed. Not a modal: no backdrop, the table keeps animating, Esc does nothing; it stays until
    * a colour is tapped or closeAll() runs (pause/exit, or the online turn timer resolving the choice).
    */
-  pickColor(): Promise<Color> {
+  pickColor(colors: readonly Color[] = COLORS): Promise<Color> {
     return new Promise((resolve) => {
-      let done = false;
-      // grid cells of the square before its 45° turn: top-left → top, top-right → right, bottom-right → bottom, bottom-left → left
-      const cells = ['q-t', 'q-r', 'q-b', 'q-l'];
-      const opts = COLORS.map((c, i) => {
-        const b = h(
-          'button.color-quad',
-          { type: 'button', class: cells[i], style: `--c:${COLOR_HEX[c]};--ca:${COLOR_HEX[c]}d4`, 'aria-label': t(`color.${c}` as Key), title: t(`color.${c}` as Key) },
-          h('span.color-sym', { html: symbolSvg(c, 40, '#fff6e6') }),
-        );
+      const pane = this.colorPane(colors, (c, quad) => {
+        // the tapped quadrant presses in, then the pane closes and play goes on
+        quad.classList.add('pressed');
+        setTimeout(() => {
+          pane.close();
+          resolve(c);
+        }, prefersReducedMotion() ? 0 : 220);
+      });
+    });
+  }
+
+  /**
+   * Another player's colour choice, shown with the same diamond: it opens over the pile (not tappable), the
+   * chosen colour presses in, and it closes. Resolves when it has closed.
+   */
+  showColorChoice(chosen: Color, colors: readonly Color[] = COLORS): Promise<void> {
+    const fast = prefersReducedMotion();
+    return new Promise((resolve) => {
+      const pane = this.colorPane(colors, null);
+      setTimeout(() => {
+        pane.quads.get(chosen)?.classList.add('pressed');
+        setTimeout(() => {
+          pane.close();
+          resolve();
+        }, fast ? 150 : 420);
+      }, fast ? 100 : 420);
+    });
+  }
+
+  /** the colour diamond over the pile; `onPick` null = display only (another player is choosing) */
+  private colorPane(colors: readonly Color[], onPick: ((c: Color, quad: HTMLElement) => void) | null): { close(): void; quads: Map<Color, HTMLElement> } {
+    let done = false;
+    // grid cells of the square before its 45° turn: top-left → top, top-right → right, bottom-right → bottom, bottom-left → left
+    const cells = ['q-t', 'q-r', 'q-b', 'q-l'];
+    const quads = new Map<Color, HTMLElement>();
+    const opts = (colors.length === 4 ? colors : COLORS).map((c, i) => {
+      const b = h(
+        'button.color-quad',
+        { type: 'button', class: cells[i], style: `--c:${COLOR_HEX[c]};--ca:${COLOR_HEX[c]}d4`, 'aria-label': t(`color.${c}` as Key), title: t(`color.${c}` as Key) },
+        h('span.color-sym', { html: symbolSvg(c, 40, '#fff6e6') }),
+      );
+      quads.set(c, b);
+      if (onPick) {
         b.addEventListener('click', () => {
           if (done) return;
           done = true;
-          close();
-          resolve(c);
+          onPick(c, b);
         });
-        return b;
-      });
-      const pane = h(
-        'div.color-pane',
-        { role: 'group', 'aria-label': t('hud.pickColor'), class: prefersReducedMotion() ? 'still' : '' },
-        h('span.color-pane-title', t('hud.pickColor')),
-        h('div.color-diamond', ...opts),
-      );
-      this.el.append(pane);
-      const diamond = pane.lastElementChild as HTMLElement;
-      // stay over the pile while open (window resize / rotation / table re-layout), always fully on screen
-      let px = NaN;
-      let py = NaN;
-      let raf = 0;
-      const place = () => {
-        const half = (diamond.offsetWidth || 120) * 0.71;
-        const p = this.colorAnchor?.() ?? null;
-        const W = window.innerWidth;
-        const H = window.innerHeight;
-        const x = Math.round(Math.min(Math.max(p ? p.x : W / 2, half + 6), W - half - 6));
-        const y = Math.round(Math.min(Math.max(p ? p.y : H / 2, half + 46), H - half - 6));
-        if (x !== px || y !== py) {
-          px = x;
-          py = y;
-          pane.style.left = `${x}px`;
-          pane.style.top = `${y}px`;
-        }
-        if (!done) raf = requestAnimationFrame(place);
-      };
-      place();
-      requestAnimationFrame(() => opts[0].focus({ preventScroll: true }));
-      const close = this.track(() => {
-        done = true;
-        cancelAnimationFrame(raf);
-        pane.classList.add('leaving');
-        setTimeout(() => pane.remove(), 200);
-      });
+      } else {
+        b.disabled = true;
+        b.tabIndex = -1;
+      }
+      return b;
     });
+    const pane = h(
+      'div.color-pane',
+      { role: 'group', 'aria-label': t('hud.pickColor'), class: `${prefersReducedMotion() ? 'still' : ''}${onPick ? '' : ' watch'}` },
+      onPick ? h('span.color-pane-title', t('hud.pickColor')) : null,
+      h('div.color-diamond', ...opts),
+    );
+    this.el.append(pane);
+    const diamond = pane.lastElementChild as HTMLElement;
+    // stay over the pile while open (window resize / rotation / table re-layout), always fully on screen
+    let px = NaN;
+    let py = NaN;
+    let raf = 0;
+    let closed = false;
+    const place = () => {
+      const half = (diamond.offsetWidth || 120) * 0.71;
+      const p = this.colorAnchor?.() ?? null;
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      const x = Math.round(Math.min(Math.max(p ? p.x : W / 2, half + 6), W - half - 6));
+      const y = Math.round(Math.min(Math.max(p ? p.y : H / 2, half + 46), H - half - 6));
+      if (x !== px || y !== py) {
+        px = x;
+        py = y;
+        pane.style.left = `${x}px`;
+        pane.style.top = `${y}px`;
+      }
+      if (!closed) raf = requestAnimationFrame(place);
+    };
+    place();
+    if (onPick) requestAnimationFrame(() => opts[0].focus({ preventScroll: true }));
+    const close = this.track(() => {
+      if (closed) return;
+      closed = true;
+      done = true;
+      cancelAnimationFrame(raf);
+      pane.classList.add('leaving');
+      setTimeout(() => pane.remove(), 200);
+    });
+    return { close, quads };
   }
 
   /** choose a player (Cambio, 7 with the 7-0 rule): their faces, names and card counts */
@@ -331,7 +379,7 @@ export class Hud {
         b.addEventListener('click', () => finish(c));
         return b;
       };
-      const accept = opt('accept', t('hud.accept', { n: o.total }), 'ghost', true);
+      const accept = o.canAccept === false ? null : opt('accept', t('hud.accept', { n: o.total }), 'ghost', true);
       const bar = h(
         'div.resp-bar',
         { role: 'alertdialog', 'aria-label': t('hud.responseAria', { n: o.total }) },
@@ -422,7 +470,6 @@ export class Hud {
     this.noticeEl.classList.remove('on');
     this.setKu('hidden');
     this.setPending(0);
-    this.setActiveColor(null);
     this.setRound(0);
     this.setScores([]);
   }

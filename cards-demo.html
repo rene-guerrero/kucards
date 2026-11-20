@@ -30,7 +30,7 @@
   <div id="out"></div>
 </main>
 <script type="module">
-  import { COLOR_HEX, COLOR_DEEP, COLOR_GLOW, TABLE_STYLE_DEFS, drawFace, drawBack } from '/src/render/cardAtlas.ts';
+  import { COLOR_HEX, COLOR_DEEP, COLOR_GLOW, NIGHT_COLORS, TABLE_STYLE_DEFS, drawFace, drawBack } from '/src/render/cardAtlas.ts';
   import { cardSvg, cardBackSvg, logoFanSvg } from '/src/ui/cardArt.ts';
 
   const COLORS = ['sol', 'mar', 'palma', 'coral'];
@@ -63,10 +63,16 @@
     { kind: 'number', color: 'sol', value: 7 }, { kind: 'reverse', color: 'mar' }, { kind: 'draw2', color: 'palma', draw: 2 }, { kind: 'skipAll', color: 'coral' },
     { kind: 'wild', color: null }, { kind: 'draw10', color: null, draw: 10 }, { kind: 'wild4', color: null, draw: 4, tint: 'mar' }, { kind: 'swap', color: null },
   ]) big.appendChild(pair(f, 90));
+  const bigN = s.appendChild(el('div', 'grid'));
+  bigN.style.marginTop = '12px';
+  for (const f of [
+    { kind: 'number', color: 'naranja', value: 7 }, { kind: 'reverse', color: 'celeste' }, { kind: 'draw6', color: 'rosa', draw: 5 }, { kind: 'skipAll', color: 'morado' },
+    { kind: 'wild', color: null, night: true }, { kind: 'wildColor', color: null, night: true }, { kind: 'wild', color: null, tint: 'celeste' }, { kind: 'flip', color: 'naranja' },
+  ]) bigN.appendChild(pair(f, 90));
 
   // palette
   s = section('Palette (card colour · deep shade for marks on ivory · glow for the direction arrows)');
-  for (const c of COLORS) {
+  for (const c of [...COLORS, ...NIGHT_COLORS]) {
     const r = row(s, c);
     for (const [name, map] of [['card', COLOR_HEX], ['deep', COLOR_DEEP], ['glow', COLOR_GLOW]]) r.appendChild(el('span', '', `<i class="sw" style="background:${map[c]}"></i>${name} ${map[c]}`));
   }
@@ -76,6 +82,24 @@
   for (const c of COLORS) {
     const r = row(s, c);
     for (let v = 0; v <= 9; v++) r.appendChild(pair({ kind: 'number', color: c, value: v }, 54));
+  }
+
+  // ── night side (Día y Noche) ──
+  s = section('NIGHT side · numbers 0–9');
+  for (const c of NIGHT_COLORS) {
+    const r = row(s, c);
+    for (let v = 0; v <= 9; v++) r.appendChild(pair({ kind: 'number', color: c, value: v }, 54));
+  }
+  s = section('NIGHT side · actions (the deck uses +5, skipAll, reverse, flip; the rest shows other kinds still read)');
+  for (const c of NIGHT_COLORS) {
+    const r = row(s, c);
+    for (const [kind, draw] of [['draw6', 5], ['skipAll'], ['reverse'], ['flip'], ['skip'], ['draw2', 1], ['draw6', 6]]) r.appendChild(pair(draw ? { kind, color: c, draw } : { kind, color: c }, 54, draw ? '+' + draw : kind));
+  }
+  s = section('NIGHT side · wilds: in hand (black) and once played (the chosen night colour)');
+  for (const tint of [null, ...NIGHT_COLORS]) {
+    const r = row(s, tint ?? 'hand');
+    for (const kind of ['wild', 'wildColor']) r.appendChild(pair(tint ? { kind, color: null, tint } : { kind, color: null, night: true }, 54, kind));
+    if (!tint) r.appendChild(pair({ kind: 'flip', color: null, night: true }, 54, 'flip (colourless)'));
   }
 
   // coloured actions
@@ -120,6 +144,9 @@
     { kind: 'number', color: 'sol', value: 7 }, { kind: 'number', color: 'mar', value: 4 }, { kind: 'number', color: 'palma', value: 9 }, { kind: 'number', color: 'coral', value: 2 },
     { kind: 'reverse', color: 'mar' }, { kind: 'skip', color: 'coral' }, { kind: 'draw2', color: 'palma', draw: 2 }, { kind: 'draw6', color: 'sol', draw: 6 },
     { kind: 'wild', color: null }, { kind: 'wild4', color: null, draw: 4 }, { kind: 'draw10', color: null, draw: 10 }, { kind: 'swap', color: null, tint: 'mar' },
+    { kind: 'number', color: 'naranja', value: 7 }, { kind: 'number', color: 'celeste', value: 4 }, { kind: 'number', color: 'rosa', value: 9 }, { kind: 'number', color: 'morado', value: 2 },
+    { kind: 'draw6', color: 'naranja', draw: 5 }, { kind: 'skipAll', color: 'celeste' }, { kind: 'reverse', color: 'rosa' }, { kind: 'flip', color: 'morado' },
+    { kind: 'wild', color: null, night: true }, { kind: 'wildColor', color: null, night: true },
   ];
   for (const [name, d] of Object.entries(TABLE_STYLE_DEFS)) {
     const box = t.appendChild(el('div', 'tbl'));

@@ -11,8 +11,24 @@
 
 // ───────────────────────── Cards ─────────────────────────
 
-export type Color = 'sol' | 'mar' | 'palma' | 'coral';
-export const COLORS: readonly Color[] = ['sol', 'mar', 'palma', 'coral'];
+/** day colours (every mode) */
+export type DayColor = 'sol' | 'mar' | 'palma' | 'coral';
+/** Día y Noche: the four night colours (the dark side of every card) */
+export type NightColor = 'naranja' | 'celeste' | 'rosa' | 'morado';
+export type Color = DayColor | NightColor;
+/** the day colours: the only colours of every mode but Día y Noche */
+export const COLORS: readonly DayColor[] = ['sol', 'mar', 'palma', 'coral'];
+/** Día y Noche: the night colours, slot for slot (index i of COLORS ↔ index i of NIGHT_COLORS) */
+export const NIGHT_COLORS: readonly NightColor[] = ['naranja', 'celeste', 'rosa', 'morado'];
+export type Side = 'light' | 'dark';
+/** the colours in play on a side */
+export const sideColors = (side: Side | undefined): readonly Color[] => (side === 'dark' ? NIGHT_COLORS : COLORS);
+/** a colour's slot 0–3 within its side's palette (sol / naranja 0 … coral / morado 3) */
+export const colorSlot = (c: Color): number => {
+  const i = (COLORS as readonly Color[]).indexOf(c);
+  return i >= 0 ? i : (NIGHT_COLORS as readonly Color[]).indexOf(c);
+};
+export const isNightColor = (c: Color | null | undefined): c is NightColor => !!c && (NIGHT_COLORS as readonly Color[]).includes(c);
 
 export type CardKind =
   | 'number'
@@ -25,7 +41,7 @@ export type CardKind =
   | 'shield' // Escudo (power): cancels a pending draw penalty, also out of turn
   | 'sweep' // Barrida (power): discard every other card of its colour from your hand
   | 'mirror' // Espejo (power): sends the pending penalty back to whoever played the last card
-  | 'flip' // Eclipse (Día y Noche only, optional later phase)
+  | 'flip' // Eclipse (Día y Noche only): every card in play turns over
   // Ciclón (harsh) extra cards, only in decks built with rules.deck === 'cyclone' (phase 4)
   | 'skipAll' // coloured: everyone else loses a turn, you play again
   | 'draw6' // coloured: next player draws 6 (stackable)
@@ -43,14 +59,20 @@ export interface CardFace {
   value?: number;
   /** cards a penalty card makes the victim draw (draw2 = 2, wild4 = 4, harsh mode adds bigger ones) */
   draw?: number;
+  /** Día y Noche: a night face (only needed on colourless ones; night colours say it themselves) */
+  night?: boolean;
 }
 
 /** id = stable index into the deck the match was created with */
 export interface Card {
   id: number;
+  /** the face in play (Día y Noche: the face of the side in play, `round.side`) */
   face: CardFace;
-  /** Día y Noche only: the dark face */
-  dark?: CardFace;
+  /**
+   * Día y Noche only: the face of the OTHER side. It is what everybody else sees of the card (the "back"
+   * of a card in someone's hand or on the deck). A flip swaps `face` and `other` on every card.
+   */
+  other?: CardFace;
 }
 
 // ───────────────────────── Seats & modes ─────────────────────────
@@ -59,18 +81,20 @@ export interface Card {
 export type Seat = 0 | 1 | 2 | 3 | 4 | 5;
 export type Direction = 1 | -1;
 
-export type GameMode = 'classic' | 'action' | 'cyclone' | 'partners';
+/** 'sideBySide' = Codo a codo: always 2 vs 2, partners side by side (A A B B), stacking always on */
+/** 'dayNight' = Día y Noche: double-sided cards, an Eclipse card turns the whole game over */
+export type GameMode = 'classic' | 'action' | 'cyclone' | 'sideBySide' | 'dayNight';
 
-/** Parejas seating: 'across' = A B A B (partners opposite), 'side' = A A B B (Codo a codo). */
+/** team seating: 'across' = A B A B (2 vs 2 "Enfrente", any mode), 'side' = A A B B (Codo a codo mode). */
 export type Seating = 'across' | 'side';
 
 export interface MatchSetup {
   mode: GameMode;
   players: 2 | 3 | 4;
-  /** partners mode only */
-  seating?: Seating;
+  /** 2 vs 2 with partners across (4 players; Codo a codo is always 2 vs 2 side by side) */
+  teams?: boolean;
   /**
-   * side seating only: is the human's partner the neighbour who plays right AFTER them (seat 1, teams
+   * Codo a codo only: is the human's partner the neighbour who plays right AFTER them (seat 1, teams
    * [[0,1],[2,3]], default) or right BEFORE them (seat 3, teams [[0,3],[1,2]])? The app picks at random.
    */
   partnerSide?: 'after' | 'before';
@@ -142,9 +166,12 @@ export interface RoundState {
   drawnCardId?: number | null;
   /** engine-internal: points eliminated seats held when they went out */
   outPoints?: number[];
-  side: 'light' | 'dark';
+  /** Día y Noche: the side in play ('light' = Día, 'dark' = Noche); always 'light' in other modes */
+  side: Side;
   eliminated: boolean[];
   over: boolean;
+  /** the round ended because its time limit ran out (engine `timeUp`) */
+  endedBy?: 'time';
 }
 
 export interface MatchState {
@@ -163,15 +190,20 @@ export interface MatchState {
   winnerTeam?: 0 | 1 | null;
   /** opaque RNG state so matches are reproducible from a seed */
   rng: number;
+  /** match clocks (round limit, move times); absent = no round limit, default move time */
+  clock?: import('./engine/clock').ClockSettings;
+  /** round time left (ms) when the match was saved, so a restored game continues the clock */
+  clockLeftMs?: number;
 }
 
 /** What the renderer/UI animate. The engine returns them in order from every transition. */
 export type GameEvent =
   /** hand: the viewer's own cards (seat 0 offline; the server fills each player's); deck: cards left in the deck */
-  | { type: 'deal'; counts: number[]; starter: Seat; firstCard: Card; activeColor: Color; hand?: Card[]; deck?: number }
+  /** backs (Día y Noche): by seat, the backs of every hand (public); deckBack: the deck top's back */
+  | { type: 'deal'; counts: number[]; starter: Seat; firstCard: Card; activeColor: Color; hand?: Card[]; deck?: number; backs?: CardFace[][]; deckBack?: CardFace | null }
   | { type: 'play'; seat: Seat; card: Card; color?: Color }
   /** cards: the faces, only present for whoever may see them (the engine fills them; redaction strips them) */
-  | { type: 'draw'; seat: Seat; count: number; cards?: Card[]; reason: 'turn' | 'penalty' | 'ku' | 'catch' }
+  | { type: 'draw'; seat: Seat; count: number; cards?: Card[]; reason: 'turn' | 'penalty' | 'ku' | 'catch'; backs?: CardFace[] }
   | { type: 'skip'; seat: Seat }
   | { type: 'reverse'; direction: Direction }
   | { type: 'stack'; total: number }
@@ -183,12 +215,21 @@ export type GameEvent =
   | { type: 'sweep'; seat: Seat; cardIds: number[] }
   | { type: 'ku'; seat: Seat }
   | { type: 'kuCaught'; by: Seat; target: Seat }
+  /** a +4 / +10 challenge: `by` challenged `target` (who played it); caught = it was a bluff */
+  | { type: 'challenge'; by: Seat; target: Seat; caught: boolean }
   | { type: 'window'; window: ResponseWindow | null }
-  | { type: 'flip'; side: 'light' | 'dark' }
+  /**
+   * Día y Noche: every card turned over (the engine has already swapped face / other on every card).
+   * color: the active colour now (the new top face's, or the same slot of the other side for a wild);
+   * hand: the viewer's own hand after the flip (seat 0 offline); backs: by seat, the faces everyone now
+   * sees on the backs of that seat's cards (public), in hand order; deckBack: the deck top's back.
+   */
+  | { type: 'flip'; side: Side; color: Color; seat: Seat; hand?: Card[]; backs?: CardFace[][]; deckBack?: CardFace | null }
   | { type: 'eliminated'; seat: Seat }
   | { type: 'reshuffle'; count: number }
-  | { type: 'turn'; seat: Seat }
-  | { type: 'roundEnd'; winner: Seat; points: number[] }
+  /** deckBack (Día y Noche): the back of the deck's top card (public: it is the other side's face) */
+  | { type: 'turn'; seat: Seat; deckBack?: CardFace | null }
+  | { type: 'roundEnd'; winner: Seat; points: number[]; byTime?: boolean }
   | { type: 'matchEnd'; winner: Seat | null; winnerTeam?: 0 | 1 | null };
 
 // ───────────────────────── Settings (data-driven) ─────────────────────────
@@ -218,6 +259,8 @@ export interface SettingDescriptor {
 
 export interface RulePreset {
   id: GameMode;
+  /** set on a saved rule profile (its id); built-in presets have none */
+  profile?: string;
   label: Loc;
   /** one-line pitch on the new-game screen */
   blurb: Loc;
@@ -250,6 +293,8 @@ export interface EngineApi {
   applyMove(match: MatchState, move: Move): { match: MatchState; events: GameEvent[] };
   /** the response timer ran out: resolve the window (e.g. the victim draws the penalty) */
   closeWindow(match: MatchState): { match: MatchState; events: GameEvent[] };
+  /** the round's time limit ran out: it ends now, the fewest card points in hand wins */
+  timeUp(match: MatchState): { match: MatchState; events: GameEvent[] };
   /** null = no reaction (window moves are optional) */
   chooseMove(match: MatchState, seat: Seat, level: Difficulty, style?: PlayStyle): Move | null;
 }
@@ -276,7 +321,17 @@ export type SfxName =
   | 'ku' // bright two-note sting
   | 'shield' // metallic clang
   | 'mirror' // glassy whoosh
-  | 'thump'; // low thump for a big penalty (+4 and up)
+  | 'thump' // low thump for a big penalty (+4 and up)
+  // power-card stingers (they sit under the voice callouts)
+  | 'skip' // descending zap and a soft thud
+  | 'reverse' // a whoosh that swirls up and back
+  | 'hit2' // short brassy hit (+2)
+  | 'hit4' // bigger hit (a penalty of 4 or 5)
+  | 'hit6' // heavy impact with a riser (6 and up)
+  | 'wild' // sparkle chord tinted by the chosen colour
+  | 'sweep' // cascading shuffle-whoosh
+  | 'flip' // Eclipse: a deep swell
+  | 'swap'; // two crossing whooshes
 
 export type Quality = 'low' | 'medium' | 'high';
 
@@ -381,6 +436,8 @@ export interface AppSettings {
   qualityMode?: 'auto' | 'manual';
   autoQuality?: Quality;
   sound: boolean;
+  /** English voice callouts for power cards (Voces) */
+  voice: boolean;
   music: boolean;
   vibration: boolean;
   animationSpeed: 'normal' | 'fast';
@@ -392,11 +449,17 @@ export interface AppSettings {
   /** rules per mode (the Rules tab edits the selected mode's set) */
   rulesByMode?: Partial<Record<GameMode, RuleSettings>>;
   players?: 2 | 3 | 4;
+  /** new-game screen: 2 vs 2 (partners across) with 4 players in Clásico / Pura acción / Ciclón */
+  teamPlay?: boolean;
   lineup?: Lineup;
   avatars?: boolean;
   /** the player's face (KuAvatars FaceSpec from the editor; older saves hold a HUMAN_FACES index) */
   avatarFace?: number | import('kuavatars/faces').FaceSpec;
+  /** up to 5 gestures in the in-game chat button (KuAvatars gesture names) */
+  gestures?: string[];
   tableStyle?: TableStyle;
   cardBack?: CardBack;
   settingsTab?: 'game' | 'rules' | 'av';
+  /** last clocks picked on the new-game screen (not rules) */
+  clock?: import('./engine/clock').ClockSettings;
 }

@@ -15,9 +15,9 @@
  *            always catches a missed ¡Ku!. Small slips (HARD_W.slip*, forgetKu) keep it below master.
  * Style weights are light biases added on top (see STYLE_WEIGHTS).
  */
-import type { Card, Color, MatchState, Move, PlayStyle, RoundState, Seat } from '../contracts';
-import { COLORS } from '../contracts';
-import { cardPoints } from './cards';
+import type { Card, CardFace, Color, MatchState, Move, PlayStyle, RoundState, Seat } from '../contracts';
+import { sideColors } from '../contracts';
+import { buildDeck, cardPoints, dayFaces, nightFaces } from './cards';
 import { isLegal, opponents, stepSeat } from './game';
 import { bit, colorIdx, drawOf, isPenaltyCard, isWildCard, type Knowledge } from './aiKnow';
 import type { Rng } from './rng';
@@ -350,6 +350,9 @@ export function scoreTurn(c: Ctx, mv: Move): number {
       case 'sweep':
         sc = swept >= 2 ? 14 + 9 * swept : 6 + 3 * swept;
         break;
+      case 'flip':
+        sc = 10 + flipValue(c, card, after);
+        break;
       case 'shield':
       case 'mirror':
         // defence cards: hard keeps them for when a penalty comes
@@ -364,7 +367,7 @@ export function scoreTurn(c: Ctx, mv: Move): number {
     // wild colour: my colours (after a swap I get the target's hand, so their liked colour instead)
     if (face.kind === 'swap' && ex.target !== undefined && c.k) sc += c.k.likes[ex.target] & bit(ex.color) ? 4 : 0;
     else {
-      const counts = COLORS.map((x) => colorCount(after, x));
+      const counts = sideColors(r.side).map((x) => colorCount(after, x));
       const max = Math.max(...counts);
       const mine = colorCount(after, ex.color);
       sc += 3 * mine + (max > 0 && mine === max ? 1 : 0);
@@ -372,10 +375,77 @@ export function scoreTurn(c: Ctx, mv: Move): number {
   }
   if (face.color === null && big && face.kind !== 'swap') sc -= w.hoard;
   if (w.numbers && face.kind !== 'number') sc -= w.numbers * 0.5;
-  if (w.variety) sc += w.variety * COLORS.reduce((t, x) => t + (colorCount(after, x) > 0 ? 1 : 0), 0);
+  if (w.variety) sc += w.variety * sideColors(r.side).reduce((t, x) => t + (colorCount(after, x) > 0 ? 1 : 0), 0);
   if (hard) sc += hardExtras(c, card, after, resColor, victim, victimLen, nextPlayer);
   if (after.length === 0 && ex.give === undefined) sc += 200; // going out always wins
   return sc;
+}
+
+// ───────────────────────── Día y Noche ─────────────────────────
+
+/** how much a face helps its holder (Día y Noche flip decisions): wilds and big penalties most */
+export function faceStrength(f: CardFace): number {
+  switch (f.kind) {
+    case 'number':
+      return 1;
+    case 'wild':
+      return 5;
+    case 'wild4':
+    case 'wildColor':
+      return 6;
+    case 'skipAll':
+      return 4;
+    case 'flip':
+      return 2;
+    case 'skip':
+    case 'reverse':
+      return 2.5;
+    default:
+      return 1 + 0.8 * (f.draw ?? 0);
+  }
+}
+
+let avgStrength: [number, number] | null = null;
+/** the average face strength of each side of the Día y Noche deck: [day, night] */
+function sideAvg(): [number, number] {
+  if (!avgStrength) {
+    const avg = (fs: CardFace[]) => fs.reduce((t, f) => t + faceStrength(f), 0) / fs.length;
+    avgStrength = [avg(dayFaces()), avg(nightFaces())];
+  }
+  return avgStrength;
+}
+
+/**
+ * Value of playing an Eclipse: my hand after it (I see my cards' other faces) against what each opponent
+ * gets. Opponents' cards after the flip are exactly the backs everybody sees now (public), against what
+ * an average hand of the side in play would be worth; the short opponents count most. Plus how many of
+ * my cards follow the face the Eclipse turns up.
+ */
+export function flipValue(c: Ctx, card: Card, after: readonly Card[]): number {
+  const { m, r, seat } = c;
+  const sum = (cs: readonly Card[], other: boolean) => cs.reduce((t, x) => t + faceStrength(other ? x.other ?? x.face : x.face), 0);
+  let v = 2 * (sum(after, true) - sum(after, false));
+  const [day, night] = sideAvg();
+  const avgNow = r.side === 'dark' ? night : day;
+  for (const s of m.seats) {
+    if (s === seat || r.eliminated[s]) continue;
+    const hand = r.hands[s];
+    const gain = sum(hand, true) - avgNow * hand.length;
+    const weight = hand.length <= 2 ? 3 : hand.length <= 4 ? 1.5 : 1;
+    v += (opponents(m, seat, s) ? -1.2 : 0.6 * c.w.partner) * weight * gain;
+  }
+  // the face the Eclipse turns up: how many of my cards follow it
+  const top = card.other;
+  if (top) {
+    const col = top.color;
+    let fit = 0;
+    for (const x of after) {
+      const f = x.other ?? x.face;
+      if (f.color === null || (col !== null && f.color === col) || (f.kind === top.kind && (f.kind !== 'number' || f.value === top.value))) fit++;
+    }
+    v += 3 * Math.min(fit, 3) - (fit === 0 ? 6 : 0);
+  }
+  return v;
 }
 
 /** hard: how well a hand can follow whatever comes next (colours covered, number bridges, wilds) */
@@ -389,7 +459,7 @@ export function handQuality(hand: readonly Card[]): number {
     else if (x.face.color) {
       colours |= bit(x.face.color);
       if (x.face.kind === 'number') vals.set(x.face.value ?? 0, (vals.get(x.face.value ?? 0) ?? 0) | bit(x.face.color));
-      else vals.set(100 + COLORS.length + x.face.kind.length, (vals.get(100 + COLORS.length + x.face.kind.length) ?? 0) | bit(x.face.color));
+      else vals.set(104 + x.face.kind.length, (vals.get(104 + x.face.kind.length) ?? 0) | bit(x.face.color));
     }
   }
   let cov = 0;
@@ -508,7 +578,10 @@ export function decidePre(c: Ctx, legal: Move[]): Move | null | undefined {
     if (mv) return mv;
   }
   const challenge = legal.find((x) => x.kind === 'challenge');
-  if (challenge && shouldChallenge(c)) return challenge;
+  const stacks = legal.filter((x) => x.kind === 'play');
+  if (challenge && shouldChallenge(c, stacks.length > 0)) return challenge;
+  // mandatory stacking: rather challenge than be forced to stack onto the partner
+  if (challenge && c.m.teams && stacks.length && stacks.every((x) => hitsPartner(c, x))) return challenge;
   return undefined;
 }
 
@@ -528,23 +601,37 @@ function decideRespond(c: Ctx, responds: Move[]): Move | null {
   return responds.find((x) => kindOf(x) !== 'mirror') ?? null;
 }
 
-/** +4 / +10 challenge: was it likely played while holding the previous colour? */
-function shouldChallenge(c: Ctx): boolean {
-  if (c.level === 1) return c.rng.next() < 0.25;
+/**
+ * +4 / +10 challenge: was it likely played while holding the colour in play before it?
+ * Easy: now and then, at random. Normal: the chance the offender holds that colour, from the cards it
+ * cannot see (own hand and the pile are known). Hard / master: the tracker's unseen counts, and never
+ * when the offender showed it could not follow that colour. The bar is higher when a stack is
+ * possible (stacking passes the penalty on for free). Never the own partner (see decidePre).
+ */
+function shouldChallenge(c: Ctx, canStack: boolean): boolean {
   const { r } = c;
   const offender = r.pendingFrom ?? stepSeat(c.m, r, c.seat, -r.direction);
   if (offender === c.seat || !opponents(c.m, c.seat, offender)) return false;
+  if (c.level === 1) return c.rng.next() < (canStack ? 0.12 : 0.3);
   const under = r.discard[r.discard.length - 2];
   const prevColor = c.k?.prevColor ?? under?.face.color ?? null;
   if (!prevColor) return false;
   const n = r.hands[offender].length;
-  let frac = 0.22;
+  let frac: number;
   if (c.k) {
     if (c.k.voids[offender] & bit(prevColor)) return false; // it could not follow that colour: legal
     frac = c.k.unseen[colorIdx(prevColor)] / Math.max(1, c.k.unseenTotal);
+  } else {
+    // public view: the deck's cards minus the pile and the own hand
+    const deck = buildDeck(c.m.rules);
+    const seen = [...r.discard, ...c.hand];
+    const total = deck.length - seen.length;
+    const ofColor = deck.filter((x) => x.face.color === prevColor).length - seen.filter((x) => x.face.color === prevColor).length;
+    frac = Math.max(0, ofColor) / Math.max(1, total);
   }
   const pHeld = 1 - Math.pow(1 - frac, n);
-  return pHeld > (c.level >= 3 ? 0.5 : 0.75);
+  const bar = c.level >= 3 ? (canStack ? 0.62 : 0.45) : canStack ? 0.72 : 0.55;
+  return pHeld > bar;
 }
 
 /** the turn move for normal / hard (with the ¡Ku! flag and partnerPass give added) */

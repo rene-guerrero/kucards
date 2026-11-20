@@ -10,29 +10,36 @@
  * The table is the offline one (TableView, HUD, plates, avatars). Seats are rotated into the local
  * perspective (src/net/perspective.ts), so everything works as in a local match ("seat 0 = me").
  */
-import type { AppSettings, Card, GameEvent, GameMode, MatchState, Move, RuleSettings, Seat, SeatPlate, Seating } from '../contracts';
+import type { AppSettings, Card, GameEvent, GameMode, MatchState, Move, RuleSettings, Seat, SeatPlate } from '../contracts';
+import { COLORS, NIGHT_COLORS, isNightColor } from '../contracts';
 import type { FaceSpec } from '../roster';
 import { character, ROSTER } from '../roster';
 import { sanitizeFace } from 'kuavatars/faces';
 import { createTableView, type TableViewExt } from '../render';
 import { buildDeck } from '../engine/cards';
 import { giveOptions } from '../engine/game';
+import { AUTO_COLOR } from '../engine/ai';
+import { AUTO_DRAW_MS } from './controller';
 import { RULE_PRESETS, RULE_SETTINGS } from '../engine/rules';
-import { playSfx, setAudioPrefs, hapticTick } from '../audio/sfx';
+import { voiceForEvent, VOICE_DELAY_MS } from '../audio/voice';
+import { playSfx, powerSfxForEvent, setAudioPrefs, hapticTick, setMusicMode, setMusicScene } from '../audio/sfx';
+import { inFinalMinute, sanitizeClock } from '../engine/clock';
 import { RoomClient, httpBackend, NetError, type Backend, type ConnState } from '../net/client';
 import { useMockServer, shareLink } from '../net/config';
 import { displayCode, normalizeCode, playerId, rememberRoom, cleanName } from '../net/identity';
 import { Perspective } from '../net/perspective';
 import { applyEvent, applySnapshot, emptyMatch } from '../net/mirror';
 import { isHidden, withPlaceholders } from '../net/redact';
-import { TURN_TIMEOUT_MS, NEXT_ROUND_MS, type ErrorCode, type PublicRoom, type QuickPhraseId, type SeatView, type ServerMsg, type Snapshot } from '../net/protocol';
-import { activeSeatsOf, buildLobby, buildOnlineHome, buildOnlinePause, buildPhraseGrid, buildRulesSheet, buildSeatSheet, occupantName, ONLINE_ICONS, phraseText, type Lobby, type OnlineHome } from '../ui/online';
+import { CHAT_GESTURES, sanitizeGestures, TURN_TIMEOUT_MS, NEXT_ROUND_MS, type ChatGesture, type ErrorCode, type PublicRoom, type QuickPhraseId, type SeatView, type ServerMsg, type Snapshot } from '../net/protocol';
+import { activeSeatsOf, buildLobby, buildOnlineHome, buildOnlinePause, buildRulesSheet, buildSeatSheet, occupantName, ONLINE_ICONS, phraseText, type Lobby, type OnlineHome } from '../ui/online';
 import { AvatarController, humanFace, type AvatarExpr } from '../ui/avatarAdapter';
 import { Hud, type HudPlayer, type ScoreRow } from '../ui/hud';
 import { bubbleFor, SeatPlates } from '../ui/plates';
 import { buildMatchEnd, buildRoundSummary, type RoundSummaryCtx } from '../ui/summary';
 import { confirmDialog, type Overlay } from '../ui/overlay';
 import { presetName } from '../ui/settings';
+import { ChatButton } from '../ui/chat';
+import { allPresets, loadProfiles } from './ruleProfiles';
 import { h } from '../ui/dom';
 import { t } from '../ui/i18n';
 import { cardPoints } from '../engine/cards';
@@ -124,8 +131,7 @@ export class OnlineController {
   private closeMatchEnd: (() => void) | null = null;
   private closeMenu: (() => void) | null = null;
   private closeSheet: (() => void) | null = null;
-  private phraseBtn: HTMLButtonElement | null = null;
-  private phrasePop: HTMLElement | null = null;
+  private chat: ChatButton | null = null;
   private netChip: HTMLElement | null = null;
   private hiddenAt = 0;
   private lastNotice = '';
@@ -282,19 +288,19 @@ export class OnlineController {
         code: this.room.code,
         avatars: s.avatars !== false,
         myId: this.pid,
-        presetName: (mode, rules) => presetName(RULE_PRESETS, RULE_SETTINGS, rules, mode),
+        presetName: (mode, rules) => presetName(allPresets(), RULE_SETTINGS, rules, mode),
         onShare: () => void this.share(),
         onSeat: (seat) => this.tapSeat(seat),
-        onMode: (mode, count) => {
+        onMode: (mode, count, teamPlay) => {
           const changed = mode !== this.room?.mode;
-          this.client?.send({ t: 'setMode', mode, playerCount: count });
+          this.client?.send({ t: 'setMode', mode, playerCount: count, teamPlay: !!teamPlay });
           if (changed) this.client?.send({ t: 'setRules', rules: { ...rulesFor(this.settings, mode) } });
         },
-        onSeating: (seating: Seating) => {
-          const room = this.room;
-          if (room) this.client?.send({ t: 'setRules', rules: { ...room.rules, seating } });
-        },
         onRules: () => this.openRules(),
+        onClock: (c) => {
+          this.deps.setSetting('clock', c);
+          this.client?.send({ t: 'setClock', clock: c });
+        },
         onStart: () => this.client?.send({ t: 'start' }),
         onLeave: () => void this.confirmLeave(),
       });
@@ -344,11 +350,16 @@ export class OnlineController {
     const room = this.room;
     if (!room || !this.isHost) return;
     const preset = RULE_PRESETS.find((p) => p.id === room.mode);
-    const mine = { ...rulesFor(this.settings, room.mode), seating: room.rules.seating };
+    const mine = rulesFor(this.settings, room.mode);
     const same = (a: RuleSettings, b: RuleSettings) => JSON.stringify(sanitizeRules(a, room.mode)) === JSON.stringify(sanitizeRules(b, room.mode));
     const opts: { label: string; rules: RuleSettings }[] = [];
-    if (preset) opts.push({ label: presetName(RULE_PRESETS, RULE_SETTINGS, preset.rules, room.mode), rules: { ...preset.rules, seating: room.rules.seating } });
-    if (!preset || !same(preset.rules, mine)) opts.push({ label: `${t('lobby.myRules')} · ${presetName(RULE_PRESETS, RULE_SETTINGS, mine, room.mode)}`, rules: mine });
+    if (preset) opts.push({ label: presetName(RULE_PRESETS, RULE_SETTINGS, preset.rules, room.mode), rules: { ...preset.rules } });
+    // the host's saved profiles of this mode, then their current rules (when not already listed)
+    for (const p of loadProfiles()) {
+      if (p.mode !== room.mode || opts.some((x) => same(x.rules, p.rules))) continue;
+      opts.push({ label: p.name, rules: { ...p.rules } });
+    }
+    if (!opts.some((x) => same(x.rules, mine))) opts.push({ label: `${t('lobby.myRules')} · ${presetName(allPresets(), RULE_SETTINGS, mine, room.mode)}`, rules: mine });
     const done = () => {
       this.closeSheet?.();
       this.closeSheet = null;
@@ -448,7 +459,7 @@ export class OnlineController {
     if (this.mode === 'home') return this.exit();
     if (this.mode === 'lobby') return void this.confirmLeave();
     if (this.mode === 'game') {
-      if (this.phrasePop) return this.togglePhrases(false);
+      if (this.chat?.isOpen) return this.chat.toggle(false);
       if (this.closeMenu) return this.resumeFromMenu();
       this.openMenu();
     }
@@ -467,6 +478,8 @@ export class OnlineController {
     if (this.isHost && room.phase === 'lobby' && !prev) {
       const mine = rulesFor(this.settings, room.mode);
       if (JSON.stringify(sanitizeRules(mine, room.mode)) !== JSON.stringify(sanitizeRules(room.rules, room.mode))) this.client?.send({ t: 'setRules', rules: { ...mine } });
+      // and so are the host's last clocks
+      this.client?.send({ t: 'setClock', clock: sanitizeClock(this.settings.clock) });
     }
   }
 
@@ -629,7 +642,6 @@ export class OnlineController {
         const counts: number[] = [];
         for (const p of list) counts[p.seat] = p.count;
         hud.setPlayers(this.hudPlayers(counts));
-        this.placePhraseBtn();
       },
       onError: (e) => console.error('[table]', e),
     });
@@ -650,6 +662,7 @@ export class OnlineController {
     const tb = this.table;
     if (!tb) return;
     this.table = null;
+    this.chat?.hide();
     tb.stopLandscape();
     tb.view.cancelHumanPick();
     tb.hud.closeAll();
@@ -691,89 +704,33 @@ export class OnlineController {
   }
 
   private buildGameChrome(): void {
+    setMusicScene('game');
     const layer = this.deps.overlay.hudLayer;
-    if (!this.phraseBtn) {
-      const b = h('button.qp-btn', { type: 'button', 'aria-label': t('online.phrases'), title: t('online.phrases'), html: ONLINE_ICONS.chat }) as HTMLButtonElement;
-      b.addEventListener('click', () => this.togglePhrases());
-      this.phraseBtn = b;
+    this.chat?.hide();
+    const tb = this.table;
+    if (tb) {
+      this.chat = new ChatButton({
+        layer,
+        plates: tb.plates,
+        gestures: () => sanitizeGestures(this.settings.gestures),
+        face: () => humanFace(this.settings.avatarFace ?? 0),
+        onGesture: (g) => this.client?.send({ t: 'phrase', id: `g:${g}` }),
+        onPhrase: (id) => this.client?.send({ t: 'phrase', id }),
+      });
+      this.chat.show();
     }
     if (!this.netChip) this.netChip = h('div.net-chip', { role: 'status', 'aria-live': 'polite' });
-    layer.append(this.phraseBtn, this.netChip);
-    this.placePhraseBtn();
+    layer.append(this.netChip);
     this.onConnState(this.client?.connState ?? 'open');
   }
 
-  /** the quick-phrase button sits just beside the own plate */
-  private placePhraseBtn(): void {
-    const b = this.phraseBtn;
-    const box = this.table?.plates.box(0);
-    if (!b) return;
-    if (!box || !box.visible) {
-      b.classList.remove('on');
-      return;
-    }
-    const W = window.innerWidth;
-    const size = 40;
-    const pw = box.w * box.scale;
-    const ph = box.h * box.scale;
-    let x = box.x + pw / 2 + 10;
-    if (x + size > W - 8) x = box.x - pw / 2 - 10 - size;
-    let y = box.y - size / 2;
-    if (box.layout === 'stack') {
-      x = box.x - size / 2;
-      y = box.y - ph / 2 - size - 8;
-    }
-    b.style.transform = `translate(${Math.round(x)}px,${Math.round(Math.max(8, y))}px)`;
-    b.classList.add('on');
-    if (this.phrasePop) this.placePop();
-  }
-
-  private togglePhrases(force?: boolean): void {
-    const open = force ?? !this.phrasePop;
-    if (!open) {
-      this.phrasePop?.remove();
-      this.phrasePop = null;
-      this.phraseBtn?.setAttribute('aria-expanded', 'false');
-      document.removeEventListener('pointerdown', this.onDocDown, true);
-      return;
-    }
-    if (this.phrasePop) return;
-    const pop = h(
-      'div.qp-pop',
-      buildPhraseGrid((id) => {
-        this.client?.send({ t: 'phrase', id });
-        this.togglePhrases(false);
-      }),
-    );
-    this.phrasePop = pop;
-    this.deps.overlay.hudLayer.append(pop);
-    this.phraseBtn?.setAttribute('aria-expanded', 'true');
-    this.placePop();
-    setTimeout(() => document.addEventListener('pointerdown', this.onDocDown, true), 0);
-  }
-
-  private onDocDown = (e: PointerEvent): void => {
-    const el = e.target as Node;
-    if (this.phrasePop?.contains(el) || this.phraseBtn?.contains(el)) return;
-    this.togglePhrases(false);
-  };
-
-  private placePop(): void {
-    const pop = this.phrasePop;
-    const b = this.phraseBtn;
-    if (!pop || !b) return;
-    const r = b.getBoundingClientRect();
-    const pw = pop.offsetWidth;
-    const ph = pop.offsetHeight;
-    const W = window.innerWidth;
-    let x = r.left + r.width / 2 - pw / 2;
-    x = Math.max(8, Math.min(W - pw - 8, x));
-    let y = r.top - ph - 10;
-    if (y < 8) y = r.bottom + 10;
-    pop.style.transform = `translate(${Math.round(x)}px,${Math.round(y)}px)`;
-  }
-
   private showPhrase(seat: Seat, id: string): void {
+    // a gesture: the seat's avatar makes it (older clients ignore these ids)
+    if (id.startsWith('g:')) {
+      const g = id.slice(2);
+      if ((CHAT_GESTURES as readonly string[]).includes(g)) this.table?.avatars.gesture(seat, g as ChatGesture);
+      return;
+    }
     const text = phraseText(id);
     if (!text || !this.table) return;
     this.table.plates.say(seat, text, false, 2400);
@@ -783,8 +740,10 @@ export class OnlineController {
 
   private leaveGameUi(): void {
     this.bumpGen();
-    this.togglePhrases(false);
-    this.phraseBtn?.remove();
+    this.setRoundClock(null);
+    setMusicScene('menu');
+    this.chat?.hide();
+    this.chat = null;
     this.netChip?.remove();
     for (const c of [this.closeSummary, this.closeMatchEnd, this.closeMenu]) c?.();
     this.closeSummary = this.closeMatchEnd = this.closeMenu = null;
@@ -884,6 +843,10 @@ export class OnlineController {
       this.prevScores = m0.scores.slice();
     }
     if (ev.type === 'play' || ev.type === 'roundEnd' || ev.type === 'deal') plates.setTimer(null);
+    if (ev.type === 'roundEnd' || ev.type === 'deal') {
+      this.setRoundClock(null);
+      plates.clearRanks();
+    }
     let m = applyEvent(m0, ev, this.faceOf);
     // the hands this player may see change wholesale: take them from the snapshot
     if ((ev.type === 'deal' || ev.type === 'swapHands' || ev.type === 'rotateHands') && m.round) {
@@ -897,7 +860,18 @@ export class OnlineController {
     const b = bubbleFor(ev);
     if (b) plates.say(b.seat, b.text, b.strong);
     if (ev.type === 'ku') void hud.kuPop(this.players().names[ev.seat]);
+    if (ev.type === 'roundEnd' && ev.byTime && m.round) {
+      // time is up: every hand face up for a beat, then the verdict
+      for (const s of m.seats) if (s !== 0 && m.round.hands[s]?.length) view.setOpenHand(s, m.round.hands[s].slice());
+      await this.w(new Promise<void>((res) => setTimeout(res, 1100)));
+    }
+    // "Draw N!" starts as the drawing starts; the others once their card has landed
+    if (ev.type === 'draw') voiceForEvent(ev, 60);
     await this.w(this.watchdog(view.handle(ev), ev));
+    powerSfxForEvent(ev);
+    // another player's wild: their pick shows on the colour diamond before play goes on
+    if (ev.type === 'play' && ev.seat !== 0 && ev.color && ev.card.face.color === null) await hud.showColorChoice(ev.color, isNightColor(ev.color) ? NIGHT_COLORS : COLORS);
+    if (ev.type !== 'draw') voiceForEvent(ev, VOICE_DELAY_MS);
     this.refreshHud(ev.type === 'roundEnd');
     if (ev.type === 'roundEnd') {
       hud.setKu('hidden');
@@ -937,8 +911,6 @@ export class OnlineController {
     if (!tb || !m) return;
     const r = m.round;
     if (r) {
-      tb.hud.setActiveColor(r.activeColor);
-      tb.hud.setDirection(r.direction);
       tb.hud.setPending(r.pendingDraw);
       tb.hud.setRound(r.roundNo);
     }
@@ -968,7 +940,7 @@ export class OnlineController {
     const { names } = this.players();
     if (m.teams) {
       const mine = m.teams[0].includes(0) ? 0 : 1;
-      return m.teams.map((team, i) => ({ label: t(i === 0 ? 'team.a' : 'team.b'), value: m.scores[team[0]] ?? 0, me: i === mine, team: i as 0 | 1 }));
+      return m.teams.map((team, i) => ({ label: t(team.includes(0) ? 'team.a' : 'team.b'), value: m.scores[team[0]] ?? 0, me: i === mine, team: i as 0 | 1 }));
     }
     return m.seats.map((s) => ({ label: names[s], value: m.scores[s] ?? 0, me: s === 0 }));
   }
@@ -998,7 +970,7 @@ export class OnlineController {
     const teams: RoundSummaryCtx['teams'] = m.teams
       ? ([0, 1].map((i) => {
           const p = players.find((x) => x.seat === m.teams![i][0])!;
-          return { name: t(i === 0 ? 'team.a' : 'team.b'), prev: p.prev, total: p.total };
+          return { name: t(m.teams![i].includes(0) ? 'team.a' : 'team.b'), prev: p.prev, total: p.total };
         }) as RoundSummaryCtx['teams'])
       : undefined;
     const matchOver = m.over;
@@ -1014,7 +986,7 @@ export class OnlineController {
         resolve();
       };
       const card = buildRoundSummary(
-        { roundNo: r.roundNo, winner: ev.winner, points: ev.points[ev.winner] ?? 0, players, teams, target: target || null, matchOver, avatars: s.avatars !== false, speed: s.animationSpeed === 'fast' ? 0.6 : 1 },
+        { roundNo: r.roundNo, winner: ev.winner, points: ev.points[ev.winner] ?? 0, players, teams, target: target || null, matchOver, byTime: !!ev.byTime, avatars: s.avatars !== false, speed: s.animationSpeed === 'fast' ? 0.6 : 1 },
         done,
         () => void this.confirmLeave(),
       );
@@ -1035,7 +1007,7 @@ export class OnlineController {
     const s = this.settings;
     const { names, faces } = this.players();
     const teams = m.teams
-      ? (m.teams.map((team, i) => ({ name: t(i === 0 ? 'team.a' : 'team.b'), prev: m.scores[team[0]] ?? 0, total: m.scores[team[0]] ?? 0 })) as [{ name: string; prev: number; total: number }, { name: string; prev: number; total: number }])
+      ? (m.teams.map((team, i) => ({ name: t(team.includes(0) ? 'team.a' : 'team.b'), prev: m.scores[team[0]] ?? 0, total: m.scores[team[0]] ?? 0 })) as [{ name: string; prev: number; total: number }, { name: string; prev: number; total: number }])
       : undefined;
     const card = buildMatchEnd(
       {
@@ -1067,11 +1039,41 @@ export class OnlineController {
 
   // ───────────────────────── turns ─────────────────────────
 
+  // ── the round clock (server-owned: roundEnds in 'turn'; the countdown runs here) ──
+  private roundEnds: number | null = null;
+  private clockTimer: ReturnType<typeof setInterval> | null = null;
+  private frenzy = false;
+
+  /** show the countdown to `ends` (server ms; null hides it and calms the music) */
+  private setRoundClock(ends: number | null): void {
+    if (ends === this.roundEnds && (ends === null || this.clockTimer)) return;
+    this.roundEnds = ends;
+    if (this.clockTimer) clearInterval(this.clockTimer);
+    this.clockTimer = null;
+    if (ends === null) {
+      this.table?.hud.setClock(null, false);
+      if (this.frenzy) setMusicMode('normal');
+      this.frenzy = false;
+      return;
+    }
+    const tick = () => {
+      const tb = this.table;
+      if (!tb || !this.client || this.roundEnds === null) return this.setRoundClock(null);
+      const left = Math.max(0, this.client.toLocal(this.roundEnds) - Date.now());
+      const final = inFinalMinute({ roundMin: 1, moveSec: 0, finalSec: 0 }, left);
+      if (final !== this.frenzy) setMusicMode(final ? 'frenzy' : 'normal');
+      this.frenzy = final;
+      tb.hud.setClock(left, final);
+    };
+    this.clockTimer = setInterval(tick, 250);
+    tick();
+  }
+
   private setRing(seat: Seat | null, deadline: number | null): void {
     const tb = this.table;
     if (!tb) return;
     if (seat === null || deadline === null || !this.client) return tb.plates.setTimer(null);
-    tb.plates.setTimer(seat, this.client.toLocal(deadline), TURN_TIMEOUT_MS, seat === 0 ? 5000 : 0, () => {
+    tb.plates.setTimer(seat, this.client.toLocal(deadline), this.turn?.moveMs ?? TURN_TIMEOUT_MS, seat === 0 ? 5000 : 0, () => {
       // a gentle nudge on my own turn: warm ring, one soft pulse, a light tick
       tb.plates.pulse(0);
       hapticTick();
@@ -1082,7 +1084,7 @@ export class OnlineController {
     this.enqueue(async () => {
       const p = this.persp;
       if (!p || !this.mirror?.round || this.mirror.round.over) return;
-      const msg: TurnMsg = { ...raw, seat: p.seat(raw.seat), legal: raw.legal.map((x) => p.move(x)) };
+      const msg: TurnMsg = { ...raw, seat: p.seat(raw.seat), legal: raw.legal.map((x) => p.move(x)), ranks: raw.ranks?.map(([s, n]) => [p.seat(s), n]) };
       this.applyTurn(msg);
     });
   }
@@ -1095,6 +1097,10 @@ export class OnlineController {
     const prevSeat = this.turn?.seat;
     this.turn = msg;
     tb.view.setTurn(msg.seat);
+    this.setRoundClock(msg.roundEnds ?? null);
+    // final-minute position badges (server-ranked; absent = none)
+    const ranks = new Map(msg.ranks ?? []);
+    for (const s of m.seats) tb.plates.setRank(s, ranks.get(s) ?? null);
     if (prevSeat !== msg.seat || msg.deadline === null) this.setRing(msg.seat, msg.deadline);
     else if (msg.deadline) this.setRing(msg.seat, msg.deadline);
     this.refreshKu();
@@ -1175,16 +1181,22 @@ export class OnlineController {
       const shield = responds.find((x) => kindOf(x.cardId) === 'shield');
       const mirror = responds.find((x) => kindOf(x.cardId) === 'mirror');
       const ms = windowEnds ? Math.max(1500, windowEnds - Date.now() - 300) : 8000;
-      const choice = await hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, canChallenge: !!challenge, canStack: plays.length > 0, ms: Math.min(ms, 8000) });
+      // stacking is mandatory: when a stack is possible there is no accept, the hand is the answer
+      const acc = legal.find((x) => x.kind === 'acceptPenalty');
+      const choice = await hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, canChallenge: !!challenge, canStack: !acc, canAccept: !!acc, ms: Math.min(ms, 8000) });
       if (!this.live(id)) return;
       const mv = choice === 'shield' ? shield : choice === 'mirror' ? mirror : choice === 'challenge' ? challenge : undefined;
       if (mv) return this.send(mv);
-      const acc = legal.find((x) => x.kind === 'acceptPenalty');
-      if (acc && !plays.length) return this.send(acc);
+      if (acc) return this.send(acc);
+    }
+    // a penalty I cannot stack, challenge or answer: drawn for me after a short beat
+    if (legal.length === 1 && legal[0].kind === 'acceptPenalty') {
+      await new Promise((res) => setTimeout(res, AUTO_DRAW_MS));
+      if (!this.live(id)) return;
+      return this.send(legal[0]);
     }
     const playable = [...new Set(plays.map((p) => p.cardId))];
     const drawLike = legal.find((x) => x.kind === 'draw' || x.kind === 'pass' || x.kind === 'acceptPenalty');
-    if (drawLike?.kind === 'pass') hud.notice(t('game.passHint'));
     // nothing playable: the pyramid over the deck is the only hint
     if (r.pendingDraw > 0 && playable.length) hud.notice(t('game.acceptHint', { n: r.pendingDraw }));
     const pick = await view.requestHumanPick(playable, !!drawLike);
@@ -1201,7 +1213,10 @@ export class OnlineController {
       if (!this.live(id)) return;
       variants = variants.filter((v) => v.target === target);
     }
-    if (variants.some((v) => v.color)) {
+    if (variants.some((v) => v.color) && r.hands[0].length === 1) {
+      // the winning last card: red, no colour pane
+      variants = variants.filter((v) => v.color === AUTO_COLOR);
+    } else if (variants.some((v) => v.color)) {
       // the card lands on the pile first, then the colour is asked
       await view.previewPlay(pick);
       if (!this.live(id)) return;
@@ -1322,7 +1337,7 @@ export class OnlineController {
       this.showMatchEnd({ type: 'matchEnd', winner: mm.winner, winnerTeam: mm.winnerTeam ?? undefined });
       return;
     }
-    if (r && !r.over) this.applyTurn({ t: 'turn', seat: r.turn, deadline: view.turnDeadline, legal: view.legal.map((x) => p.move(x)), windowEnds: view.windowEnds });
+    if (r && !r.over) this.applyTurn({ t: 'turn', seat: r.turn, deadline: view.turnDeadline, legal: view.legal.map((x) => p.move(x)), windowEnds: view.windowEnds, roundEnds: view.roundEnds ?? null, moveMs: view.moveMs });
   }
 
   // ───────────────────────── menu ─────────────────────────
@@ -1330,11 +1345,11 @@ export class OnlineController {
   /** the in-game menu: the online match does not pause */
   openMenu(): void {
     if (this.mode !== 'game' || this.closeMenu) return;
-    this.togglePhrases(false);
+    this.chat?.toggle(false);
     const s = this.settings;
     this.closeMenu = this.deps.overlay.openModal(
       buildOnlinePause({
-        audio: { sound: s.sound, music: s.music, vibration: s.vibration },
+        audio: { sound: s.sound, voice: s.voice, music: s.music, vibration: s.vibration },
         onAudio: (key, on) => {
           this.deps.setSetting(key, on);
           setAudioPrefs({ [key]: on });
@@ -1372,6 +1387,7 @@ export class OnlineController {
   private onOnline = (): void => this.client?.nudge();
 
   dispose(): void {
+    this.setRoundClock(null);
     this.teardownRoom();
     document.removeEventListener('visibilitychange', this.onVisibility);
     window.removeEventListener('online', this.onOnline);

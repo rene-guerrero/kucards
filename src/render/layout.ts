@@ -51,13 +51,18 @@ export interface FanOpts {
 
 /** card width for a viewport (px) */
 export function fanCardWidth(W: number, H: number): number {
-  return Math.max(44, Math.min(104, W * 0.2, H * 0.165));
+  // scales with the screen (a fifth of the height in hand on a phone and on a desktop alike)
+  return Math.max(44, Math.min(176, W * 0.2, 14 + H * 0.13));
 }
 
 /** minimum visible strip per card (px): always a comfortable finger width */
 export function fanMinTap(cw: number): number {
   return Math.max(22, Math.round(cw * 0.3));
 }
+
+/** the human's row is at most this many card widths, and this fraction of the screen, wide */
+export const HAND_MAX_CARDS = 9;
+export const HAND_MAX_FRAC = 0.6;
 
 /** fraction of the human's cards hidden below the bottom of the screen */
 export const HAND_HIDDEN = 0.2;
@@ -94,7 +99,9 @@ export function fanLayout(n: number, o: FanOpts): FanLayout {
   if (n <= 0) return { slots, cw, ch, spacing: 0, rows: 0, top: bottom - ch, minTap };
   // rotation headroom: a rotated card is wider than cw; keep a small reserve on both sides
   const rotPad = cw * 0.12;
-  const usable = Math.max(cw, avail - 2 * rotPad);
+  // the row never grows past ~9 cards wide or 60% of a wide screen (phones keep their full width): a big
+  // hand overlaps more instead
+  const usable = Math.max(cw, Math.min(avail - 2 * rotPad, cw * HAND_MAX_CARDS, Math.max(W * HAND_MAX_FRAC, 560)));
   // never wrap: one row that overlaps more and more (the peek is how a squeezed card is read)
   const rows = 1;
   const perRow = n;
@@ -233,10 +240,35 @@ export interface TableDims {
   /** half extents of the felt */
   A: number;
   B: number;
+  /** how the tuned table adapts to this screen (tableFit); none = as tuned */
+  fit?: TableFit;
 }
 
-export function tableDims(portrait: boolean): TableDims {
-  return portrait ? { A: 2.05, B: 2.9 } : { A: 3.9, B: 2.15 };
+/**
+ * The tuned table on a screen narrower than the one it was tuned on: instead of pulling the camera back
+ * until the whole tuned width fits (everything tiny in a big empty middle), the camera pulls back only
+ * part of the way (`c`), the table's spots close in sideways (`sx`) and spread in depth (`sz`, filling the
+ * taller screen) and the cards grow (`s`), so the fans, deck and pile stay big and near the edges.
+ */
+export interface TableFit {
+  c: number;
+  sx: number;
+  sz: number;
+  s: number;
+}
+
+export function tableFit(W: number, H: number, portrait: boolean): TableFit {
+  const T = portrait ? TABLE_LAYOUT.port : TABLE_LAYOUT.land;
+  const k = Math.min(1, W / Math.max(1, H) / T.aspect);
+  const c = 1 / Math.sqrt(k);
+  return { c, sx: c * k, sz: c, s: Math.sqrt(c) };
+}
+
+/** the felt; with a screen size, the table adapted to it (tableFit) */
+export function tableDims(portrait: boolean, W?: number, H?: number): TableDims {
+  const d: TableDims = portrait ? { A: 2.05, B: 2.9 } : { A: 3.9, B: 2.15 };
+  if (W && H) d.fit = tableFit(W, H, portrait);
+  return d;
 }
 
 /**
@@ -373,9 +405,11 @@ export interface PlateEnv {
   topClear?: [number, number];
 }
 
-/** avatar diameter for a viewport */
+/** avatar diameter for a viewport (portrait phones: a little bigger, there is room beside the fans) */
 export function plateDiameter(W: number, H: number): number {
-  return Math.round(Math.max(34, Math.min(56, Math.min(W, H) * 0.11)));
+  const m = Math.min(W, H);
+  // bigger faces everywhere, and they keep growing on wide screens
+  return Math.round(H > W * 1.05 ? Math.max(48, Math.min(80, m * 0.15)) : Math.max(44, Math.min(88, m * 0.12)));
 }
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
@@ -387,9 +421,11 @@ export function plateBox(p: PlateInput, env: PlateEnv): SeatPlate {
   const rowW = Math.round(d * 3.8);
 
   const rowH = d;
-  const stackW = Math.round(Math.max(d + 18, d * 1.45));
+  // every compact plate the same width, wide enough for a full name and the card count at its end
+  const stackW = Math.round(Math.min(d * 2.4, Math.max(100, d * 2.1)));
   const stackH = Math.round(d * 1.36);
-  let layout: 'row' | 'stack' = 'row';
+  // every seat uses the compact plate (the wide row plate is no longer used)
+  let layout = 'stack' as 'row' | 'stack';
   let x = 0;
   let y = 0;
   let bdir: 'left' | 'right' | 'up' | 'down' = 'up';
@@ -404,13 +440,15 @@ export function plateBox(p: PlateInput, env: PlateEnv): SeatPlate {
         x = env.handLeft - 10 - stackW / 2;
         y = env.H - stackH / 2 - 8;
       }
-      if (env.humanRight) x = env.W - x;
+      // always on the left of the hand (the ¡Ku! button takes the right), whatever the seating
       bdir = 'up';
       break;
     case 'top':
       if (env.portrait) {
+        // the compact plate, like every seat's, just under the hand
+        layout = 'stack';
         x = p.ax;
-        y = p.ay + p.halfY + rowH / 2 + gap;
+        y = p.ay + p.halfY + stackH / 2 + gap;
       } else {
         // beside the row, clear of the top corners when the side seats' plates live there; when neither
         // side has room (a long row), below it
@@ -442,11 +480,11 @@ export function plateBox(p: PlateInput, env: PlateEnv): SeatPlate {
       // above the partner fan, aligned to its outer edge; the bubble opens towards the table centre
       // at the far end of the partner fan: above it, or beside it (inner side) when the HUD is in the way
       const left = p.side === 'lowerLeft';
-      x = left ? p.ax - p.halfX + rowW / 2 : p.ax + p.halfX - rowW / 2;
-      y = p.ay - p.halfY - rowH / 2 - gap;
-      if (y - rowH / 2 < env.hudTop - rowH * 0.35) {
-        x = left ? p.ax + p.halfX + rowW / 2 + gap : p.ax - p.halfX - rowW / 2 - gap;
-        y = p.ay - p.halfY + rowH / 2;
+      x = left ? p.ax - p.halfX + stackW / 2 : p.ax + p.halfX - stackW / 2;
+      y = p.ay - p.halfY - stackH / 2 - gap;
+      if (y - stackH / 2 < env.hudTop - stackH * 0.35) {
+        x = left ? p.ax + p.halfX + stackW / 2 + gap : p.ax - p.halfX - stackW / 2 - gap;
+        y = p.ay - p.halfY + stackH / 2;
       }
       bdir = left ? 'right' : 'left';
       break;
@@ -516,6 +554,8 @@ export function oppScale(portrait: boolean): number {
 export function openHandScale(portrait: boolean, side: SeatSide = 'top'): number {
   return tunedHand(1, side === 'bottom' ? 'top' : side, true, portrait).s;
 }
+/** portrait: how much bigger the top partner's open hand is than a face-down top hand */
+export const OPEN_TOP_GROW = 1.25;
 /** a held hand leans back from vertical, its top towards the holder (radians) */
 export const HAND_LEAN = 0.35;
 /** an open hand leans back further, so its faces tilt up towards the camera */
@@ -628,9 +668,8 @@ export function seatHoldYaw(side: SeatSide): number {
  * human's; never a second row.
  */
 export function seatHand(n: number, side: SeatSide, open: boolean, d: TableDims, portrait: boolean): SeatHand {
-  void d;
   // the bottom seat is the human (screen-space fan); anyone else holds the hand tuned in the fan demo
-  return tunedHand(n, side === 'bottom' ? 'top' : side, open, portrait);
+  return tunedHand(n, side === 'bottom' ? 'top' : side, open, portrait, d);
 }
 
 // ───────────────────────── the table as tuned in fan-demo.html ─────────────────────────
@@ -694,21 +733,35 @@ export const TABLE_LAYOUT: { land: TableTune; port: TableTune } = {
   },
 };
 
-export const tableTune = (portrait: boolean): TableTune => (portrait ? TABLE_LAYOUT.port : TABLE_LAYOUT.land);
+/** the tuned table; with `d.fit`, adapted to the screen (see TableFit) */
+export function tableTune(portrait: boolean, d?: TableDims): TableTune {
+  const T = portrait ? TABLE_LAYOUT.port : TABLE_LAYOUT.land;
+  const f = d?.fit;
+  if (!f || (f.sx === 1 && f.sz === 1 && f.s === 1)) return T;
+  // the top row keeps its share of the screen width (its cards just overlap more)
+  const fan = (F: FanTune, top: boolean): FanTune => ({
+    ...F, posX: F.posX * f.sx, posZ: F.posZ * f.sz, scale: F.scale * f.s, spacing: top ? (F.spacing * f.sx) / f.s : F.spacing,
+  });
+  return {
+    ...T, top: fan(T.top, true), left: fan(T.left, false), right: fan(T.right, false),
+    // the deck spreads less in depth, clear of the (bigger) top row
+    deck: { ...T.deck, x: T.deck.x * f.sx, z: T.deck.z * (1 + (f.sz - 1) * 0.5) }, pile: { x: T.pile.x * f.sx, z: T.pile.z * f.sz },
+  };
+}
 
 const D2R = Math.PI / 180;
 
 /**
  * The camera for a screen: the tuned tilt (plus the table's own tilt) and fov, the tuned distance pulled
- * back when the screen is narrower than the one it was tuned on, so the same table width stays in view.
+ * back part of the way when the screen is narrower than the one it was tuned on (tableFit: the table's
+ * spots close in the rest of the way).
  */
 export function tableCamera(W: number, H: number, portrait: boolean): { tilt: number; fov: number; dist: number } {
   const T = tableTune(portrait);
-  const aspect = W / Math.max(1, H);
   return {
     tilt: (T.camera.tilt - T.tableRotX) * D2R,
     fov: T.camera.fov,
-    dist: T.camera.dist * Math.max(1, T.aspect / aspect),
+    dist: T.camera.dist * tableFit(W, H, portrait).c,
   };
 }
 
@@ -741,9 +794,12 @@ function qRotate(q: Q, x: number, y: number, z: number, out: number[], o: number
  * past `fullCards`; then the whole fan is turned (Euler YXZ) and placed. An open hand (the partner
  * showing their cards) is turned around so its faces show on the far side, as the demo's face-up flag.
  */
-function tunedHand(n: number, side: SeatSide, open: boolean, portrait: boolean): SeatHand {
-  const T = tableTune(portrait);
-  const F = side === 'top' ? T.top : side === 'left' || side === 'lowerLeft' ? T.left : T.right;
+function tunedHand(n: number, side: SeatSide, open: boolean, portrait: boolean, d?: TableDims): SeatHand {
+  const T = tableTune(portrait, d);
+  let F = side === 'top' ? T.top : side === 'left' || side === 'lowerLeft' ? T.left : T.right;
+  // portrait: the partner's open hand across the table is a little bigger so its faces can be read (same
+  // row length, a touch nearer the middle, clear of the HUD)
+  if (portrait && open && side === 'top') F = { ...F, scale: F.scale * OPEN_TOP_GROW, spacing: F.spacing / OPEN_TOP_GROW, posZ: F.posZ + 0.18 };
   const full = Math.max(2, F.fullCards);
   const sq = n > full ? (full - 1) / (n - 1) : 1;
   const sp0 = F.spacing;
@@ -961,6 +1017,51 @@ export function layoutPlates(
     pl.x = x;
     pl.y = y;
   });
+  // no plate over the deck or the pile: step it just clear (the shortest way that stays on screen and
+  // off the other seats' hands)
+  const tt = tableTune(portrait, tableDims(portrait, W, H));
+  const spot = (cx: number, cz: number, r: number): Box => {
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (let k = 0; k < 8; k++) {
+      project(cx + (k & 1 ? r : -r), k & 4 ? 0.2 : 0, cz + (k & 2 ? r : -r), pt);
+      x0 = Math.min(x0, pt.x);
+      x1 = Math.max(x1, pt.x);
+      y0 = Math.min(y0, pt.y);
+      y1 = Math.max(y1, pt.y);
+    }
+    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 };
+  };
+  const blockers = [spot(tt.deck.x, tt.deck.z, 0.6), spot(tt.pile.x, tt.pile.z, 0.55)];
+  avoid.push(...blockers);
+  const g = 6;
+  for (const pl of plates) {
+    if (pl.seat === 0 || !pl.visible) continue;
+    const free = (b: Box) =>
+      b.x - b.w / 2 >= 4 && b.x + b.w / 2 <= W - 4 && b.y - b.h / 2 >= 4 && b.y + b.h / 2 <= H - 4 &&
+      !blockers.some((q) => overlaps(b, q, g)) && !handBoxes.some((q) => q.seat !== pl.seat && overlaps(b, q, 0));
+    const hit = blockers.find((q) => overlaps(pl, q, g));
+    if (!hit) continue;
+    const cands = [
+      { x: pl.x, y: hit.y - hit.h / 2 - g - pl.h / 2 },
+      { x: pl.x, y: hit.y + hit.h / 2 + g + pl.h / 2 },
+      { x: hit.x - hit.w / 2 - g - pl.w / 2, y: pl.y },
+      { x: hit.x + hit.w / 2 + g + pl.w / 2, y: pl.y },
+    ]
+      .map((c) => ({ ...c, w: pl.w, h: pl.h, d: Math.hypot(c.x - pl.x, c.y - pl.y) }))
+      .filter(free)
+      .sort((a, b) => a.d - b.d);
+    const b = cands[0];
+    if (!b) continue;
+    if (pl.bubble) {
+      pl.bubble.x += b.x - pl.x;
+      pl.bubble.y += b.y - pl.y;
+    }
+    pl.x = b.x;
+    pl.y = b.y;
+  }
   return { plates, handBoxes, avoid };
 }
 

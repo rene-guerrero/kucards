@@ -173,8 +173,8 @@ describe('room core: Parejas visibility', () => {
       const t = rig(9);
       const a = t.join('pid-1');
       const b = t.join('pid-2');
-      t.send(a, { t: 'setMode', mode: 'partners', playerCount: 4 });
-      t.send(a, { t: 'setRules', rules: normalizeRules({ partnerOpen: open }, 'partners') });
+      t.send(a, { t: 'setMode', mode: 'classic', playerCount: 4, teamPlay: true });
+      t.send(a, { t: 'setRules', rules: normalizeRules({ partnerOpen: open }, 'classic') });
       t.send(a, { t: 'start' });
       const ev = a.inbox.find((m) => m.t === 'events') as Extract<ServerMsg, { t: 'events' }>;
       const deal = ev.events[0] as Extract<GameEvent, { type: 'deal' }>;
@@ -223,5 +223,31 @@ describe('room core: moves', () => {
     expect(m.round.hands[0].length).toBe(w.view!.handCounts[0]);
     expect(m.round.hands[1]).toEqual([]);
     for (const mv of w.view!.legal) expect(mv.seat).toBe(0);
+  });
+});
+
+describe('room core: round clock', () => {
+  it('the host sets clocks (clamped); in the final minute moves get the short time; at zero the round ends by time', () => {
+    const r = rig(4);
+    const host = r.join('pid-1');
+    r.send(host, { t: 'setRules', rules: { target: 0 } });
+    r.send(host, { t: 'setClock', clock: { roundMin: 3, moveSec: 500, finalSec: 1 } });
+    expect(r.core.data!.clock).toEqual({ roundMin: 3, moveSec: 60, finalSec: 4 });
+    r.send(host, { t: 'start' });
+    const ends = r.core.data!.roundEnds!;
+    expect(ends).toBeGreaterThan(r.now);
+    // nobody moves: every human turn waits its full move time until the final minute, then 4 s
+    r.run(ends - r.now - 30_000);
+    const turns = host.inbox.filter((m): m is Extract<typeof m, { t: 'turn' }> => m.t === 'turn' && m.deadline !== null);
+    expect(turns.some((m) => m.moveMs === 60_000)).toBe(true);
+    expect(turns.at(-1)!.roundEnds).toBe(ends);
+    expect(r.core.data!.match!.round!.over).toBe(false);
+    {
+      expect(turns.at(-1)!.moveMs).toBe(4_000);
+      r.run(40_000);
+      const end = host.inbox.flatMap((m) => (m.t === 'events' ? m.events : [])).find((e) => e.type === 'roundEnd');
+      expect(end).toMatchObject({ byTime: true });
+      expect(r.core.data!.match!.round!.over).toBe(true);
+    }
   });
 });

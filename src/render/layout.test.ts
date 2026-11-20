@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import {
   fanLayout, hitFan, inSlot, separatePlates, seatSides, turnSpin, ringSign, seatAnchor, plateBox, projectCss, sortHand, tableDims,
   cameraTilt, cameraFov, fitTable, seatHand, fanSpread, seatHoldYaw, handCardCorners, handCardNormal, handFitPoints, layoutPlates,
-  CARD_W, SEAT_SIDE, HUD_TOP, HAND_HIDDEN, tableTune, tableCamera, openHandScale, type FanLayout, type PlateSeat, type Box,
+  CARD_W, SEAT_SIDE, HUD_TOP, OPEN_TOP_GROW, HAND_HIDDEN, tableTune, tableCamera, openHandScale, type FanLayout, type PlateSeat, type Box,
 } from './layout';
 import type { Card, Seat } from '../contracts';
 
@@ -128,9 +128,11 @@ describe('hands of the other seats (tuned in fan-demo.html)', () => {
             const f = seatHand(n, side, open, tableDims(portrait), portrait);
             const tag = `${side} open=${open} n=${n} portrait=${portrait}`;
             expect(f.poses.length, tag).toBe(n);
-            expect(f.s, tag).toBeCloseTo(F.scale, 9);
+            // portrait: the top partner's open hand is a little bigger and nearer (OPEN_TOP_GROW)
+            const grown = portrait && open && side === 'top';
+            expect(f.s, tag).toBeCloseTo(F.scale * (grown ? OPEN_TOP_GROW : 1), 9);
             expect(f.ax, tag).toBeCloseTo(F.posX, 9);
-            expect(f.az, tag).toBeCloseTo(F.posZ, 9);
+            expect(f.az, tag).toBeCloseTo(F.posZ + (grown ? 0.18 : 0), 9);
             expect(f.holdYaw).toBeCloseTo(seatHoldYaw(side), 9);
             for (const p of f.poses) {
               expect(p.q, tag).toBeDefined();
@@ -168,7 +170,7 @@ describe('hands of the other seats (tuned in fan-demo.html)', () => {
 
   it("the partner's open hand is the size of the opponents' hands across the table", () => {
     for (const portrait of [false, true]) {
-      expect(openHandScale(portrait, 'top')).toBeCloseTo(tableTune(portrait).top.scale, 9);
+      expect(openHandScale(portrait, 'top')).toBeCloseTo(tableTune(portrait).top.scale * (portrait ? OPEN_TOP_GROW : 1), 9);
       expect(openHandScale(portrait, 'lowerLeft')).toBeCloseTo(tableTune(portrait).left.scale, 9);
       expect(openHandScale(portrait, 'lowerRight')).toBeCloseTo(tableTune(portrait).right.scale, 9);
     }
@@ -294,8 +296,13 @@ describe('the whole table at phone and desktop sizes', () => {
     { name: 'Clásico 4p desktop', W: 1280, H: 720, seats: [0, 1, 2, 3], teams: null },
     { name: '2p landscape', W: 915, H: 412, seats: [0, 2], teams: null },
     { name: 'Enfrente landscape', W: 915, H: 412, seats: [0, 1, 2, 3], teams: [[0, 2], [1, 3]], open: 2 },
+    { name: 'Enfrente portrait', W: 390, H: 844, seats: [0, 1, 2, 3], teams: [[0, 2], [1, 3]], open: 2 },
     { name: 'Codo a codo R landscape', W: 915, H: 412, seats: [0, 1, 2, 3], teams: [[0, 1], [2, 3]], open: 1 },
     { name: 'Codo a codo L portrait', W: 375, H: 812, seats: [0, 1, 2, 3], teams: [[0, 3], [1, 2]], open: 3 },
+    { name: '4p desktop', W: 1920, H: 1080, seats: [0, 1, 2, 3], teams: null },
+    { name: '4p narrow desktop', W: 900, H: 800, seats: [0, 1, 2, 3], teams: null },
+    { name: 'Codo a codo R narrow desktop', W: 1100, H: 800, seats: [0, 1, 2, 3], teams: [[0, 1], [2, 3]], open: 1 },
+    { name: '4p portrait small', W: 360, H: 740, seats: [0, 1, 2, 3], teams: null },
   ];
 
   /** the view's camera (tableCamera): the tuned tilt, fov and distance */
@@ -309,7 +316,7 @@ describe('the whole table at phone and desktop sizes', () => {
     cam.updateMatrixWorld(true);
     const vp = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     const project = (x: number, y: number, z: number, out: { x: number; y: number }) => projectCss(vp.elements, x, y, z, W, H, out);
-    return { portrait, sides: seatSides(m.seats, m.teams), project, dims: tableDims(portrait) };
+    return { portrait, sides: seatSides(m.seats, m.teams), project, dims: tableDims(portrait, W, H) };
   }
 
   for (const m of MODES)
@@ -344,4 +351,18 @@ describe('the whole table at phone and desktop sizes', () => {
         }
       }
     });
+});
+
+describe('new-game preview = table (partner side)', () => {
+  it('Codo a codo partnerSide after = right, before = left; 2 vs 2 Enfrente partner on top', async () => {
+    const { createMatch, DEFAULT_RULES } = await import('../engine');
+    const sideOf = (m: { seats: number[]; teams?: number[][] | null }) => {
+      const s = seatSides(m.seats, m.teams);
+      const partner = m.teams!.find((t) => t.includes(0))!.find((x) => x !== 0)!;
+      return s[partner];
+    };
+    expect(sideOf(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 4, partnerSide: 'after' }, 1))).toBe('lowerRight');
+    expect(sideOf(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 4, partnerSide: 'before' }, 1))).toBe('lowerLeft');
+    expect(sideOf(createMatch(DEFAULT_RULES, { mode: 'classic', players: 4, teams: true }, 1))).toBe('top');
+  });
 });

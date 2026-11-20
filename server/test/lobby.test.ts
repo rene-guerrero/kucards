@@ -93,12 +93,17 @@ describe('seats, modes, rules, host', () => {
     expect(seatOf(r, 'p2')).toBe(2);
     expect(r.seats[1].kind).toBe('empty');
     expect(() => setMode(r, 'p2', 'action', 3)).toThrow(LobbyError);
-    setMode(r, 'p1', 'partners', 2);
+    setMode(r, 'p1', 'sideBySide', 2);
     expect(r.playerCount).toBe(4);
-    expect(r.rules.deck).toBe(RULE_PRESETS.find((p) => p.id === 'partners')!.rules.deck);
-    expect(publicRoom(r).teams).toEqual([[0, 2], [1, 3]]);
-    setRules(r, 'p1', { ...r.rules, seating: 'side' });
+    expect(r.rules.stacking).toBe('any');
     expect(publicRoom(r).teams).toEqual([[0, 1], [2, 3]]);
+    setRules(r, 'p1', { ...r.rules, stacking: 'off' });
+    expect(r.rules.stacking).toBe('any'); // Codo a codo always stacks
+    setMode(r, 'p1', 'classic', 4, true);
+    expect(publicRoom(r).teamPlay).toBe(true);
+    expect(publicRoom(r).teams).toEqual([[0, 2], [1, 3]]);
+    setMode(r, 'p1', 'classic', 3, true);
+    expect(publicRoom(r).teams).toBeNull();
   });
 
   it('rules are normalized on top of the preset', () => {

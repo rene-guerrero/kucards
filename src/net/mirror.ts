@@ -85,6 +85,11 @@ export function applyEvent(m: MatchState, ev: GameEvent, faceOf: (id: number) =>
       const got = ev.cards && ev.cards.length === ev.count ? ev.cards.slice() : hiddenCards(ev.count);
       r.hands[ev.seat].push(...got);
       r.deck.splice(Math.max(0, r.deck.length - ev.count), ev.count);
+      // a penalty draw settles the pending penalty (else the stale +N lingers into the next turns)
+      if (ev.reason === 'penalty') {
+        r.pendingDraw = 0;
+        r.pendingFrom = null;
+      }
       break;
     }
     case 'reverse':

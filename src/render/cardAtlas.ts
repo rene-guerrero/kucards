@@ -1,7 +1,7 @@
 /**
  * Card faces, backs and table textures, all drawn on canvases with paths (no image assets).
  *
- * Every distinct face lives in ONE atlas texture (13×9 cells; 2048² on high, 1024² otherwise). A card
+ * Every distinct face, day and night, lives in ONE atlas texture (17×12 cells; 2048² on high, 1024² otherwise). A card
  * instance only carries its cell offset (see FaceMap / cellUv); the shader adds `uv * CELL_SU/SV`.
  * The mapping part is pure (unit-tested in node); the drawing functions need a DOM canvas.
  *
@@ -9,42 +9,102 @@
  * (sol = sun, mar = wave, palma = palm leaf, coral = shell) or the action glyph, and a big corner index. Wild-type cards are black with a four-colour medallion; once
  * played, the pile shows the same design on the chosen colour (a `tint` variant cell). Same design as
  * the HTML art in src/ui/cardArt.ts, drawn in the same 60×90 design space.
+ *
+ * Día y Noche: every card also has a NIGHT side, the same design in neon on black. See "night side" below.
  */
 import * as THREE from 'three';
 import type { CardBack, CardFace, CardKind, Color, TableStyle } from '../contracts';
 import { BACK_FIELD, backDesign } from './cardBacks';
 
 /** the four card colours: one hue each and four clearly different lightness steps (sol lightest, mar darkest) */
-export const COLOR_HEX: Record<Color, string> = { sol: '#f7b417', mar: '#0c7489', palma: '#4db33d', coral: '#e04a3f' };
+export const COLOR_HEX: Record<AnyColor, string> = {
+  sol: '#f7b417', mar: '#0c7489', palma: '#4db33d', coral: '#e04a3f',
+  naranja: '#ff8a1f', celeste: '#3fc8ff', rosa: '#ff3d9a', morado: '#8a4dff',
+};
 /** a deep shade of each colour, for the marks on the ivory capsule (plain yellow would wash out there) */
-export const COLOR_DEEP: Record<Color, string> = { sol: '#b86e00', mar: '#0a5d6f', palma: '#2f8a26', coral: '#bf2f2c' };
-/** a bright, light-like version of each colour, for glows and arrows on the felt */
-export const COLOR_GLOW: Record<Color, string> = { sol: '#ffcb45', mar: '#35c6de', palma: '#74db55', coral: '#ff6b5c' };
+export const COLOR_DEEP: Record<AnyColor, string> = {
+  sol: '#b86e00', mar: '#0a5d6f', palma: '#2f8a26', coral: '#bf2f2c',
+  naranja: '#b34e00', celeste: '#0f7fb5', rosa: '#b8125f', morado: '#4f1fb8',
+};
+/** a bright, light-like version of each colour, for glows and arrows on the felt (night: also the marks on the black capsule) */
+export const COLOR_GLOW: Record<AnyColor, string> = {
+  sol: '#ffcb45', mar: '#35c6de', palma: '#74db55', coral: '#ff6b5c',
+  naranja: '#ffb05c', celeste: '#8fe1ff', rosa: '#ff8cc4', morado: '#b894ff',
+};
 export const CREAM = '#fff6e6';
 const INK = '#13232e';
 const WILD_FIELD = '#0b0b0d';
 const COLORS: Color[] = ['sol', 'mar', 'palma', 'coral'];
 
+// ───────────────────────── night side (Día y Noche) ─────────────────────────
+//
+// The night side of a card is the day design in neon on black: the ivory parts (card edge, capsule, index)
+// are near-black, the field is one of four night colours and the marks on the capsule glow.
+//   naranja = comet · celeste = crescent moon · rosa = four-point star · morado = crystal
+//
+// API for the renderer (everything goes through the same FaceMap / drawFace / drawCell as the day cards):
+//  - A face is a NIGHT face when its `color` (or the `tint` of a played wild) is a night colour, or when it
+//    carries `night: true`. Only colourless cards need the flag: the engine's night wild is the very same
+//    face as the day wild ({ kind: 'wild', color: null }), so the renderer says which side it is showing:
+//    use `nightFace(face)` to set it. `isNightFace(face)` answers the question.
+//  - `faceMap.index(face)` / `lookup(face)` give the cell, as for day faces. Pre-drawn night cells: numbers
+//    0–9, +5 (kind 'draw6', draw 5), skipAll, reverse and flip in the four night colours; the night wild and wildColor in hand
+//    and in each night colour; the colourless night flip. Any other night face (a +1, a +6 …: any kind
+//    with `draw` shows "+N") gets a free cell on first use (`added: true` → `drawCell`), like harsh-mode
+//    extras; there are ~35 spare cells.
+//  - `playedFace(nightFace(wild), 'rosa')` → the played night wild on the chosen night colour.
+//  - `drawCell` paints the gutter of a night cell black, so mip levels do not bleed ivory into its edge.
+//  - COLOR_HEX / COLOR_DEEP / COLOR_GLOW hold the night colours too (COLOR_GLOW for rings and arrows).
+// Same thing in SVG: `cardSvg(face)` in src/ui/cardArt.ts takes the same faces.
+
+export type NightColor = 'naranja' | 'celeste' | 'rosa' | 'morado';
+/** a day or a night colour (stays right whether or not contracts' `Color` lists the night ids) */
+export type AnyColor = Color | NightColor;
+export const NIGHT_COLORS: readonly NightColor[] = ['naranja', 'celeste', 'rosa', 'morado'];
+/** night "ivory": the card edge, the capsule and the index fill */
+export const NIGHT_PAPER = '#08080c';
+/** the pale light used where a night mark sits on black with no colour of its own */
+export const NIGHT_LIGHT = '#efe9ff';
+/** field of a night wild-type card in hand: a blue-black, so the black edge and capsule still read */
+const NIGHT_WILD_FIELD = '#17122b';
+
+export const isNightColor = (c: string | null | undefined): c is NightColor => !!c && (NIGHT_COLORS as readonly string[]).includes(c);
+/** is this the night side of a card? */
+export function isNightFace(f: AtlasFace): boolean {
+  return !!f.night || isNightColor(f.color) || isNightColor(f.tint);
+}
+/** mark a face as a night face (needed for colourless cards; harmless on the others) */
+export function nightFace(f: AtlasFace): AtlasFace {
+  return f.night ? f : { ...f, night: true };
+}
+
 // ───────────────────────── atlas mapping (pure) ─────────────────────────
 
-export const ATLAS_COLS = 13;
-export const ATLAS_ROWS = 9;
+/**
+ * 17×12 = 204 cells (it was 13×9 before the night side). A card is 56.6×85 px in the 1024² atlas (74 px
+ * before) and 113×170 px in the 2048² one: still one texture and the same memory, a little softer on low
+ * and medium when a card is shown large. Day faces keep their cell numbers; night faces follow them.
+ */
+export const ATLAS_COLS = 17;
+export const ATLAS_ROWS = 12;
 export const ATLAS_CELLS = ATLAS_COLS * ATLAS_ROWS;
 /** inner card width as a fraction of the cell (the rest is an ivory gutter against mip bleeding) */
 const INNER_W = 0.94;
 export const CELL_SU = (INNER_W / ATLAS_COLS);
 export const CELL_SV = (INNER_W / ATLAS_COLS) * 1.5;
 
-const DEFAULT_DRAW: Partial<Record<CardKind, number>> = { draw2: 2, wild4: 4, draw6: 6, draw10: 10 };
+/** keyed by kind as a string: the night deck may bring kinds of its own (a +1, a +5) */
+const DEFAULT_DRAW: Record<string, number | undefined> = { draw1: 1, draw2: 2, wild4: 4, draw5: 5, draw6: 6, draw10: 10 };
 
-/** an atlas face: a card face, plus the colour chosen for a played wild-type card (its field colour) */
-export type AtlasFace = CardFace & { tint?: Color };
+/** an atlas face: a card face (day or night), plus the colour chosen for a played wild-type card (its field
+ *  colour) and the night flag for colourless night cards */
+export type AtlasFace = Omit<CardFace, 'color'> & { color: AnyColor | null; tint?: AnyColor; night?: boolean };
 
 /** wild-type kinds whose player picks a colour (the played card takes it as its field) */
 export const TINTABLE: readonly CardKind[] = ['wild', 'wild4', 'swap', 'draw10', 'wildColor'];
 
 /** the face to show for a card on the pile: wild-type cards take the chosen colour, others stay as they are */
-export function playedFace(f: CardFace, chosen: Color | null | undefined): AtlasFace {
+export function playedFace(f: AtlasFace, chosen: AnyColor | null | undefined): AtlasFace {
   return chosen && f.color === null && TINTABLE.includes(f.kind) ? { ...f, tint: chosen } : f;
 }
 
@@ -52,11 +112,12 @@ export function playedFace(f: CardFace, chosen: Color | null | undefined): Atlas
 export function faceKey(f: AtlasFace): string {
   const v = f.kind === 'number' ? String(f.value ?? 0) : '';
   const d = f.draw && f.draw !== DEFAULT_DRAW[f.kind] ? String(f.draw) : '';
-  return `${f.kind}:${f.color ?? 'x'}:${v}:${d}${f.tint && f.color === null ? `@${f.tint}` : ''}`;
+  const n = f.color === null && isNightFace(f) ? '~n' : '';
+  return `${f.kind}:${f.color ?? 'x'}:${v}:${d}${f.tint && f.color === null ? `@${f.tint}` : ''}${n}`;
 }
 
 /** every face the decks can hold (classic + power cards + Ciclón + Eclipse) and the played wild-type
- *  variants in the four colours, in atlas order (102 of 117 cells) */
+ *  variants in the four colours, then the night faces, in atlas order (102 day + 67 night of 204 cells) */
 export function baseFaces(): AtlasFace[] {
   const out: AtlasFace[] = [];
   for (const c of COLORS) {
@@ -70,6 +131,15 @@ export function baseFaces(): AtlasFace[] {
   out.push({ kind: 'draw10', color: null, draw: 10 }, { kind: 'wildColor', color: null });
   const wilds = out.filter((f) => f.color === null && TINTABLE.includes(f.kind));
   for (const f of wilds) for (const c of COLORS) out.push({ ...f, tint: c });
+  // night side: numbers and the sure actions per colour, then the colourless cards and the played wilds
+  for (const c of NIGHT_COLORS) {
+    for (let v = 0; v <= 9; v++) out.push({ kind: 'number', color: c, value: v });
+    out.push({ kind: 'draw6', color: c, draw: 5 }, { kind: 'skip', color: c }, { kind: 'reverse', color: c }, { kind: 'flip', color: c });
+  }
+  // the night Comodín and Comodín +6 ("draw until the colour" is no longer dealt)
+  const nightWilds: AtlasFace[] = [{ kind: 'wild', color: null, night: true }, { kind: 'wild4', color: null, draw: 6, night: true }];
+  out.push(...nightWilds, { kind: 'flip', color: null, night: true });
+  for (const f of nightWilds) for (const c of NIGHT_COLORS) out.push({ ...f, tint: c });
   return out;
 }
 
@@ -114,7 +184,7 @@ export class FaceMap {
     const k = this.keys.get(faceKey(f));
     if (k !== undefined) return { i: k, added: false };
     if (this.faces.length < ATLAS_CELLS) return { i: this.add(f), added: true };
-    const base = this.keys.get(faceKey({ kind: f.kind, color: f.color, value: f.value, tint: f.tint })) ?? 0;
+    const base = this.keys.get(faceKey({ kind: f.kind, color: f.color, value: f.value, tint: f.tint, night: f.night })) ?? 0;
     return { i: base, added: false };
   }
 }
@@ -143,8 +213,15 @@ export function roundRect(g: G, x: number, y: number, w: number, h: number, r: n
   g.closePath();
 }
 
+/** night symbols (24×24 box): comet tail, crescent moon, four-point star with a spark, crystal and its facets */
+const SYM_COMET_TAIL = 'M12.8 11.2 21 3M14.6 15.4 21.6 9.8M8.6 9.4 14.6 2.6';
+const SYM_MOON = 'M15.8 3.84A9 9 0 1 0 20.16 15.8 7.6 7.6 0 0 1 15.8 3.84z';
+const SYM_STAR = 'M11 3.5Q12.5 11 20 12.5 12.5 14 11 21.5 9.5 14 2 12.5 9.5 11 11 3.5zM19 2.2Q19.5 4.7 22 5.2 19.5 5.7 19 8.2 18.5 5.7 16 5.2 18.5 4.7 19 2.2z';
+const SYM_CRYSTAL = 'M12 2 18.6 8v8L12 22 5.4 16V8z';
+const SYM_CRYSTAL_FACETS = 'M5.4 8 12 11.2 18.6 8M12 11.2V22';
+
 /** a colour symbol in a 24×24 box centred on (12, 12) of the current transform */
-function drawSymbol(g: G, c: Color, fill: string, vein = CREAM): void {
+function drawSymbol(g: G, c: AnyColor, fill: string, vein = CREAM): void {
   g.lineCap = 'round';
   g.lineJoin = 'round';
   switch (c) {
@@ -189,11 +266,38 @@ function drawSymbol(g: G, c: Color, fill: string, vein = CREAM): void {
       g.stroke(P('M12 20.5 7 7.4M12 20.5 12 5.6M12 20.5 17 7.4M12 20.5 4.6 9.6M12 20.5l7.4-10.9'));
       g.globalAlpha /= 0.85;
       break;
+    case 'naranja':
+      // comet: a round head, three streaks trailing up and away
+      g.fillStyle = fill;
+      g.beginPath();
+      g.arc(8.2, 15.8, 4.8, 0, Math.PI * 2);
+      g.fill();
+      g.strokeStyle = fill;
+      g.lineWidth = 2;
+      g.stroke(P(SYM_COMET_TAIL));
+      break;
+    case 'celeste':
+      g.fillStyle = fill;
+      g.fill(P(SYM_MOON));
+      break;
+    case 'rosa':
+      g.fillStyle = fill;
+      g.fill(P(SYM_STAR));
+      break;
+    case 'morado':
+      g.fillStyle = fill;
+      g.fill(P(SYM_CRYSTAL));
+      g.strokeStyle = vein;
+      g.globalAlpha *= 0.85;
+      g.lineWidth = 1.2;
+      g.stroke(P(SYM_CRYSTAL_FACETS));
+      g.globalAlpha /= 0.85;
+      break;
   }
 }
 
 /** action glyphs, 24×24 box (stroke `col`); returns false when the kind has no glyph */
-function drawGlyph(g: G, kind: CardKind, col: string): boolean {
+function drawGlyph(g: G, kind: CardKind, col: string, isIndex = col === CREAM): boolean {
   g.strokeStyle = col;
   g.fillStyle = col;
   g.lineWidth = 2.6;
@@ -223,9 +327,36 @@ function drawGlyph(g: G, kind: CardKind, col: string): boolean {
     case 'mirror':
       g.stroke(P('M12 3v18M8 7 4 12l4 5M16 7l4 5-4 5'));
       return true;
-    case 'sweep':
-      g.stroke(P('M15 3.5 9.5 13M6 13.5h8l-1.5 7H7.5z'));
+    case 'sweep': {
+      // the hand, fanned out, goes down onto the pile. On the capsule (deep colour): four cards, a curved
+      // arrow and a short stack (top card and two edges); as the ivory corner index: three cards over a plain down arrow.
+      const small = isIndex;
+      const fan = small
+        ? ['M4.25 5.88L7.55 3.98Q8.67 3.33 9.32 4.46L12.82 10.52Q13.47 11.65 12.35 12.3L9.05 14.2Q7.93 14.85 7.28 13.72L3.78 7.66Q3.13 6.53 4.25 5.88Z', 'M16.45 3.98L19.75 5.88Q20.87 6.53 20.22 7.66L16.72 13.72Q16.07 14.85 14.95 14.2L11.65 12.3Q10.53 11.65 11.18 10.52L14.68 4.46Q15.33 3.33 16.45 3.98Z', 'M10.1 3.3L13.9 3.3Q15.2 3.3 15.2 4.6L15.2 11.6Q15.2 12.9 13.9 12.9L10.1 12.9Q8.8 12.9 8.8 11.6L8.8 4.6Q8.8 3.3 10.1 3.3Z']
+        : ['M1.27 6.51L3.35 4.63Q4.09 3.96 4.76 4.71L8.51 8.87Q9.18 9.61 8.43 10.28L6.35 12.15Q5.61 12.82 4.94 12.08L1.19 7.92Q0.53 7.17 1.27 6.51Z', 'M5.22 3.64L7.94 2.96Q8.91 2.72 9.15 3.69L10.51 9.12Q10.75 10.09 9.78 10.33L7.06 11.01Q6.09 11.25 5.85 10.28L4.49 4.85Q4.25 3.88 5.22 3.64Z', 'M10.06 2.96L12.78 3.64Q13.75 3.88 13.51 4.85L12.15 10.28Q11.91 11.25 10.94 11.01L8.22 10.33Q7.25 10.09 7.49 9.12L8.85 3.69Q9.09 2.72 10.06 2.96Z', 'M14.65 4.63L16.73 6.51Q17.47 7.17 16.81 7.92L13.06 12.08Q12.39 12.82 11.65 12.15L9.57 10.28Q8.82 9.61 9.49 8.87L13.24 4.71Q13.91 3.96 14.65 4.63Z'];
+      g.lineWidth = small ? 1.1 : 0.8;
+      for (const d of fan) {
+        g.strokeStyle = small ? INK : CREAM;
+        g.fill(P(d));
+        g.stroke(P(d));
+      }
+      g.strokeStyle = col;
+      if (small) {
+        g.lineWidth = 2.6;
+        g.stroke(P('M12 15.4v6M8.6 18.6l3.4 3.4 3.4-3.4'));
+        return true;
+      }
+      g.lineWidth = 2;
+      g.stroke(P('M19.6 5Q23.4 11 18 15.4'));
+      g.lineWidth = 1;
+      g.fill(P('M16.14 16.91 19.78 16.78 17 13.38Z'));
+      g.stroke(P('M16.14 16.91 19.78 16.78 17 13.38Z'));
+      g.fill(P('M5 17.2h7.6l2 3H3Z'));
+      g.stroke(P('M5 17.2h7.6l2 3H3Z'));
+      g.lineWidth = 1.2;
+      g.stroke(P('M3.2 21.9h11.2M3.2 23.4h11.2'));
       return true;
+    }
     case 'swap':
       g.stroke(P('M4 8h14l-3-3M20 16H6l3 3'));
       g.beginPath();
@@ -260,14 +391,17 @@ function drawGlyph(g: G, kind: CardKind, col: string): boolean {
   }
 }
 
-const KIND_DRAW_TEXT: Partial<Record<CardKind, string>> = { draw2: '+2', wild4: '+4', draw6: '+6', draw10: '+10' };
-const cornerText = (f: CardFace): string =>
+const KIND_DRAW_TEXT: Record<string, string | undefined> = { draw1: '+1', draw2: '+2', wild4: '+4', draw5: '+5', draw6: '+6', draw10: '+10' };
+const cornerText = (f: AtlasFace): string =>
   f.kind === 'number' ? String(f.value ?? 0) : f.draw && f.draw !== DEFAULT_DRAW[f.kind] ? `+${f.draw}` : KIND_DRAW_TEXT[f.kind] ?? (f.draw ? `+${f.draw}` : '');
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 
-function fourColourDisc(g: G, cx: number, cy: number, r: number): void {
-  const order: Color[] = ['coral', 'sol', 'mar', 'palma'];
+/** the wild's four colours, clockwise from the top-left quarter: day and night */
+const WILD_ORDER: readonly AnyColor[] = ['coral', 'sol', 'mar', 'palma'];
+const NIGHT_WILD_ORDER: readonly AnyColor[] = ['rosa', 'naranja', 'celeste', 'morado'];
+
+function fourColourDisc(g: G, cx: number, cy: number, r: number, order: readonly AnyColor[] = WILD_ORDER): void {
   for (let q = 0; q < 4; q++) {
     g.fillStyle = COLOR_HEX[order[q]];
     g.beginPath();
@@ -281,11 +415,12 @@ function fourColourDisc(g: G, cx: number, cy: number, r: number): void {
 /** the gloss on the top of the colour field (turned half a turn it is the shade at the bottom) */
 const SHEEN = 'M3.4 9A5.6 5.6 0 0 1 9 3.4H51A5.6 5.6 0 0 1 56.6 9V30Q30 46 3.4 30Z';
 /** the four quarters of the wild capsule (the capsule inset by 1.8) */
-const QUADS: readonly [Color, string][] = [
-  ['coral', 'M30 45H17.3V36.5A12.7 12.7 0 0 1 30 23.8Z'],
-  ['sol', 'M30 45V23.8A12.7 12.7 0 0 1 42.7 36.5V45Z'],
-  ['mar', 'M30 45H42.7V53.5A12.7 12.7 0 0 1 30 66.2Z'],
-  ['palma', 'M30 45V66.2A12.7 12.7 0 0 1 17.3 53.5V45Z'],
+/** in WILD_ORDER / NIGHT_WILD_ORDER order */
+const QUADS: readonly string[] = [
+  'M30 45H17.3V36.5A12.7 12.7 0 0 1 30 23.8Z',
+  'M30 45V23.8A12.7 12.7 0 0 1 42.7 36.5V45Z',
+  'M30 45H42.7V53.5A12.7 12.7 0 0 1 30 66.2Z',
+  'M30 45V66.2A12.7 12.7 0 0 1 17.3 53.5V45Z',
 ];
 
 /**
@@ -302,9 +437,20 @@ export function drawFace(g: G, f: AtlasFace, x: number, y: number, w: number): v
   g.scale(s, s);
   const c = f.color;
   const hue = c ?? f.tint ?? null;
-  const field = hue ? COLOR_HEX[hue] : WILD_FIELD;
-  // ivory card + colour field (the ivory gutter around the cell is filled by the caller)
-  g.fillStyle = CREAM;
+  // night side: the ivory parts are black, the marks on the capsule glow, the index is black with a light rim
+  const night = isNightFace(f);
+  const paper = night ? NIGHT_PAPER : CREAM;
+  const wildOrder = night ? NIGHT_WILD_ORDER : WILD_ORDER;
+  /** marks sitting on the paper with no colour of their own (the wild's disc) */
+  const ink = night ? NIGHT_LIGHT : INK;
+  /** the index: its fill and its rim */
+  const idxFill = night ? (hue ? NIGHT_PAPER : NIGHT_WILD_FIELD) : CREAM;
+  const idxRim = night ? (hue ? COLOR_GLOW[hue] : NIGHT_LIGHT) : INK;
+  /** glyphs drawn straight on the field (corner glyphs, the +10 ring) */
+  const onField = night ? (hue ? NIGHT_PAPER : NIGHT_LIGHT) : CREAM;
+  const field = hue ? COLOR_HEX[hue] : night ? NIGHT_WILD_FIELD : WILD_FIELD;
+  // ivory card + colour field (the gutter around the cell is filled by the caller)
+  g.fillStyle = paper;
   roundRect(g, 0, 0, 60, 90, 7);
   g.fill();
   g.fillStyle = field;
@@ -325,7 +471,7 @@ export function drawFace(g: G, f: AtlasFace, x: number, y: number, w: number): v
     g.lineWidth = 1.2;
     g.lineCap = 'butt';
     for (let i = 0; i < 4; i++) {
-      g.strokeStyle = COLOR_HEX[COLORS[i]];
+      g.strokeStyle = COLOR_HEX[night ? NIGHT_COLORS[i] : COLORS[i]];
       g.beginPath();
       g.moveTo(3.4, 12 + i * 20);
       g.lineTo(56.6, 30 + i * 20);
@@ -337,51 +483,52 @@ export function drawFace(g: G, f: AtlasFace, x: number, y: number, w: number): v
   g.fillStyle = 'rgba(0,0,0,0.24)';
   roundRect(g, 15.5, 23.3, 29, 46, 14.5);
   g.fill();
-  g.fillStyle = CREAM;
+  g.fillStyle = paper;
   roundRect(g, 15.5, 22, 29, 46, 14.5);
   g.fill();
   g.textAlign = 'center';
   g.textBaseline = 'alphabetic';
   if (!c) {
-    for (const [col, d] of QUADS) {
-      g.fillStyle = COLOR_HEX[col];
-      g.fill(P(d));
+    for (let q = 0; q < 4; q++) {
+      g.fillStyle = COLOR_HEX[wildOrder[q]];
+      g.fill(P(QUADS[q]));
     }
-    g.strokeStyle = CREAM;
+    g.strokeStyle = paper;
     g.lineWidth = 0.9;
     g.lineCap = 'butt';
     g.stroke(P('M30 23.8V66.2M17.3 45H42.7'));
     if (f.kind === 'draw10') {
       // the +10 carries a dashed storm ring so it never reads as a +4 at a glance
+      g.strokeStyle = night ? onField : paper;
       g.lineWidth = 1.3;
       g.setLineDash([3, 2.2]);
       roundRect(g, 13.4, 19.9, 33.2, 50.2, 16.6);
       g.stroke();
       g.setLineDash([]);
     }
-    g.fillStyle = CREAM;
+    g.fillStyle = paper;
     g.beginPath();
     g.arc(30, 45, 9.8, 0, Math.PI * 2);
     g.fill();
-    g.strokeStyle = 'rgba(0,0,0,0.22)';
+    g.strokeStyle = night ? 'rgba(239,233,255,0.3)' : 'rgba(0,0,0,0.22)';
     g.lineWidth = 0.8;
     g.stroke();
     const t = f.kind === 'wild' ? 'Ku' : cornerText(f);
     if (t) {
-      g.fillStyle = INK;
+      g.fillStyle = ink;
       g.font = `900 ${t.length > 2 ? 9 : t === 'Ku' ? 10.5 : 11.5}px ${FONT}`;
       g.fillText(t, 30, t.length > 2 ? 48.2 : 48.9);
     } else {
       g.save();
       g.translate(21.6, 36.6);
       g.scale(0.7, 0.7);
-      drawGlyph(g, f.kind, INK);
+      drawGlyph(g, f.kind, ink, false);
       g.restore();
     }
   } else {
-    const deep = COLOR_DEEP[c];
+    const deep = night ? COLOR_GLOW[c] : COLOR_DEEP[c];
     g.strokeStyle = deep;
-    g.globalAlpha = 0.45;
+    g.globalAlpha = night ? 0.7 : 0.45;
     g.lineWidth = 0.9;
     roundRect(g, 17.4, 23.9, 25.2, 42.2, 12.6);
     g.stroke();
@@ -390,18 +537,27 @@ export function drawFace(g: G, f: AtlasFace, x: number, y: number, w: number): v
     if (t) {
       g.fillStyle = deep;
       g.font = `900 ${t.length > 2 ? 13 : t.length > 1 ? 17 : 25}px ${FONT}`;
+      if (night) {
+        // neon: a soft halo of the card colour round the bright figure
+        g.strokeStyle = COLOR_HEX[c];
+        g.globalAlpha = 0.4;
+        g.lineWidth = 2.6;
+        g.lineJoin = 'round';
+        g.strokeText(t, 30, t.length > 1 ? 45.6 : 47.4);
+        g.globalAlpha = 1;
+      }
       g.fillText(t, 30, t.length > 1 ? 45.6 : 47.4);
     } else {
       g.save();
       g.translate(18.6, 26.2);
       g.scale(0.95, 0.95);
-      drawGlyph(g, f.kind, deep);
+      drawGlyph(g, f.kind, deep, false);
       g.restore();
     }
     g.save();
     g.translate(22.8, 50.6);
     g.scale(0.6, 0.6);
-    drawSymbol(g, c, deep);
+    drawSymbol(g, c, deep, paper);
     g.restore();
   }
   // corners: the index (value or glyph) on its own; mirrored bottom-right
@@ -435,17 +591,17 @@ export function drawFace(g: G, f: AtlasFace, x: number, y: number, w: number): v
       g.textBaseline = 'alphabetic';
       g.lineJoin = 'round';
       g.lineWidth = multi ? 1.8 : 2.2;
-      g.strokeStyle = INK;
+      g.strokeStyle = idxRim;
       g.save();
       g.translate(cx, multi ? 19 : 20.6);
       g.scale(sx, 1);
       g.strokeText(corner, 0, 0);
-      g.fillStyle = CREAM;
+      g.fillStyle = idxFill;
       g.fillText(corner, 0, 0);
       g.restore();
     } else if (f.kind === 'wild') {
-      fourColourDisc(g, 11.5, 13, 5.6);
-      g.strokeStyle = CREAM;
+      fourColourDisc(g, 11.5, 13, 5.6, wildOrder);
+      g.strokeStyle = night ? NIGHT_LIGHT : CREAM;
       g.lineWidth = 1;
       g.beginPath();
       g.arc(11.5, 13, 5.6, 0, Math.PI * 2);
@@ -454,7 +610,7 @@ export function drawFace(g: G, f: AtlasFace, x: number, y: number, w: number): v
       g.save();
       g.translate(4.2, 5);
       g.scale(0.68, 0.68);
-      drawGlyph(g, f.kind, CREAM);
+      drawGlyph(g, f.kind, onField, true);
       g.restore();
     }
     g.restore();
@@ -480,6 +636,13 @@ export function drawAtlas(size: number, map: FaceMap): AtlasCanvas {
 
 export function drawCell(g: G, size: number, i: number, f: AtlasFace): void {
   const r = cellPx(i, size);
+  if (isNightFace(f)) {
+    // a night card's edge is black: so is its gutter (and the corners outside the rounded card)
+    const cw = size / ATLAS_COLS;
+    const ch = size / ATLAS_ROWS;
+    g.fillStyle = NIGHT_PAPER;
+    g.fillRect((i % ATLAS_COLS) * cw, Math.floor(i / ATLAS_COLS) * ch, cw, ch);
+  }
   drawFace(g, f, r.x, r.y, r.w);
 }
 

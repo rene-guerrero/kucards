@@ -10,30 +10,49 @@
  * - The ¡Ku! button is armed whenever the human may call ¡Ku! (2 cards or fewer) or catch someone who
  *   forgot; one tap does whichever applies (catching first).
  * - The match is saved after every move (src/app/save.ts) so "Continuar" works after the app closes.
+ * - The human has a turn timer (the clock's move time, as online; ring on their plate; pause stops it). When it
+ *   runs out the engine's `timeoutMove` plays for them (normal CPU policy, colours -> red); a draw made by
+ *   the timer is followed by `afterAutoDraw` (the drawn card is played when it can be). A draw the player
+ *   made themselves is never played by the timer: it passes.
+ * - Clocks (src/engine/clock.ts, picked on the new-game screen): the move time replaces the fixed turn
+ *   time; with a round limit a countdown runs in the HUD (paused with the game). In its final minute
+ *   every move gets the shorter final-minute time, the countdown turns urgent and the music frantic.
+ *   At zero the round ends at once: every hand is shown face up for a beat, then the engine's `timeUp`
+ *   verdict (fewest card points wins) is scored as any round end.
  */
 import type { Card, Color, Difficulty, EngineApi, GameEvent, Lineup, MatchState, Move, PlayStyle, Seat, TableView } from '../contracts';
+import { colorSlot, COLORS, NIGHT_COLORS, isNightColor } from '../contracts';
 import type { RoundSummaryCtx, MatchEndCtx } from '../ui/summary';
 import type { HudPlayer, KuState, ResponseChoice, ResponseOpts, ScoreRow } from '../ui/hud';
 import type { FaceSpec } from '../roster';
 import { cardPoints } from '../engine/cards';
+import { timeUpWinner } from '../engine/game';
+import { finalRanks } from '../engine/ranks';
+import { afterAutoDraw, AUTO_COLOR, timeoutMove } from '../engine/ai';
+import { DEFAULT_CLOCK, fitThink, inFinalMinute, moveMs, sanitizeClock, type ClockSettings } from '../engine/clock';
+import { voiceForEvent, VOICE_DELAY_MS } from '../audio/voice';
+import { powerSfxForEvent } from '../audio/sfx';
 
 /** what the controller needs from the HUD (src/ui/hud.ts Hud implements it) */
 export interface GameHud {
   onKu: (() => void) | null;
+  /** another player's colour choice on the colour diamond (display only) */
+  showColorChoice?(chosen: Color, colors?: readonly Color[]): Promise<void>;
   setPlayers(list: HudPlayer[]): void;
   setRound(n: number): void;
   setTarget(n: number | null): void;
   setScores(rows: ScoreRow[], bump?: boolean): void;
-  setActiveColor(c: Color | null): void;
-  setDirection(d: 1 | -1): void;
   setPending(n: number): void;
   setKu(state: KuState): void;
-  pickColor(): Promise<Color>;
+  /** colours: the ones to offer (Día y Noche: the side in play); default the day colours */
+  pickColor(colors?: readonly Color[]): Promise<Color>;
   pickTarget(seats: Seat[], title?: string): Promise<Seat>;
   kuPop(name?: string): Promise<void>;
   showResponse(o: ResponseOpts): Promise<ResponseChoice>;
   notice(text: string): void;
   closeAll(): void;
+  /** the round countdown (ms left; null hides it); urgent = the final minute */
+  setClock?(msLeft: number | null, urgent: boolean): void;
 }
 
 export interface GameUi {
@@ -43,11 +62,17 @@ export interface GameUi {
   /** card phrase for an event (plates.bubbleFor) */
   bubbleFor(ev: GameEvent): { seat: Seat; text: string; strong: boolean } | null;
   avatarEvent(ev: GameEvent): void;
+  /** music mood: 'frenzy' in the round's final minute (src/audio/sfx.ts setMusicMode) */
+  musicMode?(m: 'normal' | 'frenzy'): void;
+  /** final-minute position badge on a seat's avatar (Plates.setRank); null = none */
+  rank?(seat: Seat, n: number | null): void;
+  /** the turn-timer ring on a plate (Plates.setTimer); null seat = none */
+  setTimer?(seat: Seat | null, endsAt?: number, total?: number): void;
   /** a seat that can be caught for a missed ¡Ku! (its avatar becomes the tap target); null = none */
   catchable?(seat: Seat | null, onCatch: () => void): void;
   roundSummary(ctx: RoundSummaryCtx): Promise<'next' | 'menu'>;
   matchEnd(ctx: MatchEndCtx): Promise<'rematch' | 'menu'>;
-  t(key: 'game.passHint' | 'game.acceptHint' | 'game.catchHint' | 'game.giveHint' | 'game.pickSwapColor' | 'hud.pickSwap' | 'team.a' | 'team.b', p?: Record<string, string | number>): string;
+  t(key: 'game.acceptHint' | 'game.autoDraw' | 'game.catchHint' | 'game.giveHint' | 'game.pickSwapColor' | 'hud.pickSwap' | 'team.a' | 'team.b', p?: Record<string, string | number>): string;
 }
 
 export interface SeatInfo {
@@ -65,6 +90,8 @@ export type GameView = TableView & {
   restore?: TableView['restore'];
   /** the human's colour-changing card onto the pile before the colour pane opens (resolves when it lands) */
   previewPlay?(cardId: number): Promise<void>;
+  /** undo a previewPlay that was not followed by the play */
+  cancelPreview?(): void;
 };
 
 export interface ControllerOpts {
@@ -83,8 +110,14 @@ export interface ControllerOpts {
   onExit(): void;
   sleep?(ms: number): Promise<void>;
   random?(): number;
+  /** the human's turn time in ms (overrides the clock's move time; 0 = no timer) */
+  turnMs?: number;
+  /** round limit and move times (default: match.clock, else no limit and 30 s moves) */
+  clock?: ClockSettings;
 }
 
+/** beat before an unanswerable penalty is drawn for the human (offline and online) */
+export const AUTO_DRAW_MS = 900;
 const TURN_KINDS = new Set(['play', 'draw', 'pass', 'acceptPenalty', 'respond', 'challenge']);
 const isTurnMove = (m: Move) => TURN_KINDS.has(m.kind);
 
@@ -107,21 +140,48 @@ export class GameController {
   private sleep: (ms: number) => Promise<void>;
   private rnd: () => number;
   private lastNotice = '';
+  // human turn timer
+  private turnTotal = 0;
+  // round clock: ms left in the round (null = no limit / no round live)
+  readonly clock: ClockSettings;
+  private clockLeft: number | null = null;
+  private clockLast = 0;
+  private clockTimer: ReturnType<typeof setInterval> | null = null;
+  private frenzy = false;
+  /** a time-up resolves these: the human's open prompt is dropped */
+  private abortWaiters: (() => void)[] = [];
+  /** re-runs the pending human deadline check after the deadline moved */
+  private rearm: (() => void) | null = null;
+  private turnNo = 0;
+  private turnKey = '';
+  private deadline = 0;
+  private pausedLeft: number | null = null;
+  private timerHandle: ReturnType<typeof setTimeout> | null = null;
+  private ringOn = false;
+  /** bumped whenever a human turn prompt is dropped (timeout / new prompt): stale prompts do nothing */
+  private gen = 0;
 
   constructor(match: MatchState, o: ControllerOpts) {
     this.match = match;
     this.o = o;
+    // dev builds: the running offline game, for checks in the browser console
+    if (import.meta.env?.DEV && typeof window !== 'undefined') (window as unknown as { __kucaGame: unknown }).__kucaGame = this;
     for (const p of o.players) this.bySeat.set(p.seat, p);
     this.prevScores = match.seats.map((s) => match.scores[s]);
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.rnd = o.random ?? Math.random;
+    this.clock = sanitizeClock(o.clock ?? match.clock ?? DEFAULT_CLOCK);
     o.ui.hud.onKu = () => this.onKuTap();
   }
 
   /** play until the match ends or the player leaves. `restored`: the view already shows the saved round */
   async run(restored = false): Promise<void> {
     try {
-      if (restored) this.refreshHud();
+      if (restored) {
+        this.refreshHud();
+        // continue the round clock where it was saved
+        if (this.match.round && !this.match.round.over) this.startClock(this.match.clockLeftMs);
+      }
       while (!this.stopped) {
         await this.chain;
         await this.waitResume();
@@ -144,6 +204,9 @@ export class GameController {
 
   stop(): void {
     this.stopped = true;
+    this.stopClock();
+    this.o.ui.musicMode?.('normal');
+    this.disarm();
     this.o.view.cancelHumanPick();
     this.o.ui.hud.closeAll();
     this.setPaused(false);
@@ -152,6 +215,17 @@ export class GameController {
   setPaused(p: boolean): void {
     this.paused = p;
     this.o.view.setPaused(p);
+    // pausing (also the app going to the background) saves the round clock where it stands
+    if (p && this.match.round && !this.match.round.over) this.persist(this.match);
+    // the turn timer stands still while paused
+    if (p && this.ringOn && this.pausedLeft === null) {
+      this.pausedLeft = Math.max(0, this.deadline - Date.now());
+      this.o.ui.setTimer?.(null);
+    } else if (!p && this.pausedLeft !== null) {
+      this.deadline = Date.now() + this.pausedLeft;
+      this.pausedLeft = null;
+      if (this.ringOn) this.o.ui.setTimer?.(0, this.deadline, this.turnTotal);
+    }
     if (!p) {
       const w = this.resumeWaiters;
       this.resumeWaiters = [];
@@ -183,7 +257,7 @@ export class GameController {
     if (!ok) return;
     const { match, events } = this.o.engine.applyMove(this.match, move);
     this.match = match;
-    this.o.save?.(match, this.o.lineup);
+    this.persist(match);
     await this.present(events);
   }
 
@@ -195,7 +269,16 @@ export class GameController {
       const b = ui.bubbleFor(ev);
       if (b) ui.say(b.seat, b.text, b.strong);
       if (ev.type === 'ku') void ui.hud.kuPop(this.name(ev.seat));
+      if (ev.type === 'turn' || ev.type === 'deal') this.turnNo++;
+      if (ev.type === 'roundEnd') this.stopClock();
+      // "Draw N!" starts as the drawing starts; the others once their card has landed
+      if (ev.type === 'draw') voiceForEvent(ev, 60);
       await view.handle(ev);
+      powerSfxForEvent(ev);
+      // another player's wild: their pick shows on the colour diamond before play goes on
+      if (ev.type === 'play' && ev.seat !== 0 && ev.color && ev.card.face.color === null) await ui.hud.showColorChoice?.(ev.color, isNightColor(ev.color) ? NIGHT_COLORS : COLORS);
+      if (ev.type !== 'draw') voiceForEvent(ev, VOICE_DELAY_MS);
+      if (this.frenzy) this.refreshRanks();
       this.refreshHud(ev.type === 'roundEnd');
     }
   }
@@ -204,8 +287,6 @@ export class GameController {
     const { hud } = this.o.ui;
     const r = this.match.round;
     if (r) {
-      hud.setActiveColor(r.activeColor);
-      hud.setDirection(r.direction);
       hud.setPending(r.pendingDraw);
       hud.setRound(r.roundNo);
     }
@@ -224,16 +305,25 @@ export class GameController {
   private revealPartner(): void {
     const p = this.partnerSeat();
     const r = this.match.round;
-    if (p === null || !this.o.view.setOpenHand) return;
-    const open = this.match.rules.partnerOpen !== false && !!r && !r.over;
-    this.o.view.setOpenHand(p, open ? r!.hands[p].slice() : null);
+    const view = this.o.view;
+    if (!view.setOpenHand || !r) return;
+    if (r.over) {
+      // round over: the partner's hand stays face up and the opponents' cards turn face up too
+      for (const st of this.match.seats) if (st !== 0 && r.hands[st].length) view.setOpenHand(st, r.hands[st].slice());
+      return;
+    }
+    // during play: only the partner is shown (Parejas with partnerOpen); everyone else face down
+    for (const st of this.match.seats) if (st !== 0 && st !== p) view.setOpenHand(st, null);
+    if (p === null) return;
+    const open = this.match.rules.partnerOpen !== false;
+    view.setOpenHand(p, open ? r.hands[p].slice() : null);
   }
 
   scoreRows(): ScoreRow[] {
     const m = this.match;
     if (m.teams) {
       const mine = m.teams[0].includes(0) ? 0 : 1;
-      return m.teams.map((team, i) => ({ label: this.o.ui.t(i === 0 ? 'team.a' : 'team.b'), value: m.scores[team[0]], me: i === mine, team: i as 0 | 1 }));
+      return m.teams.map((team, i) => ({ label: this.o.ui.t(team.includes(0) ? 'team.a' : 'team.b'), value: m.scores[team[0]], me: i === mine, team: i as 0 | 1 }));
     }
     return m.seats.map((s) => ({ label: this.name(s), value: m.scores[s], me: s === 0 }));
   }
@@ -270,6 +360,7 @@ export class GameController {
   // ───────────────────────── rounds ─────────────────────────
 
   private async startRound(): Promise<void> {
+    if (!this.match.clock) this.match = { ...this.match, clock: this.clock }; // kept in the save / rematch
     const res = this.o.engine.startRound(this.match);
     this.match = res.match;
     this.prevScores = this.match.seats.map((s) => this.match.scores[s]);
@@ -277,8 +368,117 @@ export class GameController {
     this.o.view.setDeck?.([...r.deck, ...r.discard, ...r.hands.flat()]);
     const target = Number(this.match.rules.target) || 0;
     this.o.ui.hud.setTarget(target || null);
-    this.o.save?.(this.match, this.o.lineup);
+    this.persist(this.match);
+    this.stopClock();
     await this.present(res.events);
+    this.startClock();
+  }
+
+  // ───────────────────────── round clock ─────────────────────────
+
+  /** the time a move gets right now (the final minute is shorter) */
+  moveTime(): number {
+    return this.o.turnMs ?? moveMs(this.clock, this.clockLeft);
+  }
+
+  /** ms left in the round (null = no limit or no round live) */
+  /** save the match with the round time left, so a restored game continues the clock */
+  private persist(m: MatchState): void {
+    this.o.save?.(this.clockLeft === null ? m : { ...m, clockLeftMs: Math.round(this.clockLeft) }, this.o.lineup);
+  }
+
+  get roundLeft(): number | null {
+    return this.clockLeft;
+  }
+
+  /** start the round countdown (ms: time left, default the full limit); public for tests */
+  startClock(ms?: number): void {
+    this.stopClock();
+    if (!this.clock.roundMin || this.stopped) return;
+    this.clockLeft = ms ?? this.clock.roundMin * 60_000;
+    this.clockLast = Date.now();
+    this.clockTimer = setInterval(() => this.tickClock(Date.now()), 250);
+    this.tickClock(this.clockLast);
+  }
+
+  private stopClock(): void {
+    if (this.clockTimer) clearInterval(this.clockTimer);
+    this.clockTimer = null;
+    this.clockLeft = null;
+    this.abortWaiters = [];
+    this.o.ui.hud.setClock?.(null, false);
+    this.setFrenzy(false);
+  }
+
+  private setFrenzy(on: boolean): void {
+    if (this.frenzy === on) return;
+    this.frenzy = on;
+    this.o.ui.musicMode?.(on ? 'frenzy' : 'normal');
+    this.refreshRanks();
+  }
+
+  /** final minute: badge the seats (teams) with the fewest card points; off otherwise */
+  private refreshRanks(): void {
+    const set = this.o.ui.rank;
+    if (!set) return;
+    const ranks = new Map(this.frenzy ? finalRanks(this.match) : []);
+    for (const s of this.match.seats) set(s, ranks.get(s) ?? null);
+  }
+
+  /** advance the round clock to `now` (time paused does not count); public for tests */
+  tickClock(now: number): void {
+    if (this.clockLeft === null) return;
+    const dt = Math.max(0, now - this.clockLast);
+    this.clockLast = now;
+    if (!this.paused && this.match.round && !this.match.round.over) this.clockLeft = Math.max(0, this.clockLeft - dt);
+    const final = inFinalMinute(this.clock, this.clockLeft);
+    if (final && !this.frenzy) {
+      this.setFrenzy(true);
+      // a running human turn shrinks to the final-minute move time
+      if (this.ringOn) {
+        const ms = this.moveTime();
+        if (this.pausedLeft !== null) this.pausedLeft = Math.min(this.pausedLeft, ms);
+        else if (this.deadline > now + ms) {
+          this.deadline = now + ms;
+          this.turnTotal = ms;
+          this.o.ui.setTimer?.(0, this.deadline, ms);
+          if (this.timerHandle) clearTimeout(this.timerHandle);
+          this.timerHandle = null;
+          this.rearm?.();
+        }
+      }
+    }
+    this.o.ui.hud.setClock?.(this.clockLeft, final);
+    if (this.clockLeft <= 0) {
+      if (this.clockTimer) clearInterval(this.clockTimer);
+      this.clockTimer = null;
+      void this.onTimeUp();
+    }
+  }
+
+  /** the round's time ran out: drop any prompt, show every hand for a beat, then the verdict */
+  private onTimeUp(): Promise<void> {
+    const { view, ui, engine } = this.o;
+    this.gen++;
+    this.disarm();
+    view.cancelHumanPick();
+    view.cancelPreview?.();
+    ui.hud.closeAll();
+    const w = this.abortWaiters;
+    this.abortWaiters = [];
+    w.forEach((f) => f());
+    this.chain = this.chain.then(async () => {
+      const r = this.match.round;
+      if (this.stopped || !r || r.over) return;
+      for (const s of this.match.seats) if (s !== 0 && r.hands[s].length) view.setOpenHand?.(s, r.hands[s].slice());
+      await this.sleep(1100);
+      if (this.stopped || this.match.round !== r) return;
+      const { match, events } = engine.timeUp(this.match);
+      this.match = match;
+      this.persist(match);
+      await this.present(events);
+    });
+    return this.chain;
   }
 
   /** summary after a round; false = the player left for the menu */
@@ -286,7 +486,7 @@ export class GameController {
     const m = this.match;
     const r = m.round!;
     const target = Number(m.rules.target) || 0;
-    const winner = (r.discard.length ? this.roundWinner() : 0) as Seat;
+    const winner = (r.endedBy === 'time' ? timeUpWinner(m, r) : r.discard.length ? this.roundWinner() : 0) as Seat;
     const prevScores = this.prevScores ?? m.seats.map(() => 0);
     const players = m.seats.map((s) => {
       const info = this.bySeat.get(s)!;
@@ -303,11 +503,11 @@ export class GameController {
     const teams: RoundSummaryCtx['teams'] = m.teams
       ? [0, 1].map((i) => {
           const p = players.find((x) => x.seat === m.teams![i][0])!;
-          return { name: this.o.ui.t(i === 0 ? 'team.a' : 'team.b'), prev: p.prev, total: p.total };
+          return { name: this.o.ui.t(m.teams![i].includes(0) ? 'team.a' : 'team.b'), prev: p.prev, total: p.total };
         }) as RoundSummaryCtx['teams']
       : undefined;
     this.o.ui.hud.setKu('hidden');
-    const choice = await this.o.ui.roundSummary({ roundNo: r.roundNo, winner, points, players, teams, target: target || null, matchOver: m.over });
+    const choice = await this.o.ui.roundSummary({ roundNo: r.roundNo, winner, points, players, teams, target: target || null, matchOver: m.over, byTime: r.endedBy === 'time' });
     if (this.stopped) return false;
     if (choice === 'menu') {
       this.leave();
@@ -323,7 +523,7 @@ export class GameController {
         const side = !!m.teams && (m.teams[0].includes(1) || m.teams[0].includes(3));
         this.match = this.o.engine.createMatch(
           m.rules,
-          { mode: m.mode, players: m.seats.length as 2 | 3 | 4, seating: m.teams ? (side ? 'side' : 'across') : undefined, partnerSide: side ? (m.teams![0].includes(3) ? 'before' : 'after') : undefined },
+          { mode: m.mode, players: m.seats.length as 2 | 3 | 4, teams: !!m.teams, partnerSide: side ? (m.teams![0].includes(3) ? 'before' : 'after') : undefined },
           Date.now(),
         );
         this.o.view.reset();
@@ -351,21 +551,93 @@ export class GameController {
 
   private leave(): void {
     this.stopped = true;
+    this.stopClock();
     this.o.onExit();
   }
 
   // ───────────────────────── turns ─────────────────────────
 
   private async humanTurn(): Promise<void> {
-    const { engine, view, ui } = this.o;
     const m = this.match;
     const r = m.round!;
-    const legal = engine.legalMoves(m, 0).filter(isTurnMove);
-    if (!legal.length) {
+    if (!this.o.engine.legalMoves(m, 0).some(isTurnMove)) {
       // nothing on turn (e.g. a window waiting): let the timer close it
       await this.sleep(400);
       return this.closeWindow();
     }
+    const g = ++this.gen;
+    // a time-up drops the prompt (the picker's promise never resolves then)
+    const aborted = new Promise<'abort'>((res) => this.abortWaiters.push(() => res('abort')));
+    const ms = this.moveTime();
+    if (ms <= 0) {
+      await Promise.race([this.humanChoice(g), aborted]);
+      return;
+    }
+    // one deadline per turn: a draw that keeps the turn does not restart it
+    const key = `${r.roundNo}:${this.turnNo}`;
+    if (key !== this.turnKey) {
+      this.turnKey = key;
+      this.deadline = Date.now() + ms;
+      this.turnTotal = ms;
+      this.pausedLeft = null;
+    }
+    this.ringOn = true;
+    if (!this.paused) this.o.ui.setTimer?.(0, this.deadline, this.turnTotal);
+    try {
+      const res = await Promise.race([this.humanChoice(g).then(() => 'done' as const), this.timeout(g), aborted]);
+      if (res === 'timeout' && !this.stopped && this.match === m) await this.onTimeout();
+    } finally {
+      if (this.gen === g) this.disarm();
+    }
+  }
+
+  /** resolves when the human's deadline passes (time paused does not count) */
+  private timeout(g: number): Promise<'timeout'> {
+    return new Promise((resolve) => {
+      const tick = () => {
+        this.timerHandle = null;
+        this.rearm = tick;
+        if (g !== this.gen || this.stopped) return;
+        if (this.paused) return void this.resumeWaiters.push(tick);
+        const left = this.deadline - Date.now();
+        if (left <= 0) return resolve('timeout');
+        this.timerHandle = setTimeout(tick, left);
+      };
+      tick();
+    });
+  }
+
+  private disarm(): void {
+    if (this.timerHandle) clearTimeout(this.timerHandle);
+    this.timerHandle = null;
+    if (this.ringOn) this.o.ui.setTimer?.(null);
+    this.ringOn = false;
+  }
+
+  /** the human's time ran out: drop the prompt and play for them */
+  private async onTimeout(): Promise<void> {
+    const { view, ui } = this.o;
+    this.gen++;
+    this.disarm();
+    view.cancelHumanPick();
+    view.cancelPreview?.();
+    ui.hud.closeAll();
+    const mv = timeoutMove(this.match, 0);
+    if (!mv) return;
+    await this.act(mv);
+    // a draw made by the timer: the drawn card is played when it can be
+    if (mv.kind === 'draw') {
+      const next = afterAutoDraw(this.match, 0);
+      if (next) await this.act(next);
+    }
+  }
+
+  private async humanChoice(g: number): Promise<void> {
+    const { engine, view, ui } = this.o;
+    const m = this.match;
+    const r = m.round!;
+    const gone = () => this.stopped || this.match !== m || this.gen !== g;
+    const legal = engine.legalMoves(m, 0).filter(isTurnMove);
     // a penalty aimed at the human that can be answered: shield / mirror / challenge bar
     const responds = legal.filter((x): x is Extract<Move, { kind: 'respond' }> => x.kind === 'respond');
     const challenge = legal.find((x) => x.kind === 'challenge');
@@ -373,22 +645,27 @@ export class GameController {
       const kindOf = (id: number) => r.hands[0].find((c) => c.id === id)?.face.kind;
       const shield = responds.find((x) => kindOf(x.cardId) === 'shield');
       const mirror = responds.find((x) => kindOf(x.cardId) === 'mirror');
-      const choice = await ui.hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, canChallenge: !!challenge, ms: 8000 });
-      if (this.stopped || this.match !== m) return;
+      // stacking is mandatory: when a stack is possible there is no accept, the hand is the answer
+      const acc = legal.find((x) => x.kind === 'acceptPenalty');
+      const choice = await ui.hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, canChallenge: !!challenge, canStack: !acc, canAccept: !!acc, ms: 8000 });
+      if (gone()) return;
       const mv = choice === 'shield' ? shield : choice === 'mirror' ? mirror : choice === 'challenge' ? challenge : undefined;
       if (mv) return this.act(mv);
-      // 'accept': unless a penalty card can still be stacked, take the cards now
-      const acc = legal.find((x) => x.kind === 'acceptPenalty');
-      if (acc && !legal.some((x) => x.kind === 'play')) return this.act(acc);
+      if (acc) return this.act(acc);
+    }
+    // a penalty the human cannot stack, challenge or answer: drawn for them after a short beat
+    if (legal.length === 1 && legal[0].kind === 'acceptPenalty') {
+      await this.sleep(AUTO_DRAW_MS);
+      if (gone()) return;
+      return this.act(legal[0]);
     }
     const plays = legal.filter((x): x is Extract<Move, { kind: 'play' }> => x.kind === 'play');
     const playable = [...new Set(plays.map((p) => p.cardId))];
     const drawLike = legal.find((x) => x.kind === 'draw' || x.kind === 'pass' || x.kind === 'acceptPenalty');
-    if (r.drewThisTurn && drawLike?.kind === 'pass') ui.hud.notice(ui.t('game.passHint'));
     // nothing playable: the pyramid over the deck is the only hint
     if (r.pendingDraw > 0 && playable.length) ui.hud.notice(ui.t('game.acceptHint', { n: r.pendingDraw }));
     const pick = await view.requestHumanPick(playable, !!drawLike);
-    if (this.stopped || this.match !== m) return;
+    if (gone()) return;
     if (pick === 'draw') {
       if (drawLike) await this.act(drawLike);
       return;
@@ -399,14 +676,18 @@ export class GameController {
     if (variants.some((v) => v.target !== undefined)) {
       const targets = [...new Set(variants.map((v) => v.target!))] as Seat[];
       const target = await ui.hud.pickTarget(targets, ui.t('hud.pickSwap'));
+      if (gone()) return;
       variants = variants.filter((v) => v.target === target);
     }
-    if (variants.some((v) => v.color)) {
+    if (variants.some((v) => v.color) && r.hands[0].length === 1) {
+      // the winning last card: red, no colour pane
+      variants = variants.filter((v) => v.color === AUTO_COLOR || (!!v.color && colorSlot(v.color) === colorSlot(AUTO_COLOR)));
+    } else if (variants.some((v) => v.color)) {
       // the card lands on the pile first, then the colour is asked
       await view.previewPlay?.(pick);
-      if (this.stopped || this.match !== m) return;
-      const color = await ui.hud.pickColor();
-      if (this.stopped || this.match !== m) return;
+      if (gone()) return;
+      const color = await ui.hud.pickColor([...new Set(variants.map((v) => v.color!).filter(Boolean))]);
+      if (gone()) return;
       variants = variants.filter((v) => v.color === color);
     }
     // partnerPass: on a 7 the human may give one card to the partner
@@ -414,10 +695,11 @@ export class GameController {
     const giveIds = mv && this.o.giveOptions ? this.o.giveOptions(m, mv) : [];
     if (mv && giveIds.length) {
       ui.hud.notice(ui.t('game.giveHint'));
-      const g = await view.requestHumanPick(giveIds, true);
-      if (typeof g === 'number') mv = { ...(mv as Extract<Move, { kind: 'play' }>), give: g };
+      const gv = await view.requestHumanPick(giveIds, true);
+      if (gone()) return;
+      if (typeof gv === 'number') mv = { ...(mv as Extract<Move, { kind: 'play' }>), give: gv };
     }
-    if (!mv || this.stopped || this.match !== m) return;
+    if (!mv || gone()) return;
     await this.act(mv);
   }
 
@@ -425,7 +707,8 @@ export class GameController {
     const { engine, view } = this.o;
     const m = this.match;
     const pace = this.o.pace ?? 1;
-    const think = (520 + this.rnd() * 420) * pace;
+    // CPUs think well inside the move time (also the shorter final-minute one)
+    const think = fitThink((520 + this.rnd() * 420) * pace, this.clock, this.clockLeft);
 
     // Parejas with partnerShield: the human may shield the partner from a penalty
     const myResponds = engine.legalMoves(m, 0).filter((x): x is Extract<Move, { kind: 'respond' }> => x.kind === 'respond');
@@ -434,7 +717,8 @@ export class GameController {
       const kindOf = (id: number) => r.hands[0].find((c) => c.id === id)?.face.kind;
       const shield = myResponds.find((x) => kindOf(x.cardId) === 'shield');
       const mirror = myResponds.find((x) => kindOf(x.cardId) === 'mirror');
-      const choice = await this.o.ui.hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, ms: 4000 * pace });
+      const aborted = new Promise<null>((res) => this.abortWaiters.push(() => res(null)));
+      const choice = await Promise.race([this.o.ui.hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, ms: Math.min(4000 * pace, this.moveTime() * 0.5) }), aborted]);
       const mv = choice === 'shield' ? shield : choice === 'mirror' ? mirror : undefined;
       if (mv && this.match === m) return this.act(mv);
     }
@@ -475,7 +759,7 @@ export class GameController {
       if (this.stopped || !this.match.round?.window) return;
       const { match, events } = this.o.engine.closeWindow(this.match);
       this.match = match;
-      this.o.save?.(match, this.o.lineup);
+      this.persist(match);
       await this.present(events);
     });
     return this.chain;

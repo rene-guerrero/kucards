@@ -1723,6 +1723,32 @@ body[data-mock] .menu,
   cursor: default;
   opacity: 0.6;
 }
+.profile-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 10px;
+}
+.profile-links .link-btn.danger {
+  color: #ff8a80;
+}
+.profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.profile-form .text-input {
+  width: 100%;
+  max-width: none;
+}
+.profile-form-btns {
+  display: flex;
+  gap: 8px;
+}
+.profile-form-btns .btn {
+  flex: 1 1 0;
+}
 .rule-group-card {
   padding: 0;
   overflow: hidden;
@@ -3154,6 +3180,31 @@ button.ng-seat:hover {
   grid-template-columns: 1fr 1fr;
   column-gap: 10px;
 }
+.hud-scores.teams {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  white-space: nowrap;
+}
+/* partners: one compact line, "Nosotros 0 · Ellos 0" */
+.hud-scores.teams .hs-row {
+  justify-content: flex-start;
+  gap: 5px;
+  line-height: 1.2;
+}
+.hud-scores.teams .hs-row + .hs-row::before {
+  content: '\00b7';
+  margin: 0 7px 0 8px;
+  opacity: 0.5;
+}
+.hud-scores.teams .hs-pts {
+  font-size: 15px;
+}
+.score-card:has(.hud-scores.teams) {
+  width: auto;
+  min-width: 0;
+  padding: 7px 12px;
+}
 .hs-row {
   display: flex;
   align-items: baseline;
@@ -3209,17 +3260,6 @@ button.ng-seat:hover {
 }
 .hud-chips > [hidden] {
   display: none;
-}
-.hud-color {
-  background: var(--c) !important;
-  box-shadow: 0 0 0 2px #fff6e6;
-}
-.hud-dir svg {
-  width: 18px;
-  height: 18px;
-}
-.hud-dir.ccw svg {
-  transform: scaleX(-1);
 }
 .hud-pending {
   padding: 0 9px;
@@ -5132,4 +5172,715 @@ button.ng-seat:hover {
   .plate.catchable .plate-av::before {
     animation: none;
   }
+}
+
+/* pause: rows that fill the card width, every button in a row the same width */
+.pause-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 8px;
+  width: 100%;
+}
+.pause-grid > .btn {
+  width: 100%;
+  min-width: 0;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.pause-icons > .audio-tg {
+  width: 100%;
+  min-height: 48px;
+}
+.fs-tg svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* a short note at the top of the screen (fullscreen hints) */
+.fs-toast {
+  position: fixed;
+  left: 50%;
+  top: calc(var(--sat, 0px) + 14px);
+  transform: translateX(-50%);
+  z-index: 1000;
+  padding: 10px 16px;
+  border-radius: 12px;
+  background: rgba(10, 21, 28, 0.92);
+  color: #fff6e6;
+  font-weight: 700;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  transition: opacity 0.4s;
+  pointer-events: none;
+}
+.fs-toast.out {
+  opacity: 0;
+}
+
+/* main menu: one row of equal icon buttons across the full width (settings, how to play, about,
+   fullscreen, download) */
+.menu-actions .row.menu-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 10px;
+  width: 100%;
+}
+.menu-actions .row.menu-row > .btn.about-btn {
+  width: 100%;
+  min-width: 0;
+  min-height: 52px;
+}
+
+/* team letters are gone: the plate border colour shows the team */
+.plate-team {
+  display: none !important;
+}
+
+/* compact plates: the card count sits in the name box, beside the name (not a badge on the avatar) */
+.plate.stack .plate-info {
+  gap: 4px;
+}
+.plate.stack .plate-count,
+:root[data-quality='low'] .plate.stack .plate-count {
+  position: static;
+  right: auto;
+  top: auto;
+  height: auto;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+  font-size: calc(var(--d) * 0.24);
+  flex: 0 0 auto;
+}
+
+/* compact plates: one width for everyone; the name fills the left, the card count keeps the right end */
+.plate.stack .plate-info {
+  justify-content: space-between;
+  padding: 0 8px;
+}
+.plate.stack .plate-name,
+.plate.stack.long-name .plate-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: calc(var(--d) * 0.25);
+}
+.plate.stack .plate-count {
+  margin-left: auto;
+  min-width: 2.2em;
+  justify-content: flex-end;
+}
+
+/* Reglas: rule-set dropdown (Cubano clásico / saved profiles / Personalizado) */
+.rsel {
+  position: relative;
+  margin-top: 4px;
+}
+.rsel-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 18px;
+  border: 0;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #2ccdbf, var(--teal));
+  color: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow:
+    0 4px 0 var(--teal-d),
+    inset 0 2px 0 rgba(255, 255, 255, 0.25);
+}
+.rsel-btn:active {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 var(--teal-d);
+}
+.rsel-btn:focus-visible {
+  outline: 3px solid var(--mango);
+  outline-offset: 3px;
+}
+.rsel-v {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 900;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.rsel-v.custom {
+  font-style: italic;
+}
+.rsel-chev {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border-right: 3px solid currentColor;
+  border-bottom: 3px solid currentColor;
+  transform: translateY(-3px) rotate(45deg);
+  transition: transform 0.2s;
+}
+.rsel.open .rsel-chev {
+  transform: translateY(2px) rotate(-135deg);
+}
+.rsel-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 20;
+  max-height: 280px;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+  border-radius: 16px;
+  background: linear-gradient(180deg, var(--wood-600), var(--wood-700));
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.5),
+    inset 0 0 0 2px rgba(255, 182, 39, 0.35);
+  animation: rsel-in 0.14s ease-out;
+}
+.rsel-list[hidden] {
+  display: none;
+}
+@keyframes rsel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+.rsel-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 14px;
+  border-radius: 12px;
+  color: var(--cream);
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.rsel-opt:hover,
+.rsel-opt:focus {
+  outline: none;
+  background: rgba(255, 246, 230, 0.1);
+}
+.rsel-opt[aria-selected='true'] {
+  color: var(--mango);
+}
+.rsel-check {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 8px;
+  transform: translateY(-2px) rotate(-45deg);
+}
+.rsel-opt[aria-selected='true'] .rsel-check {
+  border-left: 3px solid currentColor;
+  border-bottom: 3px solid currentColor;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rsel-list {
+    animation: none;
+  }
+}
+
+/* Reglas: [label] [dropdown] [+ / trash] on one line */
+.rsel-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.rsel-line .rsel {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-top: 0;
+}
+.rsel-label {
+  flex: 0 0 auto;
+  color: var(--cream);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.rsel-act {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: rgba(255, 246, 230, 0.12);
+  color: var(--cream);
+  box-shadow:
+    0 4px 0 rgba(0, 0, 0, 0.35),
+    inset 0 0 0 2px rgba(255, 246, 230, 0.18);
+}
+.rsel-act svg {
+  width: 26px;
+  height: 26px;
+}
+.rsel-act.danger {
+  color: #ff8a80;
+}
+.rsel-act:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.rsel-act:not(:disabled):active {
+  transform: translateY(3px);
+}
+/* the list opens upward when there's no room below */
+.rsel.up .rsel-list {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+/* new game footer: a compact [REGLAS] [dropdown] [edit] line */
+.ng-rules-wrap > [hidden] {
+  display: none;
+}
+.ng-rsel {
+  margin-top: 0;
+  gap: 8px;
+}
+.ng-rsel .rsel-slot {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ng-rsel .rsel-btn {
+  min-height: 44px;
+  padding: 6px 14px;
+  border-radius: 14px;
+}
+.ng-rsel .rsel-v {
+  font-size: 15px;
+}
+.ng-rsel .rsel-act {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+}
+.ng-rsel .rsel-act svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* rule explanation: a dark bubble with white text, opened by tapping ⓘ */
+.tip {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: 11px 14px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #1c120c, #120a06);
+  color: #fff;
+  font: 700 13.5px/1.45 var(--font);
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.55),
+    inset 0 0 0 1.5px rgba(255, 182, 39, 0.45);
+  animation: tip-in 0.14s ease-out;
+  pointer-events: auto;
+}
+.tip-arrow {
+  position: absolute;
+  left: var(--ax, 50%);
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  background: #160d08;
+  transform: rotate(45deg);
+}
+.tip.above .tip-arrow {
+  bottom: -6px;
+  box-shadow: inset -1.5px -1.5px 0 rgba(255, 182, 39, 0.45);
+}
+.tip.below .tip-arrow {
+  top: -6px;
+  background: #1c120c;
+  box-shadow: inset 1.5px 1.5px 0 rgba(255, 182, 39, 0.45);
+}
+.tip.above {
+  transform-origin: var(--ax, 50%) 100%;
+}
+.tip.below {
+  transform-origin: var(--ax, 50%) 0;
+}
+@keyframes tip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tip {
+    animation: none;
+  }
+}
+
+/* new game footer: the rules line above the two buttons */
+.newgame .ng-foot {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.newgame .ng-foot-btns {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.newgame .ng-foot-btns .btn {
+  flex: 1 1 0;
+}
+.newgame .ng-foot-btns .ng-start {
+  flex: 0 1 260px;
+}
+
+/* rule options with 3+ choices: a quiet dropdown (dark felt, cream text) — the teal one is the rule set */
+.set-ctl > .rsel.soft {
+  width: min(230px, 52vw);
+  margin-top: 0;
+}
+.rsel.soft .rsel-btn {
+  min-height: 46px;
+  padding: 6px 14px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--cream);
+  box-shadow: inset 0 0 0 2px rgba(255, 246, 230, 0.12);
+}
+.rsel.soft .rsel-btn:active {
+  transform: none;
+  box-shadow: inset 0 0 0 2px rgba(255, 246, 230, 0.2);
+}
+.rsel.soft.open .rsel-btn {
+  box-shadow: inset 0 0 0 2px rgba(255, 182, 39, 0.45);
+}
+.rsel.soft .rsel-v {
+  font-size: 15px;
+  font-weight: 800;
+}
+.rsel.soft .rsel-chev {
+  width: 9px;
+  height: 9px;
+  color: var(--cream-2);
+}
+/* options stay on one line: the list grows to its widest option (at least the button's width) */
+.rsel-list {
+  right: auto;
+  min-width: 100%;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+}
+.rsel-opt {
+  white-space: nowrap;
+}
+.rsel-opt > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* in a settings row the dropdown sits at the right edge: its list opens leftward */
+.set-ctl > .rsel.soft .rsel-list {
+  left: auto;
+  right: 0;
+}
+/* an open dropdown can reach past its rule-group card (which clips for its rounded corners) */
+.rule-group-card:has(.rsel.open) {
+  position: relative;
+  z-index: 5;
+  overflow: visible;
+}
+
+/* new game: the rules line + buttons block (in the footer on phones, under the picker on wide screens) */
+.newgame .ng-foot-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.newgame .ng-foot[hidden] {
+  display: none;
+}
+.newgame .ng-side-foot {
+  margin-top: 14px;
+}
+.newgame .ng-side-foot:empty {
+  display: none;
+}
+/* the two buttons always the same size */
+.newgame .ng-foot-btns .btn,
+.newgame .ng-foot-btns .ng-start {
+  flex: 1 1 0;
+}
+
+/* new game rules dropdown: always opens upward, above the buttons */
+.ng-rsel .rsel-list {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+/* raised only while its list is open (a permanent z-index drew it over the phone's character sheet) */
+.ng-rules-wrap:has(.rsel.open) {
+  position: relative;
+  z-index: 10;
+}
+
+/* round clock (next to the round pill); the final minute turns red, glows and ticks (hud.ts kicks it
+   every second); the last ten seconds glow harder */
+.hud-clock { display: inline-block; margin-left: .45em; padding: 0 .45em; border-radius: 999px; background: rgba(0,0,0,.28); font-variant-numeric: tabular-nums; font-weight: 700; transition: background .3s, color .3s; }
+.hud-clock.urgent { background: linear-gradient(#ef4650, #c9222d); color: #fff; text-shadow: 0 1px 0 rgba(0,0,0,.3); animation: hud-clock-glow 1s ease-in-out infinite; }
+.hud-clock.urgent.last10 { animation-duration: .5s; }
+@keyframes hud-clock-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,70,80,.7), 0 0 .3em rgba(239,70,80,.4); }
+  50% { box-shadow: 0 0 0 .28em rgba(239,70,80,0), 0 0 1.1em rgba(239,70,80,.85); }
+}
+/* the final minute's "hurry": a soft red pulse around the screen edges and a warmer, brighter table */
+.hurry-fx { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .8s; }
+.hurry-fx::before, .hurry-fx::after { content: ''; position: absolute; inset: 0; }
+.hurry-fx::before { background: radial-gradient(ellipse at 50% 48%, rgba(255,214,150,.09), rgba(255,214,150,0) 55%); mix-blend-mode: screen; }
+.hurry-fx::after { background: radial-gradient(ellipse at center, rgba(200,20,30,0) 58%, rgba(200,20,30,.32) 100%); box-shadow: inset 0 0 3.5em rgba(220,30,40,.35); }
+.hurry-fx.on { opacity: 1; }
+.hurry-fx.on::after { animation: hurry-pulse 2s ease-in-out infinite; }
+@keyframes hurry-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .hud-clock.urgent { animation: none; box-shadow: 0 0 .6em rgba(239,70,80,.7); }
+  .hurry-fx.on::after { animation: none; opacity: .7; }
+}
+.ng-clock { display: flex; flex-wrap: wrap; align-items: center; gap: .35em .5em; margin-top: .4em; }
+.ng-clock .rsel-label { min-width: 0; }
+.ng-clock-item { display: flex; align-items: center; gap: .3em; font-size: .85em; opacity: .95; }
+
+/* face editor (Ajustes): a compact preview beside the controls, not a big stage on top */
+.face-editor .kua-stage {
+  height: 150px;
+}
+.face-editor .kua-stage-face {
+  width: 104px;
+  height: 104px;
+}
+.face-editor .kua-actions .kua-btn {
+  min-height: 40px;
+  font-size: 14px;
+}
+@media (min-width: 520px) {
+  .face-editor .kua-layout {
+    grid-template-columns: minmax(0, 200px) minmax(0, 1fr);
+    align-items: start;
+  }
+  /* in the narrow left column the preview stacks: face on top, buttons full width under it (the phone
+     rule below 640px puts them side by side, which doesn't fit in this column) */
+  .face-editor .kua-preview {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .face-editor .kua-stage {
+    height: 150px;
+  }
+  .face-editor .kua-stage-face {
+    width: 104px;
+    height: 104px;
+  }
+  .face-editor .kua-actions {
+    flex-direction: column;
+  }
+  .face-editor .kua-actions .kua-btn {
+    width: 100%;
+    min-width: 0;
+    white-space: nowrap;
+  }
+}
+
+/* chat pop-up: the player's gestures above the quick phrases */
+.qp-gestures {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 246, 230, 0.1);
+}
+.qp-gesture {
+  display: grid;
+  place-items: center;
+  min-height: 56px;
+  padding: 4px;
+  border: 0;
+  border-radius: 14px;
+  background: rgba(255, 246, 230, 0.08);
+  cursor: pointer;
+}
+.qp-gesture:hover,
+.qp-gesture:focus-visible {
+  background: rgba(255, 246, 230, 0.18);
+  outline: none;
+}
+.qp-gesture:active {
+  transform: scale(0.94);
+}
+.qp-gface {
+  display: block;
+  width: 48px;
+  height: 48px;
+}
+.qp-gface svg,
+.gp-face svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* Ajustes: pick up to 5 gestures */
+.gp {
+  width: 100%;
+}
+.gp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+}
+.gp-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 4px 8px;
+  border: 0;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--cream-2);
+  font: inherit;
+  cursor: pointer;
+}
+.gp-tile[aria-pressed='true'] {
+  background: rgba(255, 182, 39, 0.14);
+  box-shadow: inset 0 0 0 2px var(--mango);
+  color: var(--cream);
+}
+.gp-tile:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.gp-face {
+  display: block;
+  width: 52px;
+  height: 52px;
+}
+.gp-lbl {
+  font-size: 11.5px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+}
+.gp-num {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--mango);
+  color: var(--wood-900);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 20px;
+  text-align: center;
+}
+.gp-num:empty {
+  display: none;
+}
+.gp-count {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 800;
+  text-align: right;
+}
+
+/* new game: Jugadores and Equipos share one row when there's room (wraps on narrow screens) */
+.newgame .ng-lines {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 22px;
+  row-gap: 10px;
+}
+.newgame .ng-lines > .ng-line {
+  margin: 0;
+}
+
+/* ── final minute: position badge on the avatar (1 = fewest card points) ── */
+.plate-rank {
+  position: absolute;
+  right: -10%;
+  top: -10%;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 42%;
+  height: 42%;
+  min-width: 18px;
+  min-height: 18px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff3b8, #f0c43c 55%, #b9831a);
+  color: #2a1a00;
+  font-size: max(11px, calc(var(--d) * 0.24));
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 0 0 2px rgba(8, 16, 22, 0.75), 0 0 10px 2px rgba(255, 213, 90, 0.65);
+  opacity: 0;
+  transform: scale(0);
+  transition: opacity 0.25s, transform 0.25s;
+  pointer-events: none;
+}
+.plate-rank.on {
+  opacity: 1;
+  transform: scale(1);
+}
+.plate-rank[data-rank='2'] {
+  background: radial-gradient(circle at 35% 30%, #ffffff, #cfd8e0 55%, #8796a3);
+  color: #13202a;
+  box-shadow: 0 0 0 2px rgba(8, 16, 22, 0.75), 0 0 8px 1px rgba(210, 225, 240, 0.55);
+}
+.newgame .ng-felt-box:has(.ng-swap-side:not([hidden])) {
+  flex-direction: column;
+  gap: 4px;
+}
+.ng-swap-side[hidden] {
+  display: none;
+}
+
+/* colour diamond: the chosen quadrant presses in (yours on tap, another player's as they choose) */
+.color-quad.pressed {
+  animation: kc-quad-press 0.32s cubic-bezier(0.3, 1.6, 0.5, 1) forwards;
+  z-index: 2;
+}
+@keyframes kc-quad-press {
+  0% { transform: scale(1); filter: brightness(1); }
+  35% { transform: scale(0.86); filter: brightness(1.35); }
+  100% { transform: scale(1.08); filter: brightness(1.2) drop-shadow(0 0 10px var(--c)); }
+}
+/* watching another player choose: not tappable, the other colours dim when one is pressed */
+.color-pane.watch .color-quad {
+  pointer-events: none;
+  cursor: default;
+}
+.color-pane.watch .color-quad:disabled {
+  opacity: 1;
+}
+.color-pane .color-diamond:has(.pressed) .color-quad:not(.pressed) {
+  opacity: 0.45;
+  transition: opacity 0.2s;
+}
+.color-pane.still .color-quad.pressed {
+  animation: none;
+  transform: scale(1.06);
 }

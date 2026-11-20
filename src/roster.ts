@@ -4,7 +4,26 @@
  * play styles and descriptions are KuCards' own (card play).
  */
 import type { Difficulty, Lineup } from './contracts';
-import { CHARACTER_FACES, type FaceSpec } from 'kuavatars/faces';
+import { sanitizeFace, type FaceSpec } from 'kuavatars/faces';
+
+/**
+ * The characters' faces. KuAvatars only provides the options; each game picks its own looks. These are
+ * the user's picks (the same cast and looks as Kudominoes).
+ */
+const FACES: Record<string, FaceSpec> = Object.fromEntries(
+  Object.entries({
+    lola: { iris: '#2F9B63', skin: '#F3D2A2', freckles: true, flower: true, hair: 'pigtails', hairColor: 'ginger', mouth: 'teeth', lashes: true },
+    pepe: { iris: '#5B3FA8', skin: '#D5AB88', brows: 'raised', smirk: true, hair: 'spiky', hairColor: 'black', mouth: 'buck' },
+    nico: { iris: '#3F7FD9', skin: '#F7DECE', freckles: true, eyes: 'big', hat: 'cap', hatColor: '#3F74D6' },
+    elena: { iris: '#B8741F', skin: '#AF7E57', lashes: true, hair: 'bob', hairColor: 'black', mouth: 'lips', lipColor: '#B8435A' },
+    andres: { iris: '#7A4A22', skin: '#AF7E57', brows: 'thick', hair: 'sidePart', hairColor: 'black', eyewear: 'square', mouth: 'thin' },
+    rosa: { iris: '#1E9C9C', skin: '#F7DECE', lashes: true, hair: 'bun', hairColor: 'grey', eyewear: 'catEye', mouth: 'lips', lipColor: '#C2304A' },
+    carlos: { iris: '#3F7FD9', skin: '#AF7E57', stache: 'black', stacheStyle: 'walrus', hair: 'short', hairColor: 'black', eyewear: 'sunglasses', brows: 'aviator' },
+    marta: { iris: '#6F8FB0', skin: '#7C533E', lashes: true, brows: 'raised', smirk: true, mole: true, cool: true, hair: 'long', hairColor: 'black', mouth: 'lips', lipColor: '#7A2A4A' },
+    julio: { iris: '#8B5A2B', skin: '#AF7E57', glasses: true, stache: 'white', stacheStyle: 'walrus', hair: 'short', hairColor: 'white', hat: 'straw', browColor: '#E9E6DE' },
+    zorg: { iris: '#101418', alien: true },
+  }).map(([id, f]) => [id, sanitizeFace(f as unknown as FaceSpec)]),
+);
 
 type L10n = { es: string; en: string };
 
@@ -35,70 +54,70 @@ export interface Character {
 export const ROSTER: Character[] = [
   {
     id: 'lola', name: 'Lola', level: 'easy', style: 'carefree',
-    face: CHARACTER_FACES.lola,
+    face: FACES.lola,
     tag: { es: 'Despreocupada', en: 'Carefree' },
     desc: { es: 'Juega por diversión: pone la primera carta que sirve y elige colores al azar.', en: 'Plays for fun: puts down the first card that fits and picks colours at random.' },
     chat: 0.5, fem: true,
   },
   {
     id: 'pepe', name: 'Pepe', level: 'easy', style: 'impulsive',
-    face: CHARACTER_FACES.pepe,
+    face: FACES.pepe,
     tag: { es: 'Impulsivo', en: 'Impulsive' },
     desc: { es: 'Se deshace rápido de los números altos y a veces olvida decir ¡Ku!', en: 'Dumps his high numbers fast and sometimes forgets to call ¡Ku!' },
     chat: 0.6, fem: false,
   },
   {
     id: 'nico', name: 'Nico', level: 'easy', style: 'beginner',
-    face: CHARACTER_FACES.nico,
+    face: FACES.nico,
     tag: { es: 'Principiante', en: 'Beginner' },
     desc: { es: 'Todavía está aprendiendo. Combina bien los colores, pero gasta los comodines enseguida.', en: 'Still learning. Matches colours well but spends his wilds right away.' },
     chat: 0.4, fem: false,
   },
   {
     id: 'elena', name: 'Elena', level: 'normal', style: 'balanced',
-    face: CHARACTER_FACES.elena,
+    face: FACES.elena,
     tag: { es: 'Equilibrada', en: 'Balanced' },
     desc: { es: 'Guarda un poco de cada color para no quedarse nunca sin jugada.', en: 'Keeps a bit of every colour so she always has a play.' },
     chat: 0.4, fem: true,
   },
   {
     id: 'andres', name: 'Andrés', level: 'normal', style: 'byTheBook',
-    face: CHARACTER_FACES.andres,
+    face: FACES.andres,
     tag: { es: 'Clásico', en: 'By the book' },
     desc: { es: 'Números primero y cartas especiales solo cuando hacen falta. Sólido y predecible.', en: 'Numbers first, action cards only when needed. Solid and predictable.' },
     chat: 0.3, fem: false,
   },
   {
     id: 'rosa', name: 'Rosa', level: 'normal', style: 'chatty',
-    face: CHARACTER_FACES.rosa,
+    face: FACES.rosa,
     tag: { es: 'Habladora', en: 'Chatty' },
     desc: { es: 'Grita ¡Ku! antes de tiempo y nunca deja pasar a quien se olvida.', en: 'Calls ¡Ku! early and never lets anyone off who forgets.' },
     chat: 0.9, fem: true,
   },
   {
     id: 'carlos', name: 'Carlos', level: 'hard', style: 'aggressive',
-    face: CHARACTER_FACES.carlos,
+    face: FACES.carlos,
     tag: { es: 'Agresivo', en: 'Aggressive' },
     desc: { es: 'Castigos primero: lanza +2 y +4 al que va ganando sin pensarlo dos veces.', en: 'Penalties first: throws +2 and +4 at the leader without a second thought.' },
     chat: 0.6, fem: false,
   },
   {
     id: 'marta', name: 'Marta', level: 'hard', style: 'hoarder',
-    face: CHARACTER_FACES.marta,
+    face: FACES.marta,
     tag: { es: 'Acaparadora', en: 'Hoarder' },
     desc: { es: 'Guarda los comodines hasta el final y siempre tiene uno cuando más duele.', en: 'Keeps her wilds to the very end and always has one when it hurts most.' },
     chat: 0.2, fem: true,
   },
   {
     id: 'julio', name: 'Don Julio', short: 'Julio', level: 'hard', style: 'teamPlayer',
-    face: CHARACTER_FACES.julio,
+    face: FACES.julio,
     tag: { es: 'De equipo', en: 'Team player' },
     desc: { es: 'Recuerda cada color que falta y protege a su pareja de los castigos.', en: 'Remembers every missing colour and shields his partner from penalties.' },
     chat: 0.4, fem: false,
   },
   {
     id: 'zorg', name: 'Papi Zorg', short: 'Zorg', level: 'master', style: 'perfect',
-    face: CHARACTER_FACES.zorg,
+    face: FACES.zorg,
     tag: { es: 'Perfecto', en: 'Perfect' },
     desc: { es: 'El jugador perfecto. Vino de muy lejos solo para contar tus cartas.', en: 'The perfect player. Came from very far away just to count your cards.' },
     chat: 0.5, fem: false,

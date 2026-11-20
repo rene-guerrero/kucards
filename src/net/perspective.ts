@@ -100,6 +100,7 @@ export class Perspective {
       case 'swapHands':
         return { ...ev, a: this.seat(ev.a), b: this.seat(ev.b) };
       case 'kuCaught':
+      case 'challenge':
         return { ...ev, by: this.seat(ev.by), target: this.seat(ev.target) };
       case 'window':
         return { ...ev, window: this.window(ev.window) };

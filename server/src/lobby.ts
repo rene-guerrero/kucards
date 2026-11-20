@@ -5,7 +5,7 @@ import { sanitizeFace as cleanFace, type FaceSpec } from 'kuavatars/faces';
  * Ported from Kudominoes; modes are KuCards' (Clásico / Pura acción / Ciclón: 2–4 players, Parejas: 4).
  */
 import type { GameMode, MatchState, RuleSettings, Seat } from '../../src/contracts';
-import { DEFAULT_RULES, RULE_PRESETS, RULE_SETTINGS } from '../../src/engine/rules';
+import { DEFAULT_RULES, modeRules, RULE_PRESETS, RULE_SETTINGS } from '../../src/engine/rules';
 import {
   activeSeatsOf,
   MAX_NAME_LENGTH,
@@ -19,6 +19,7 @@ import {
 } from '../../src/net/protocol';
 import { isCharacter, ROSTER } from '../../src/roster';
 import { emptySchedule, type Schedule } from './schedule';
+import { sanitizeClock, type ClockSettings } from '../../src/engine/clock';
 
 /** what a seat holds (member details live in RoomData.members) */
 export type SeatSlot = { kind: 'empty' } | { kind: 'human'; playerId: string } | { kind: 'cpu'; characterId: string };
@@ -42,6 +43,8 @@ export interface RoomData {
   hostId: string;
   mode: GameMode;
   playerCount: number;
+  /** 2 vs 2 Enfrente (4 players, not Codo a codo) */
+  teamPlay?: boolean;
   seats: SeatSlot[];
   members: Record<string, Member>;
   rules: RuleSettings;
@@ -53,12 +56,16 @@ export interface RoomData {
   schedule: Schedule;
   /** the open response window: its identity, when it closes, and whether the CPUs had their moment */
   win: { id: string; ends: number; reacted: boolean } | null;
+  /** round limit / move times set by the host (absent = no limit, the configured turn time) */
+  clock?: ClockSettings;
+  /** absolute end (server ms) of the running round's clock; null/absent = no limit */
+  roundEnds?: number | null;
   /** the clients are still dealing (the deal animation): CPUs and turn clocks start after this */
   busyUntil?: number;
 }
 
 export const MAX_MEMBERS = 8;
-export const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'partners'];
+export const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'sideBySide'];
 
 export class LobbyError extends Error {
   constructor(
@@ -107,7 +114,7 @@ export function normalizeRules(raw: unknown, mode: GameMode): RuleSettings {
     } else if (typeof v !== typeof d.default) continue;
     out[d.key] = v as RuleSettings[string];
   }
-  return out;
+  return modeRules(mode, out);
 }
 
 // ───────────────────────── codes, names ─────────────────────────
@@ -216,15 +223,16 @@ export function setCpu(r: RoomData, playerId: string, seat: Seat, characterId: s
 }
 
 /** lobby, host only. Players in seats that go out of play move to free seats (or stand up). */
-export function setMode(r: RoomData, playerId: string, mode: GameMode, playerCount: number): void {
+export function setMode(r: RoomData, playerId: string, mode: GameMode, playerCount: number, teamPlay = false): void {
   requireHost(r, playerId);
   if (!isLobbyLike(r)) throw new LobbyError('bad_request', 'not in the lobby');
   if (!MODES.includes(mode)) throw new LobbyError('bad_request', 'bad mode');
-  const count = mode === 'partners' ? 4 : playerCount;
+  const count = mode === 'sideBySide' ? 4 : playerCount;
   if (count !== 2 && count !== 3 && count !== 4) throw new LobbyError('bad_request', 'bad player count');
   if (mode !== r.mode) r.rules = normalizeRules({}, mode);
   r.mode = mode;
   r.playerCount = count;
+  r.teamPlay = mode !== 'sideBySide' && count === 4 && teamPlay === true;
   const act = activeSeats(mode, count);
   const displaced: string[] = [];
   for (let s = 0; s < 4; s++) {
@@ -244,6 +252,13 @@ export function setRules(r: RoomData, playerId: string, rules: unknown): void {
   if (!isLobbyLike(r)) throw new LobbyError('bad_request', 'not in the lobby');
   if (!rules || typeof rules !== 'object' || Array.isArray(rules)) throw new LobbyError('bad_request', 'bad rules');
   r.rules = normalizeRules(rules, r.mode);
+}
+
+export function setClock(r: RoomData, playerId: string, clock: unknown): void {
+  requireHost(r, playerId);
+  if (!isLobbyLike(r)) throw new LobbyError('bad_request', 'not in the lobby');
+  if (!clock || typeof clock !== 'object' || Array.isArray(clock)) throw new LobbyError('bad_request', 'bad clock');
+  r.clock = sanitizeClock(clock);
 }
 
 /** start: unseated members sit down first, then empty seats get distinct random roster CPUs */
@@ -340,9 +355,11 @@ export function publicRoom(r: RoomData): PublicRoom {
     hostId: r.hostId,
     mode: r.mode,
     playerCount: r.playerCount,
+    teamPlay: !!r.teamPlay,
     seats,
     rules: { ...r.rules },
     scores: roomScores(r),
-    teams: r.match?.teams ?? teamsFor(r.mode, r.rules),
+    ...(r.clock ? { clock: { ...r.clock } } : {}),
+    teams: r.match?.teams ?? teamsFor(r),
   };
 }

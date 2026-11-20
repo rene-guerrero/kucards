@@ -5,23 +5,32 @@
  * very same logic.
  *
  * Game flow (advance() after every change):
- *  - a human on turn gets TURN_TIMEOUT_MS per turn; then a CPU plays that one move ('covered', 'timeout');
+ *  - a human on turn gets TURN_TIMEOUT_MS per turn; then the engine's `timeoutMove` plays for them, as in
+ *    the local game ('covered', 'timeout'): the normal CPU policy with colours -> red, a pass after a draw
+ *    they made themselves, and after a draw made by the timer the drawn card when playable (`afterAutoDraw`);
  *  - a CPU on turn "thinks" for a short delay; before it plays, the other CPUs may act out of turn
  *    (jump in, call ¡Ku!), as in the local game;
  *  - an open response window (round.window) gets WINDOW_MS: the CPUs at the table have one moment to
  *    react ('react'), humans may act any time; when it ends the server calls closeWindow (a CPU victim
  *    of a penalty makes its own choice instead: shield, mirror, stack or take the cards). A human victim
  *    of a penalty decides on their turn clock. A CPU on turn waits while a window is open.
+ *  - the round clock (room.clock, set by the host): with a round limit the server owns the countdown
+ *    (room.roundEnds, sent in 'turn' / SeatView). In the final minute every human move gets the shorter
+ *    final-minute time; at zero the round ends at once with the engine's `timeUp` verdict (fewest card
+ *    points wins; the clients show every hand face up for a beat first).
  *  - out-of-turn moves are first come, first served: each message is checked with legalMoves for that
  *    seat when it arrives; a late one gets 'too_late'.
  */
 import type { GameEvent, MatchState, Move, Seat } from '../../src/contracts';
-import { applyMove, closeWindow, createMatch, legalMoves, startRound } from '../../src/engine/game';
+import { applyMove, closeWindow, createMatch, legalMoves, startRound, timeUp } from '../../src/engine/game';
+import { FINAL_MS, fitThink, inFinalMinute, moveMs } from '../../src/engine/clock';
+import { afterAutoDraw, timeoutMove } from '../../src/engine/ai';
+import { finalRanks } from '../../src/engine/ranks';
 import { redactEvents, seatView, snapshotFor } from '../../src/net/redact';
 import {
   COVER_LEVEL,
   PROTOCOL_VERSION,
-  QUICK_PHRASES,
+  isChatId,
   type ClientMsg,
   type ErrorCode,
   type RoomInfoResponse,
@@ -49,6 +58,7 @@ import {
   seatOf,
   setCpu,
   setMode,
+  setClock,
   setRules,
   sit,
   type RoomData,
@@ -293,11 +303,15 @@ export class RoomCore<S> {
         this.broadcastRoom();
         return;
       case 'setMode':
-        setMode(r, pid, msg.mode, msg.playerCount);
+        setMode(r, pid, msg.mode, msg.playerCount, msg.teamPlay === true);
         this.broadcastRoom();
         return;
       case 'setRules':
         setRules(r, pid, msg.rules);
+        this.broadcastRoom();
+        return;
+      case 'setClock':
+        setClock(r, pid, msg.clock);
         this.broadcastRoom();
         return;
       case 'start':
@@ -329,9 +343,9 @@ export class RoomCore<S> {
     // the host stood up and nobody sits: put the host back at the table
     if (humanCount(r) === 0 && seatOf(r, pid) === null) autoSeat(r, pid);
     fillSeats(r, () => this.io.random());
-    const players = (r.mode === 'partners' ? 4 : r.playerCount) as 2 | 3 | 4;
-    const seating = r.mode === 'partners' ? (r.rules.seating === 'side' ? 'side' : 'across') : undefined;
-    r.match = createMatch(r.rules, { mode: r.mode, players, seating, partnerSide: 'after' }, this.io.seed());
+    const players = (r.mode === 'sideBySide' ? 4 : r.playerCount) as 2 | 3 | 4;
+    r.match = createMatch(r.rules, { mode: r.mode, players, teams: !!r.teamPlay, partnerSide: 'after' }, this.io.seed());
+    if (r.clock) r.match.clock = { ...r.clock };
     r.phase = 'playing';
     r.win = null;
     for (const m of Object.values(r.members)) m.cpuCovering = !m.connected && seatOf(r, m.playerId) !== null;
@@ -357,7 +371,7 @@ export class RoomCore<S> {
   private onPhrase(s: S, pid: string, id: string): void {
     const r = this.data!;
     const seat = seatOf(r, pid);
-    if (seat === null || !(QUICK_PHRASES as readonly string[]).includes(id)) return this.err(s, 'bad_request');
+    if (seat === null || !isChatId(id)) return this.err(s, 'bad_request');
     const now = this.io.now();
     const log = (this.phraseLog.get(pid) ?? []).filter((t) => now - t < PHRASE_WINDOW_MS);
     if ((log.length && now - log[log.length - 1] < PHRASE_GAP_MS) || log.length >= PHRASE_BURST) {
@@ -398,7 +412,15 @@ export class RoomCore<S> {
     r.match = res.match;
     r.step++;
     r.turnNo += res.events.filter((e) => e.type === 'turn').length;
-    if (res.events.some((e) => e.type === 'deal')) r.busyUntil = this.io.now() + DEAL_ANIM_MS * Math.min(1, this.cfg.cpuSpeed);
+    if (res.events.some((e) => e.type === 'deal')) {
+      r.busyUntil = this.io.now() + DEAL_ANIM_MS * Math.min(1, this.cfg.cpuSpeed);
+      // the round clock starts after the deal animation
+      r.roundEnds = r.clock?.roundMin ? r.busyUntil + r.clock.roundMin * 60_000 : null;
+    }
+    if (res.match.round?.over) {
+      r.roundEnds = null;
+      r.schedule.clock = null;
+    }
     if (cover) this.broadcast(() => ({ t: 'covered', seat: cover.seat, reason: cover.reason }));
     if (res.events.length) this.broadcastEvents(res.events, res.match);
     if (res.match.round?.over) {
@@ -466,9 +488,31 @@ export class RoomCore<S> {
     }
     if (due.grace.length && ensureHost(r)) roomChanged = true;
     if (roomChanged) this.broadcastRoom();
+    if (due.clock) this.onClockTimer(due.clock);
     if (due.game) this.onGameTimer(due.game);
     if (due.win) this.onWinTimer(due.win);
     this.advance();
+  }
+
+  /** ms left on the round clock (null = no limit) */
+  private roundLeft(): number | null {
+    const ends = this.data!.roundEnds;
+    return ends === null || ends === undefined ? null : Math.max(0, ends - this.io.now());
+  }
+
+  /** the time a human move gets right now (the final minute is shorter) */
+  private moveTime(): number {
+    const c = this.data!.clock;
+    return c ? moveMs(c, this.roundLeft()) : this.cfg.turnTimeoutMs;
+  }
+
+  /** the round clock: its final minute starts (advance() shortens the turn clock) or it ran out */
+  private onClockTimer(t: GameTimer): void {
+    const r = this.data!;
+    const m = r.match;
+    const round = m?.round;
+    if (r.phase !== 'playing' || !m || !round || round.over) return;
+    if (t.kind === 'timeUp' && t.key === `${round.roundNo}:up`) this.commit(timeUp(m));
   }
 
   private onGameTimer(t: GameTimer): void {
@@ -483,10 +527,14 @@ export class RoomCore<S> {
     if (!round || round.over) return;
     const seat = round.turn;
     if (t.kind === 'turn') {
-      if (t.key !== `${r.turnNo}:${seat}:human`) return; // stale
-      const mv = this.decide(seat, true);
-      if (mv) this.play(mv, { seat, reason: 'timeout' });
-      else if (round.window) this.commit(closeWindow(m));
+      if (t.key !== `${r.turnNo}:${seat}:human` && t.key !== `${r.turnNo}:${seat}:human:f`) return; // stale
+      const mv = timeoutMove(m, seat);
+      if (mv) {
+        this.play(mv, { seat, reason: 'timeout' });
+        // a draw made by the timer: the drawn card is played when it can be
+        const next = mv.kind === 'draw' ? afterAutoDraw(this.data!.match!, seat) : null;
+        if (next) this.play(next, { seat, reason: 'timeout' });
+      } else if (round.window) this.commit(closeWindow(m));
       return;
     }
     if (t.kind === 'cpu') {
@@ -572,12 +620,29 @@ export class RoomCore<S> {
       r.win = null;
     }
 
+    // ── the round clock ──
+    const ends = r.roundEnds ?? null;
+    if (ends !== null) {
+      if (this.io.now() < ends - FINAL_MS) changed = setTimer(sch, 'clock', 'final', ends - FINAL_MS, `${round.roundNo}:final`).changed || changed;
+      else changed = setTimer(sch, 'clock', 'timeUp', ends, `${round.roundNo}:up`).changed || changed;
+    } else sch.clock = null;
+    const final = !!r.clock && inFinalMinute(r.clock, this.roundLeft());
+
     // ── the turn clock ──
-    if (ctl === 'human') changed = setTimer(sch, 'game', 'turn', now + this.cfg.turnTimeoutMs, `${r.turnNo}:${seat}:human`).changed || changed;
+    if (ctl === 'human') {
+      // the final minute: a running turn shrinks to the final-minute move time (never grows)
+      const base = `${r.turnNo}:${seat}:human`;
+      const ms = this.moveTime();
+      const g = sch.game;
+      const at = final && g?.kind === 'turn' && g.key === base ? Math.min(g.at, now + ms) : now + ms;
+      changed = setTimer(sch, 'game', 'turn', at, final ? `${base}:f` : base).changed || changed;
+    }
     else if (w) clearGameTimer(sch); // a CPU on turn waits for the window (a CPU victim decides when it closes)
     else {
       const n = legalMoves(m, seat).filter(isTurnMove).length;
-      changed = setTimer(sch, 'game', 'cpu', now + thinkDelay(n, sp, () => this.io.random()), `${r.step}:${seat}:${ctl}`).changed || changed;
+      let think = thinkDelay(n, sp, () => this.io.random());
+      if (r.clock) think = fitThink(think, r.clock, this.roundLeft()); // CPUs think inside the move time
+      changed = setTimer(sch, 'game', 'cpu', now + think, `${r.step}:${seat}:${ctl}`).changed || changed;
     }
     if (force || changed) this.broadcast((pid) => this.turnMsgFor(pid));
   }
@@ -604,7 +669,10 @@ export class RoomCore<S> {
     if (r.phase !== 'playing' || !m || !round || round.over || m.over) return null;
     const mySeat = seatOf(r, pid);
     const legal = mySeat !== null && this.controller(mySeat) === 'human' ? legalMoves(m, mySeat) : [];
-    return { t: 'turn', seat: round.turn, legal, ...this.deadlines() };
+    // the final minute: who holds the fewest card points (clients cannot see the other hands)
+    const final = !!r.clock && inFinalMinute(r.clock, this.roundLeft());
+    const ranks = final ? finalRanks(m) : undefined;
+    return { t: 'turn', seat: round.turn, legal, ...this.deadlines(), roundEnds: r.roundEnds ?? null, moveMs: this.moveTime(), ...(ranks ? { ranks } : {}) };
   }
 
   private viewFor(pid: string): SeatView | null {
@@ -615,6 +683,6 @@ export class RoomCore<S> {
     const live = r.phase === 'playing' && !!round && !round.over;
     const legal = live && this.controller(seat) === 'human' ? legalMoves(r.match, seat) : [];
     const d = this.deadlines();
-    return seatView(r.match, seat, legal, live ? d.deadline : null, live ? d.windowEnds : null);
+    return { ...seatView(r.match, seat, legal, live ? d.deadline : null, live ? d.windowEnds : null), roundEnds: live ? (r.roundEnds ?? null) : null, moveMs: this.moveTime() };
   }
 }

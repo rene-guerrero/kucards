@@ -19,10 +19,36 @@ describe('deck', () => {
     expect(d.filter((c) => c.face.kind === 'mirror')).toHaveLength(0);
   });
 
-  it('all-action deck thins numbers and has every power card', () => {
+  it('all-action deck thins numbers and has Sweep and Swap, no Skip All', () => {
     const d = buildDeck(preset('action'));
     expect(d.some((c) => c.face.kind === 'number' && c.face.value === 3)).toBe(false);
-    for (const k of ['swap', 'shield', 'sweep', 'mirror']) expect(d.some((c) => c.face.kind === k)).toBe(true);
+    for (const k of ['swap', 'sweep']) expect(d.some((c) => c.face.kind === k)).toBe(true);
+  });
+
+  it('deck per mode: sizes, no Escudo / Espejo anywhere, Barrida in Codo a codo', () => {
+    const count = (d: ReturnType<typeof buildDeck>, k: string) => d.filter((c) => c.face.kind === k).length;
+    const sizes: Record<string, number> = { classic: 108, action: 106, cyclone: 128, sideBySide: 120, dayNight: 112 };
+    for (const p of RULE_PRESETS) {
+      // the deck a match of that mode really plays with (modeRules applied)
+      const d = buildDeck(createMatch(p.rules, { mode: p.id, players: 4 }, 1).rules);
+      expect(d, p.id).toHaveLength(sizes[p.id]);
+      expect(count(d, 'shield') + count(d, 'mirror'), p.id).toBe(0);
+      expect(count(d, 'skipAll'), p.id).toBe(0);
+      expect(count(d, 'wildColor') + d.filter((c) => c.other?.kind === 'wildColor').length, p.id).toBe(0);
+    }
+    expect(count(buildDeck(preset('cyclone')), 'sweep')).toBe(8);
+    const side = buildDeck(createMatch({ ...preset('sideBySide'), 'power.sweep': false }, { mode: 'sideBySide', players: 4 }, 1).rules);
+    expect(count(side, 'sweep')).toBe(8);
+    expect(count(side, 'draw6')).toBe(4);
+  });
+
+  it('stacking: off by default only in Clásico, always on elsewhere', () => {
+    expect(createMatch(preset('classic'), { mode: 'classic', players: 4 }, 1).rules.stacking).toBe('off');
+    expect(createMatch({ ...preset('classic'), stacking: 'any' }, { mode: 'classic', players: 4 }, 1).rules.stacking).toBe('any');
+    for (const mode of ['action', 'cyclone', 'sideBySide'] as const) {
+      expect(preset(mode).stacking, mode).toBe('any');
+      expect(createMatch({ ...preset(mode), stacking: 'off' }, { mode, players: 4 }, 1).rules.stacking, mode).toBe('any');
+    }
   });
 
   it('scores cards', () => {
@@ -47,9 +73,12 @@ describe('deal', () => {
   });
 
   it('seats partners across or side by side', () => {
-    expect(createMatch(DEFAULT_RULES, { mode: 'partners', players: 4 }).teams).toEqual([[0, 2], [1, 3]]);
-    expect(createMatch(DEFAULT_RULES, { mode: 'partners', players: 4, seating: 'side' }).teams).toEqual([[0, 1], [2, 3]]);
-    expect(createMatch(DEFAULT_RULES, { mode: 'partners', players: 4, seating: 'side', partnerSide: 'before' }).teams).toEqual([[0, 3], [1, 2]]);
+    expect(createMatch(DEFAULT_RULES, { mode: 'classic', players: 4, teams: true }).teams).toEqual([[0, 2], [1, 3]]);
+    expect(createMatch(DEFAULT_RULES, { mode: 'action', players: 4, teams: true }).teams).toEqual([[0, 2], [1, 3]]);
+    expect(createMatch(DEFAULT_RULES, { mode: 'classic', players: 3, teams: true }).teams).toBeUndefined();
+    expect(createMatch(DEFAULT_RULES, { mode: 'classic', players: 4 }).teams).toBeUndefined();
+    expect(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 2 }).teams).toEqual([[0, 1], [2, 3]]);
+    expect(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 4, partnerSide: 'before' }).teams).toEqual([[0, 3], [1, 2]]);
   });
 
   it('matches colour, number or kind', () => {

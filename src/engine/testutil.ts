@@ -1,5 +1,5 @@
 /** Test helpers: hand-built rounds. Not used by the game itself. */
-import type { Card, CardKind, Color, GameMode, MatchState, RoundState, RuleSettings, Seat, Seating } from '../contracts';
+import type { Card, CardKind, Color, GameMode, MatchSetup, MatchState, RoundState, RuleSettings, Seat, Seating } from '../contracts';
 import { PENALTY_DRAW } from './cards';
 import { createMatch } from './game';
 import { DEFAULT_RULES } from './rules';
@@ -30,10 +30,14 @@ export interface Scenario {
   pendingDraw?: number;
 }
 
+/** test shorthand for team seating: 'side' = the Codo a codo mode, 'across' = 2 vs 2 Enfrente in `mode` */
+export function setupOf(mode: GameMode, players: 2 | 3 | 4, seating?: Seating, partnerSide?: 'after' | 'before'): MatchSetup {
+  return seating === 'side' ? { mode: 'sideBySide', players: 4, partnerSide } : { mode, players, teams: seating === 'across' || undefined };
+}
+
 /** a match mid-round with exactly these hands / pile / deck */
 export function scenario(s: Scenario): MatchState {
-  const mode = s.mode ?? 'classic';
-  const m = createMatch({ ...DEFAULT_RULES, ...(s.rules ?? {}) }, { mode, players: s.players ?? 4, seating: s.seating }, 7);
+  const m = createMatch({ ...DEFAULT_RULES, ...(s.rules ?? {}) }, setupOf(s.mode ?? 'classic', s.players ?? 4, s.seating), 7);
   const hands: Card[][] = [[], [], [], [], [], []];
   for (const seat of m.seats) hands[seat] = (s.hands[seat] ?? []).slice();
   const round: RoundState = {

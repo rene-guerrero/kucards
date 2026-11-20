@@ -6,7 +6,7 @@ import { isPenaltyCard } from './aiKnow';
 import { HARD_W } from './aiPolicy';
 import { legalMoves as legalMovesOf } from './game';
 import { Rng } from './rng';
-import { card, num, scenario } from './testutil';
+import { card, num, scenario, setupOf } from './testutil';
 
 const cardOf = (mv: Move | null) => (mv && (mv.kind === 'play' || mv.kind === 'jumpIn' || mv.kind === 'respond') ? mv.cardId : null);
 const preset = (id: GameMode, over: RuleSettings = {}): RuleSettings => ({ ...RULE_PRESETS.find((p) => p.id === id)!.rules, ...over });
@@ -31,7 +31,7 @@ interface Drive {
 
 /** plays one round; returns the winning seat */
 function playRound(d: Drive): Seat {
-  let m: MatchState = startRound(createMatch({ ...d.rules, target: 0 }, { mode: d.mode, players: d.players, seating: d.seating }, d.seed)).match;
+  let m: MatchState = startRound(createMatch({ ...d.rules, target: 0 }, setupOf(d.mode, d.players, d.seating), d.seed)).match;
   const rng = new Rng(d.seed * 31 + 7);
   const lv = (s: Seat) => d.levels[s] ?? 'normal';
   for (let i = 0; i < 4000; i++) {
@@ -220,12 +220,12 @@ describe('power cards', () => {
       const d2 = card('draw2', 'sol');
       const mir = card('mirror', 'mar');
       const sh = card('shield', 'coral');
-      const m = scenario({ mode: 'partners', seating: 'side', rules: POWER, hands: { 0: [d2, num('sol', 2), num('mar', 3)], 1: [mir, sh, num('palma', 1)], 2: [num('mar', 1)], 3: [num('mar', 2)] }, top: num('sol', 5) });
+      const m = scenario({ seating: 'side', rules: POWER, hands: { 0: [d2, num('sol', 2), num('mar', 3)], 1: [mir, sh, num('palma', 1)], 2: [num('mar', 1)], 3: [num('mar', 2)] }, top: num('sol', 5) });
       const w = applyMove(m, { kind: 'play', seat: 0, cardId: d2.id }).match;
       expect(chooseMove(w, 1, lv)).toEqual({ kind: 'respond', seat: 1, cardId: sh.id });
       const d2b = card('draw2', 'sol');
       const mir2 = card('mirror', 'mar');
-      const m2 = scenario({ mode: 'partners', seating: 'side', rules: POWER, hands: { 0: [d2b, num('sol', 2), num('mar', 3)], 1: [mir2, num('palma', 1)], 2: [num('mar', 1)], 3: [num('mar', 2)] }, top: num('sol', 5) });
+      const m2 = scenario({ seating: 'side', rules: POWER, hands: { 0: [d2b, num('sol', 2), num('mar', 3)], 1: [mir2, num('palma', 1)], 2: [num('mar', 1)], 3: [num('mar', 2)] }, top: num('sol', 5) });
       const w2 = applyMove(m2, { kind: 'play', seat: 0, cardId: d2b.id }).match;
       expect(chooseMove(w2, 1, lv)).toEqual({ kind: 'acceptPenalty', seat: 1 });
     }
@@ -282,7 +282,7 @@ describe('hard', () => {
   it('partners (open hands): sets up the partner’s last card', () => {
     // a direct set-up: partner next (side seating) with one palma card, seat 0 holds a wild
     const w2 = card('wild');
-    const m2 = scenario({ mode: 'partners', seating: 'side', hands: { 0: [w2, num('mar', 1), num('mar', 2)], 1: [num('palma', 4)], 2: [num('sol', 1), num('sol', 2)], 3: [num('sol', 3), num('sol', 4)] }, top: num('coral', 5) });
+    const m2 = scenario({ seating: 'side', hands: { 0: [w2, num('mar', 1), num('mar', 2)], 1: [num('palma', 4)], 2: [num('sol', 1), num('sol', 2)], 3: [num('sol', 3), num('sol', 4)] }, top: num('coral', 5) });
     expect(chooseMove(m2, 0, 'hard')).toMatchObject({ kind: 'play', cardId: w2.id, color: 'palma' });
     // closed hands: no such knowledge (normal colour choice: its own colour)
     const m3 = { ...m2, rules: { ...m2.rules, partnerOpen: false } };
@@ -291,7 +291,7 @@ describe('hard', () => {
 
   it('partnerPass: hands a card to the partner on a 7 when it is the one closer to going out', () => {
     const seven = num('sol', 7);
-    const m = scenario({ mode: 'partners', rules: { partnerPass: true }, hands: { 0: [seven, num('mar', 1), num('coral', 8)], 1: [num('sol', 1), num('sol', 2), num('sol', 3)], 2: [num('palma', 1), num('palma', 2), num('mar', 3), num('mar', 4), num('mar', 5), num('palma', 6)], 3: [num('sol', 4), num('sol', 6), num('sol', 8)] }, top: num('sol', 5) });
+    const m = scenario({ seating: 'across', rules: { partnerPass: true }, hands: { 0: [seven, num('mar', 1), num('coral', 8)], 1: [num('sol', 1), num('sol', 2), num('sol', 3)], 2: [num('palma', 1), num('palma', 2), num('mar', 3), num('mar', 4), num('mar', 5), num('palma', 6)], 3: [num('sol', 4), num('sol', 6), num('sol', 8)] }, top: num('sol', 5) });
     const mv = chooseMove(m, 0, 'hard')!;
     expect(mv).toMatchObject({ kind: 'play', cardId: seven.id });
     expect((mv as { give?: number }).give).toBeDefined();
@@ -340,10 +340,11 @@ describe('styles', () => {
     expect(hoard(chooseMove(m3, 0, 'hard', 'hoarder'))).toBe(true);
   });
 
-  it('chatty calls ¡Ku! early (off turn, two cards left) and easy chatty catches everyone', () => {
+  it('nobody calls ¡Ku! off turn without a play; easy chatty catches everyone', () => {
     const m = scenario({ hands: { 0: [num('sol', 1), num('mar', 2)], 1: [num('sol', 3), num('mar', 4)] }, top: num('sol', 5) });
     expect(chooseMove(m, 1, 'normal')).toBeNull();
-    expect(chooseMove(m, 1, 'normal', 'chatty')).toEqual({ kind: 'callKu', seat: 1 });
+    // ¡Ku! is only legal when it matters (your turn / a jump-in with two cards, or the catch window)
+    expect(chooseMove(m, 1, 'normal', 'chatty')).toBeNull();
     const a = num('sol', 1);
     const m2 = scenario({ hands: { 0: [a, num('mar', 9)], 1: [num('coral', 3), num('coral', 4), num('coral', 5)] }, top: num('sol', 5) });
     const w = applyMove(m2, { kind: 'play', seat: 0, cardId: a.id }).match;
@@ -374,7 +375,7 @@ describe('partners', () => {
     it(`${lv}, side seating: never +2 the partner sitting next when a number will do`, () => {
       const d2 = card('draw2', 'sol');
       const n = num('sol', 2);
-      const m = scenario({ mode: 'partners', seating: 'side', hands: { 0: [d2, n, num('mar', 3)], 1: [num('coral', 1)], 2: [num('coral', 2)], 3: [num('coral', 3)] }, top: num('sol', 5) });
+      const m = scenario({ seating: 'side', hands: { 0: [d2, n, num('mar', 3)], 1: [num('coral', 1)], 2: [num('coral', 2)], 3: [num('coral', 3)] }, top: num('sol', 5) });
       expect(m.teams).toEqual([[0, 1], [2, 3]]);
       expect(cardOf(chooseMove(m, 0, lv))).toBe(n.id);
     });
@@ -382,29 +383,29 @@ describe('partners', () => {
     it(`${lv}, side seating: draws instead of skipping or penalising the partner`, () => {
       for (const k of ['draw2', 'skip'] as const) {
         const c = card(k, 'sol');
-        const m = scenario({ mode: 'partners', seating: 'side', hands: { 0: [c, num('mar', 3), num('mar', 4)], 1: [num('coral', 1), num('coral', 2)] }, top: num('sol', 5) });
+        const m = scenario({ seating: 'side', hands: { 0: [c, num('mar', 3), num('mar', 4)], 1: [num('coral', 1), num('coral', 2)] }, top: num('sol', 5) });
         expect(chooseMove(m, 0, lv)).toEqual({ kind: 'draw', seat: 0 });
       }
     });
 
     it(`${lv}, side seating: uses reverse to turn play away from the partner when it holds a penalty`, () => {
       const rv = card('reverse', 'sol');
-      const m = scenario({ mode: 'partners', seating: 'side', hands: { 0: [rv, num('sol', 9), card('draw2', 'mar')], 1: [num('coral', 1), num('coral', 2)], 3: [num('coral', 3), num('coral', 4)] }, top: num('sol', 5) });
+      const m = scenario({ seating: 'side', hands: { 0: [rv, num('sol', 9), card('draw2', 'mar')], 1: [num('coral', 1), num('coral', 2)], 3: [num('coral', 3), num('coral', 4)] }, top: num('sol', 5) });
       expect(cardOf(chooseMove(m, 0, lv))).toBe(rv.id);
     });
 
-    it(`${lv}: does not stack a penalty onto its partner`, () => {
+    it(`${lv}: stacking is mandatory, even onto its partner`, () => {
       const d2 = card('draw2', 'mar');
-      const m = scenario({ mode: 'partners', seating: 'side', rules: { stacking: 'same' }, hands: { 0: [d2, num('mar', 3)], 1: [num('coral', 1)] }, top: card('draw2', 'sol'), pendingDraw: 2 });
-      expect(chooseMove(m, 0, lv)).toEqual({ kind: 'acceptPenalty', seat: 0 });
-      const m2 = scenario({ mode: 'partners', rules: { stacking: 'same' }, hands: { 0: [d2, num('mar', 3)], 1: [num('coral', 1)] }, top: card('draw2', 'sol'), pendingDraw: 2 });
+      const m = scenario({ seating: 'side', rules: { stacking: 'same' }, hands: { 0: [d2, num('mar', 3)], 1: [num('coral', 1)] }, top: card('draw2', 'sol'), pendingDraw: 2 });
+      expect(cardOf(chooseMove(m, 0, lv))).toBe(d2.id);
+      const m2 = scenario({ seating: 'across', rules: { stacking: 'same' }, hands: { 0: [d2, num('mar', 3)], 1: [num('coral', 1)] }, top: card('draw2', 'sol'), pendingDraw: 2 });
       expect(cardOf(chooseMove(m2, 0, lv))).toBe(d2.id);
     });
   }
 
   it('across seating: happily penalises the next seat (an opponent)', () => {
     const d2 = card('draw2', 'sol');
-    const m = scenario({ mode: 'partners', hands: { 0: [d2, num('sol', 2), num('mar', 3)], 1: [num('coral', 1)] }, top: num('sol', 5) });
+    const m = scenario({ seating: 'across', hands: { 0: [d2, num('sol', 2), num('mar', 3)], 1: [num('coral', 1)] }, top: num('sol', 5) });
     expect(cardOf(chooseMove(m, 0, 'normal'))).toBe(d2.id);
   });
 
@@ -426,12 +427,12 @@ describe('partners', () => {
       const next = m.seats[(m.seats.indexOf(mv.seat) + r.direction + 4) % 4];
       if (r.eliminated[next] || m.teams!.every((t) => !(t.includes(mv.seat) && t.includes(next)))) return;
       checked++;
-      const alternatives = legalMovesOf(m, mv.seat).filter((x) => x.kind !== 'callKu' && !(x.kind === 'play' && x.cardId === mv.cardId));
+      const alternatives = legalMovesOf(m, mv.seat).filter((x) => x.kind !== 'callKu' && !(x.kind === 'play' && (x.cardId === mv.cardId || r.pendingDraw > 0))); // every stack hits the next seat
       if (alternatives.length) throw new Error(`penalised the partner with ${c.face.kind} (alternatives: ${alternatives.length})`);
     };
     for (let seed = 1; seed <= 40; seed++) {
-      const rules = preset('partners', { ...POWER, seating: 'side', stacking: seed % 3 ? 'off' : 'any', partnerPass: seed % 2 === 0, jumpIn: seed % 4 === 0 });
-      playRound({ rules, mode: 'partners', players: 4, seating: 'side', levels: { 0: 'normal', 1: 'hard', 2: 'hard', 3: 'normal' }, styles: { 1: 'teamPlayer', 3: 'aggressive' }, seed, check });
+      const rules = preset('sideBySide', { ...POWER, stacking: seed % 3 ? 'off' : 'any', partnerPass: seed % 2 === 0, jumpIn: seed % 4 === 0 });
+      playRound({ rules, mode: 'sideBySide', players: 4, seating: 'side', levels: { 0: 'normal', 1: 'hard', 2: 'hard', 3: 'normal' }, styles: { 1: 'teamPlayer', 3: 'aggressive' }, seed, check });
     }
     expect(checked).toBeGreaterThanOrEqual(0); // forced hits only (the check throws on any unforced one)
   });
@@ -448,8 +449,8 @@ describe('legality fuzz (all levels, presets, power cards, Cyclone, challenge)',
     { name: 'action 2p', mode: 'action', players: 2, rules: preset('action', { sevenZero: true }) },
     { name: 'cyclone 4p', mode: 'cyclone', players: 4, rules: preset('cyclone', { ...POWER, deck: 'cyclone', wild4Challenge: true }) },
     { name: 'cyclone 3p', mode: 'cyclone', players: 3, rules: preset('cyclone', { deck: 'cyclone', kuCall: true }) },
-    { name: 'partners across', mode: 'partners', players: 4, seating: 'across', rules: preset('partners', { ...POWER, partnerPass: true, partnerShield: true }) },
-    { name: 'partners side closed', mode: 'partners', players: 4, seating: 'side', rules: preset('partners', { seating: 'side', partnerOpen: false, stacking: 'any', wild4Challenge: true }) },
+    { name: 'partners across', mode: 'classic', players: 4, seating: 'across', rules: preset('classic', { ...POWER, partnerPass: true, partnerShield: true }) },
+    { name: 'partners side closed', mode: 'sideBySide', players: 4, seating: 'side', rules: preset('sideBySide', { partnerOpen: false, stacking: 'any', wild4Challenge: true }) },
   ];
   const LEVELS: Difficulty[] = ['easy', 'normal', 'hard'];
   const STYLES: (PlayStyle | undefined)[] = [undefined, 'carefree', 'impulsive', 'beginner', 'balanced', 'byTheBook', 'chatty', 'aggressive', 'hoarder', 'teamPlayer', 'perfect'];
@@ -518,7 +519,7 @@ describe('speed', () => {
     const cfgs: [GameMode, RuleSettings, 2 | 3 | 4][] = [
       ['action', preset('action', { jumpIn: true, sevenZero: true }), 4],
       ['cyclone', preset('cyclone', { ...POWER, deck: 'cyclone' }), 4],
-      ['partners', preset('partners', { partnerPass: true }), 4],
+      ['sideBySide', preset('sideBySide', { partnerPass: true }), 4],
     ];
     for (const [mode, rules, players] of cfgs) {
       let m: MatchState = startRound(createMatch({ ...rules, target: 0 }, { mode, players }, 3)).match;
@@ -570,5 +571,50 @@ describe('easy', () => {
     }
     expect(forgot).toBeGreaterThan(30);
     expect(called).toBeGreaterThan(forgot);
+  });
+});
+
+describe('CPU +4 challenges', () => {
+  // seat 0 plays a +4 on a sol 5 while holding plenty of sol cards: a clear bluff
+  const bluff = (rules: RuleSettings = {}) => {
+    const w4 = card('wild4');
+    const hand0 = [w4, num('sol', 1), num('sol', 2), num('sol', 3), num('sol', 4), num('sol', 6), num('sol', 7), num('sol', 8)];
+    const m = scenario({ rules, hands: { 0: hand0, 1: [num('mar', 1), num('palma', 2), num('coral', 3)], 2: [num('mar', 4)], 3: [num('mar', 5)] }, top: num('sol', 5) });
+    return applyMove(m, { kind: 'play', seat: 0, cardId: w4.id, color: 'mar' }).match;
+  };
+
+  it('normal and hard CPUs challenge a likely bluff, and the challenge is an event', () => {
+    for (const level of ['normal', 'hard'] as Difficulty[]) {
+      const m = bluff();
+      const mv = chooseMove(m, 1, level);
+      expect(mv?.kind, level).toBe('challenge');
+      const out = applyMove(m, mv!);
+      expect(out.events).toContainEqual({ type: 'challenge', by: 1, target: 0, caught: true });
+    }
+  });
+
+  it('easy CPUs challenge now and then', () => {
+    let n = 0;
+    for (let seed = 0; seed < 40; seed++) {
+      const m = bluff();
+      if (chooseMove({ ...m, rng: seed * 7919 }, 1, 'easy')?.kind === 'challenge') n++;
+    }
+    expect(n).toBeGreaterThan(0);
+    expect(n).toBeLessThan(40);
+  });
+
+  it('never on a stacked +4 (not even offered)', () => {
+    const w4 = card('wild4');
+    const d2 = card('draw2', 'sol');
+    const m0 = scenario({
+      mode: 'action',
+      hands: { 0: [d2, num('sol', 1)], 1: [w4, num('sol', 2), num('sol', 3), num('sol', 6), num('sol', 7)], 2: [num('mar', 1), num('palma', 2)], 3: [num('mar', 5)] },
+      top: num('sol', 5),
+    });
+    const m1 = applyMove(m0, { kind: 'play', seat: 0, cardId: d2.id }).match;
+    const m2 = applyMove(m1, { kind: 'play', seat: 1, cardId: w4.id, color: 'mar' }).match;
+    expect([m2.round!.turn, m2.round!.pendingDraw]).toEqual([2, 6]);
+    expect(legalMovesOf(m2, 2).some((x) => x.kind === 'challenge')).toBe(false);
+    for (const level of ['easy', 'normal', 'hard'] as Difficulty[]) expect(chooseMove(m2, 2, level)?.kind).not.toBe('challenge');
   });
 });

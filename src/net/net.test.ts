@@ -8,13 +8,14 @@ import { applyEvent, applySnapshot, emptyMatch } from './mirror';
 import { Perspective } from './perspective';
 import { isHidden, redactEvents, seatView, snapshotFor, withPlaceholders } from './redact';
 import { activeSeatsOf, teamsFor } from './protocol';
+import { setupOf } from '../engine/testutil';
 import { displayCode, filterCodeChars, normalizeCode } from './identity';
 
 const rulesOf = (mode: GameMode, over: Partial<RuleSettings> = {}): RuleSettings => ({ ...RULE_PRESETS.find((p) => p.id === mode)!.rules, ...over } as RuleSettings);
 
 /** a random game driven by the engine: every batch of events with the state right after it */
 function* randomGame(mode: GameMode, players: 2 | 3 | 4, over: Partial<RuleSettings>, seed: number, seating?: 'across' | 'side'): Generator<{ events: GameEvent[]; after: MatchState }> {
-  let m = createMatch(rulesOf(mode, over), { mode, players, seating, partnerSide: 'after' }, seed);
+  let m = createMatch(rulesOf(mode, over), setupOf(mode, players, seating, 'after'), seed);
   const rng = new Rng(seed ^ 0x5bd1e995);
   for (let round = 0; round < 2 && !m.over; round++) {
     const st = startRound(m);
@@ -73,7 +74,7 @@ describe('redaction', () => {
   it('Parejas with partnerOpen: partners see each other; without it, only their own hand', () => {
     for (const open of [true, false]) {
       let k = 0;
-      for (const { events, after } of randomGame('partners', 4, { partnerOpen: open, partnerPass: true }, 5)) {
+      for (const { events, after } of randomGame('classic', 4, { partnerOpen: open, partnerPass: true }, 5, 'across')) {
         if (k++ % 3 && !events.some((e) => e.type === 'deal' || e.type === 'draw')) continue;
         for (const seat of after.seats) {
           const seen = visibleHands(after, seat);
@@ -162,7 +163,7 @@ describe('mirror', () => {
   });
 
   it('follows Parejas (Codo a codo) including the partner hand', () => {
-    follow('partners', 4, { partnerOpen: true, partnerPass: true, partnerShield: true, 'power.shield': true }, 31, 1, 'side');
+    follow('sideBySide', 4, { partnerOpen: true, partnerPass: true, partnerShield: true, 'power.shield': true }, 31, 1, 'side');
   });
 
   it('withPlaceholders rebuilds full-size hands and deck from a seat view', () => {
@@ -179,14 +180,27 @@ describe('mirror', () => {
 describe('room helpers and codes', () => {
   it('seats in play and teams', () => {
     expect(activeSeatsOf({ mode: 'classic', playerCount: 2 })).toEqual([0, 2]);
-    expect(activeSeatsOf({ mode: 'partners', playerCount: 2 })).toEqual([0, 1, 2, 3]);
-    expect(teamsFor('partners', { seating: 'side' })).toEqual([[0, 1], [2, 3]]);
-    expect(teamsFor('classic', {})).toBeNull();
+    expect(activeSeatsOf({ mode: 'sideBySide', playerCount: 2 })).toEqual([0, 1, 2, 3]);
+    expect(teamsFor({ mode: 'sideBySide', playerCount: 4 })).toEqual([[0, 1], [2, 3]]);
+    expect(teamsFor({ mode: 'classic', playerCount: 4, teamPlay: true })).toEqual([[0, 2], [1, 3]]);
+    expect(teamsFor({ mode: 'classic', playerCount: 3, teamPlay: true })).toBeNull();
+    expect(teamsFor({ mode: 'classic', playerCount: 4 })).toBeNull();
   });
   it('codes display as KUCA-XXXX and parse back', () => {
     expect(displayCode('7KQM')).toBe('KUCA-7KQM');
     expect(normalizeCode('kuca-7kqm')).toBe('7KQM');
     expect(normalizeCode('7KQ')).toBe('');
     expect(filterCodeChars('a0o1b')).toBe('AB');
+  });
+});
+
+describe('mirror: pending penalty', () => {
+  it('a penalty draw clears the pending +N (no stale count for the next turns)', () => {
+    let m = applyEvent(emptyMatch(RULE_PRESETS[2].rules, 'cyclone', [0, 1, 2, 3]), { type: 'deal', hand: [], counts: [7, 7, 7, 7], firstCard: { id: 1, face: { kind: 'number', color: 'sol', value: 5 } }, activeColor: 'sol', starter: 0, deck: 50 } as unknown as GameEvent);
+    m = applyEvent(m, { type: 'stack', total: 6 });
+    expect(m.round!.pendingDraw).toBe(6);
+    m = applyEvent(m, { type: 'draw', seat: 1, count: 6, reason: 'penalty' } as GameEvent);
+    expect(m.round!.pendingDraw).toBe(0);
+    expect(m.round!.pendingFrom).toBeNull();
   });
 });

@@ -69,9 +69,12 @@ describe('basic turns', () => {
     const w4 = card('wild4');
     const m2 = scenario({ hands: { 0: [w4, num('mar', 1)], 1: [num('mar', 3)] }, top: num('sol', 5) });
     const r2 = play(m2, { kind: 'play', seat: 0, cardId: w4.id, color: 'mar' }).match.round!;
-    expect(r2.hands[1]).toHaveLength(5);
-    expect(r2.activeColor).toBe('mar');
-    expect(r2.turn).toBe(2);
+    // a +4 always waits for the victim's challenge-or-accept
+    expect(r2.pendingDraw).toBe(4);
+    const r3 = play(play(m2, { kind: 'play', seat: 0, cardId: w4.id, color: 'mar' }).match, { kind: 'acceptPenalty', seat: 1 }).match.round!;
+    expect(r3.hands[1]).toHaveLength(5);
+    expect(r3.activeColor).toBe('mar');
+    expect(r3.turn).toBe(2);
   });
 
   it('shield and mirror are playable as plain cards on colour; swap is a wild', () => {
@@ -172,7 +175,7 @@ describe('stacking', () => {
     expect(r3.match.round!.turn).toBe(3);
   });
 
-  it("'any': +4 on +2 and +2 of the active colour on +4", () => {
+  it("'any': +4 on +2, but no +2 on a +4 (never lower)", () => {
     const a = d2();
     const w4 = card('wild4');
     const m = scenario({ rules: { stacking: 'any' }, hands: { 0: [a, num('mar', 1)], 1: [w4, num('coral', 1)], 2: [card('draw2', 'mar'), card('draw2', 'coral'), num('sol', 1)] }, top: num('sol', 5) });
@@ -180,7 +183,25 @@ describe('stacking', () => {
     const r2 = play(r1, { kind: 'play', seat: 1, cardId: w4.id, color: 'mar' }).match;
     expect(r2.round!.pendingDraw).toBe(6);
     const stackIds = legalMoves(r2).filter((x) => x.kind === 'play').map((x) => (x as { cardId: number }).cardId);
-    expect(stackIds).toEqual([r2.round!.hands[2][0].id]); // only the mar +2
+    expect(stackIds).toEqual([]); // a +2 never goes on a +4
+    expect(legalMoves(r2).some((x) => x.kind === 'acceptPenalty')).toBe(true);
+  });
+
+  it('after a penalty is drawn, the next player draws just 1 from the deck (regression)', () => {
+    const a = d2();
+    const deck = Array.from({ length: 20 }, () => num('coral', 9));
+    for (const stacking of ['off', 'any'] as const) {
+      const m = scenario({ rules: { stacking, drawMode: 'one' }, deck, hands: { 0: [a, num('mar', 1)], 1: [num('palma', 1)], 2: [num('palma', 3), num('palma', 4)] }, top: num('sol', 5) });
+      let x = play(m, { kind: 'play', seat: 0, cardId: a.id }).match;
+      if (stacking === 'any') x = play(x, { kind: 'acceptPenalty', seat: 1 }).match;
+      expect(x.round!.hands[1]).toHaveLength(3);
+      expect(x.round!.turn).toBe(2);
+      expect(x.round!.pendingDraw).toBe(0);
+      expect(legalMoves(x).some((l) => l.kind === 'acceptPenalty')).toBe(false);
+      const r = play(x, { kind: 'draw', seat: 2 });
+      expect(r.events.filter((e) => e.type === 'draw').map((e) => (e as { count: number }).count)).toEqual([1]);
+      expect(r.match.round!.hands[2]).toHaveLength(3);
+    }
   });
 
   it('stacking off: no pending penalty', () => {
@@ -388,15 +409,41 @@ describe('round and match end', () => {
   });
 });
 
+describe('2 vs 2 in every mode, Codo a codo', () => {
+  it('Clásico 2 vs 2: partners across, team score and team win with Clásico rules', () => {
+    const m0 = createMatch(RULE_PRESETS.find((p) => p.id === 'classic')!.rules, { mode: 'classic', players: 4, teams: true }, 1);
+    expect(m0.mode).toBe('classic');
+    expect(m0.teams).toEqual([[0, 2], [1, 3]]);
+    expect(m0.rules.stacking).toBe('off');
+    const last = num('sol', 1);
+    const m = scenario({ seating: 'across', rules: { target: 500, kuCall: false }, hands: { 0: [last], 1: [num('mar', 9)], 2: [num('mar', 4)], 3: [num('mar', 7)] }, top: num('sol', 5) });
+    expect(m.mode).toBe('classic');
+    const { match } = applyMove(m, { kind: 'play', seat: 0, cardId: last.id });
+    expect(match.round!.over).toBe(true);
+    expect(match.scores[0]).toBe(16);
+    expect(match.scores[2]).toBe(16);
+    expect(match.scores[1]).toBe(0);
+  });
+
+  it('Codo a codo: always 4 players side by side, stacking forced on', () => {
+    const m = createMatch({ ...DEFAULT_RULES, stacking: 'off' }, { mode: 'sideBySide', players: 2 }, 1);
+    expect(m.seats).toEqual([0, 1, 2, 3]);
+    expect(m.teams).toEqual([[0, 1], [2, 3]]);
+    expect(m.rules.stacking).toBe('any');
+    expect(createMatch({ ...DEFAULT_RULES, stacking: 'same' }, { mode: 'sideBySide', players: 4 }, 1).rules.stacking).toBe('any');
+    expect(RULE_PRESETS.find((p) => p.id === 'sideBySide')!.rules.stacking).toBe('any');
+  });
+});
+
 describe('partners', () => {
   for (const seating of ['across', 'side'] as const) {
     it(`${seating}: the team scores both opponents' cards, both partners carry it`, () => {
-      const m0 = scenario({ mode: 'partners', seating, rules: { target: 200 }, hands: {}, top: num('sol', 5) });
+      const m0 = scenario({ seating, rules: { target: 200 }, hands: {}, top: num('sol', 5) });
       const [mine, theirs] = m0.teams!;
       const partner = mine[1];
       const last = num('sol', 1);
       const m = scenario({
-        mode: 'partners', seating, rules: { target: 200 }, top: num('sol', 5),
+        seating, rules: { target: 200 }, top: num('sol', 5),
         hands: { 0: [last], [partner]: [num('mar', 9)], [theirs[0]]: [num('mar', 4)], [theirs[1]]: [card('skip', 'coral')] },
       });
       const { match, events } = play(m, { kind: 'play', seat: 0, cardId: last.id });
@@ -412,7 +459,7 @@ describe('partners', () => {
 
   it('the team wins the match when its score reaches the target', () => {
     const last = num('sol', 1);
-    const m = scenario({ mode: 'partners', seating: 'side', rules: { target: 200 }, hands: { 1: [last], 0: [num('mar', 1)], 2: [num('mar', 9)], 3: [num('mar', 9)] }, top: num('sol', 5), turn: 1 });
+    const m = scenario({ seating: 'side', rules: { target: 200 }, hands: { 1: [last], 0: [num('mar', 1)], 2: [num('mar', 9)], 3: [num('mar', 9)] }, top: num('sol', 5), turn: 1 });
     const near = { ...m, scores: [190, 190, 0, 0, 0, 0] };
     const { match, events } = play(near, { kind: 'play', seat: 1, cardId: last.id });
     expect(match.over).toBe(true);
@@ -423,7 +470,7 @@ describe('partners', () => {
   it('with elimination, the round ends when one team is left', () => {
     const d2 = card('draw2', 'sol');
     const big = Array.from({ length: 24 }, () => num('mar', 1));
-    const m = scenario({ mode: 'partners', rules: { eliminateAt: 25 }, hands: { 0: [d2, num('coral', 1)], 1: big, 2: [num('palma', 1)], 3: [] }, top: num('sol', 5) });
+    const m = scenario({ seating: 'across', rules: { eliminateAt: 25 }, hands: { 0: [d2, num('coral', 1)], 1: big, 2: [num('palma', 1)], 3: [] }, top: num('sol', 5) });
     const elim = { ...m, round: { ...m.round!, eliminated: [false, false, false, true, false, false] } };
     const { match } = play(elim, { kind: 'play', seat: 0, cardId: d2.id, ku: true });
     expect(match.round!.over).toBe(true);

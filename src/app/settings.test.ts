@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { RULE_PRESETS, RULES_VERSION } from '../engine/rules';
 import { DEFAULT_LINEUP } from '../roster';
 import { defaultSettings, descriptorsFor, migrateSettings, rulesFor, sanitizeLineupSetting, sanitizeRules, withMode, withRules } from './settings';
+import { migrateSave, type SavedGame } from './save';
+import { createMatch } from '../engine/game';
 
 describe('settings', () => {
   it('defaults: Spanish, Classic, rules per mode from the presets', () => {
@@ -64,9 +66,50 @@ describe('settings', () => {
     expect(s.rules.handSize).toBe(10);
   });
 
-  it('partners-only rules are filtered by mode', () => {
+  it('Codo a codo hides and forces stacking; 2 vs 2 rules show in every mode', () => {
+    expect(descriptorsFor('classic').some((d) => d.key === 'stacking')).toBe(true);
+    expect(descriptorsFor('sideBySide').some((d) => d.key === 'stacking')).toBe(false);
+    expect(sanitizeRules({ stacking: 'off' }, 'sideBySide').stacking).toBe('any');
+    expect(sanitizeRules({ stacking: 'off' }, 'classic').stacking).toBe('off');
+    for (const m of ['classic', 'action', 'cyclone', 'sideBySide'] as const) expect(descriptorsFor(m).some((d) => d.key === 'partnerOpen')).toBe(true);
     expect(descriptorsFor('classic').some((d) => d.key === 'seating')).toBe(false);
-    expect(descriptorsFor('partners').some((d) => d.key === 'seating')).toBe(true);
-    expect(sanitizeRules({ seating: 'side' }, 'partners').seating).toBe('side');
+  });
+
+  it('migrates the old Parejas mode: side → Codo a codo, across → Clásico with 2 vs 2', () => {
+    const side = migrateSettings({ mode: 'partners', players: 3, rulesByMode: { partners: { seating: 'side', partnerPass: true, stacking: 'off' } } });
+    expect(side.mode).toBe('sideBySide');
+    expect(side.rulesByMode!.sideBySide!.partnerPass).toBe(true);
+    expect(side.rules.stacking).toBe('any');
+    expect((side.rulesByMode as Record<string, unknown>).partners).toBeUndefined();
+    const across = migrateSettings({ mode: 'partners', players: 2, rulesByMode: { partners: { seating: 'across', partnerShield: true }, classic: { jumpIn: true } } });
+    expect(across.mode).toBe('classic');
+    expect(across.teamPlay).toBe(true);
+    expect(across.players).toBe(4);
+    expect(across.rules.partnerShield).toBeUndefined(); // retired with Escudo / Espejo: just off
+    // Parejas was not the selected mode: Clásico keeps its own rules, 2 vs 2 stays off
+    const other = migrateSettings({ mode: 'action', rulesByMode: { partners: { seating: 'across' }, classic: { jumpIn: true } } });
+    expect(other.mode).toBe('action');
+    expect(other.teamPlay).toBe(false);
+    expect(other.rulesByMode!.classic!.jumpIn).toBe(true);
+  });
+
+  it('migrates old Parejas saves', () => {
+    const save = (teams: [number[], number[]]): SavedGame => ({ v: 1, lineup: {}, match: { ...createMatch(RULE_PRESETS[0].rules, { mode: 'classic', players: 4 }), mode: 'partners', teams } as unknown as SavedGame['match'] });
+    const s = migrateSave(save([[0, 3], [1, 2]]));
+    expect(s.match.mode).toBe('sideBySide');
+    expect(s.match.rules.stacking).toBe('any');
+    expect(s.match.teams).toEqual([[0, 3], [1, 2]]);
+    const a = migrateSave(save([[0, 2], [1, 3]]));
+    expect(a.match.mode).toBe('classic');
+    expect(a.match.teams).toEqual([[0, 2], [1, 3]]);
+  });
+});
+
+describe('gestures setting', () => {
+  it('defaults, sanitizes and caps at 5', async () => {
+    const { sanitizeGestures, isChatId } = await import('../net/protocol');
+    expect(sanitizeGestures(undefined)).toEqual(['thumbsUp', 'clap', 'wave', 'shrug', 'facepalm']);
+    expect(sanitizeGestures(['wave', 'wave', 'nope', 'rub', 'clap', 'chin', 'mewing', 'shrug'])).toEqual(['wave', 'rub', 'clap', 'chin', 'mewing']);
+    expect(isChatId('g:wave') && isChatId('hello') && !isChatId('g:nope')).toBe(true);
   });
 });

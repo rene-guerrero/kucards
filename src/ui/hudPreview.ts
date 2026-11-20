@@ -37,7 +37,7 @@ export function startHudPreview(overlay: Overlay, s: AppSettings): void {
     let close = () => {};
     close = overlay.openModal(
       buildPause({
-        audio: { sound: s.sound, music: s.music, vibration: s.vibration },
+        audio: { sound: s.sound, voice: s.voice, music: s.music, vibration: s.vibration },
         onAudio: () => {},
         onResume: () => close(),
         onSettings: () => close(),
@@ -51,7 +51,6 @@ export function startHudPreview(overlay: Overlay, s: AppSettings): void {
   hud.setRound(3);
   hud.setTarget(500);
   hud.setScores(partners ? [{ label: t('team.a'), value: 120, me: true, team: 0 }, { label: t('team.b'), value: 85, team: 1 }] : players.map((p) => ({ label: p.name, value: [120, 85, 230, 40, 10, 0][p.seat], me: p.seat === 0 })));
-  hud.setActiveColor('mar');
   hud.setPending(4);
   hud.setKu('armed');
   hud.onKu = () => {

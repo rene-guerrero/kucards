@@ -31,6 +31,9 @@ export class SeatPlates {
   private ringAnim: Animation | null = null;
   private warnTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** called after every layout update (the chat button follows the own plate) */
+  onLayout: (() => void) | null = null;
+
   constructor(private avatars: AvatarController) {
     this.el = h('div.plates', { 'aria-hidden': 'true' });
     this.p = SEATS.map((s) => {
@@ -85,6 +88,50 @@ export class SeatPlates {
       ],
       { duration: 520, easing: 'ease-out' },
     );
+  }
+
+  private ranks: (number | null)[] = SEATS.map(() => null);
+  private rankEls: (HTMLElement | null)[] = SEATS.map(() => null);
+
+  /**
+   * Final minute: a round badge on the avatar with the seat's position (1 = fewest card points).
+   * It pops in with a short glow, bumps when the number changes and fades out on null.
+   */
+  setRank(seat: Seat, n: number | null): void {
+    const p = this.p[seat];
+    if (!p || this.ranks[seat] === n) return;
+    const prev = this.ranks[seat];
+    this.ranks[seat] = n;
+    let el = this.rankEls[seat];
+    if (!el) {
+      if (n === null) return;
+      el = h('span.plate-rank');
+      this.rankEls[seat] = el;
+      (p.root.querySelector('.plate-av') as HTMLElement).append(el);
+    }
+    el.classList.toggle('on', n !== null);
+    if (n === null) return;
+    el.textContent = String(n);
+    el.dataset.rank = String(n);
+    if (prefersReducedMotion()) return;
+    const frames: Keyframe[] =
+      prev === null
+        ? [
+            { transform: 'scale(0)', filter: 'brightness(2.2) drop-shadow(0 0 10px #ffe17a)' },
+            { transform: 'scale(1.35)', filter: 'brightness(1.6) drop-shadow(0 0 8px #ffe17a)', offset: 0.55 },
+            { transform: 'scale(1)', filter: 'brightness(1) drop-shadow(0 0 0 transparent)' },
+          ]
+        : [
+            { transform: 'scale(1)' },
+            { transform: 'scale(1.3)', filter: 'brightness(1.7)', offset: 0.4 },
+            { transform: 'scale(1)' },
+          ];
+    el.animate(frames, { duration: prev === null ? 520 : 340, easing: 'cubic-bezier(0.3, 1.6, 0.5, 1)' });
+  }
+
+  /** every final-minute badge off */
+  clearRanks(): void {
+    for (const s of SEATS) this.setRank(s, null);
   }
 
   setNames(names: readonly string[]): void {
@@ -193,7 +240,7 @@ export class SeatPlates {
         L.team = team;
         p.root.classList.toggle('team-0', team === 0);
         p.root.classList.toggle('team-1', team === 1);
-        p.team.textContent = team === 0 ? 'A' : team === 1 ? 'B' : '';
+        // no A / B letter: the team colour on the plate's border says it
       }
       anyVisible ||= b.visible;
       this.boxes[b.seat] = { ...b, bubble: b.bubble ? { ...b.bubble } : undefined };
@@ -205,6 +252,7 @@ export class SeatPlates {
         this.p[s].root.classList.remove('on');
       }
     this.avatars.setVisible(anyVisible);
+    this.onLayout?.();
     // face centres for the avatars' glances (the table centre = the middle of the visible plates)
     const vis = SEATS.map((s) => this.boxes[s]).filter((b): b is SeatPlate => !!b && b.visible);
     if (vis.length) {
@@ -311,6 +359,8 @@ export function bubbleFor(ev: GameEvent): { seat: Seat; text: string; strong: bo
       return say(ev.seat, 'game.ku', true);
     case 'kuCaught':
       return say(ev.by, 'say.caught', true);
+    case 'challenge':
+      return say(ev.by, 'say.challenge', true);
     case 'shield':
       return say(ev.seat, 'say.shield', true);
     case 'mirror':

@@ -10,7 +10,8 @@
  * Balance (4 players, classic, ai.bench.test.ts): see PLAN.md §5.
  * `style` adds light biases on top of the level (STYLE_WEIGHTS in aiPolicy.ts).
  */
-import type { Difficulty, MatchState, Move, PlayStyle, RoundState, Seat } from '../contracts';
+import { colorSlot } from '../contracts';
+import type { Color, Difficulty, MatchState, Move, PlayStyle, RoundState, Seat } from '../contracts';
 import { knowledge, observe } from './aiKnow';
 import { chooseEasy, chooseHeuristic, makeCtx, scoreTurn, styleWeights, type Level } from './aiPolicy';
 import { chooseMaster, masterSeed, type MasterOptions } from './aiSim';
@@ -42,4 +43,48 @@ export function chooseMove(match: MatchState, seat: Seat, level: Difficulty, sty
 /** normal-level heuristic value of a turn move (or a jump-in, scored as a play by `seat`) */
 export function scoreMove(m: MatchState, _r: RoundState, seat: Seat, mv: Move): number {
   return scoreTurn(makeCtx(m, seat, 2, styleWeights(), null, new Rng(1)), mv);
+}
+
+/** the colour an automatic play picks (turn timer, or a human's winning last card): red */
+export const AUTO_COLOR: Color = 'coral';
+
+const TIMEOUT_KINDS = new Set<Move['kind']>(['play', 'draw', 'pass', 'acceptPenalty', 'respond', 'challenge']);
+
+/** `mv` with its colour choice (if any) replaced by AUTO_COLOR, as listed in `legal` */
+export function withAutoColor(legal: Move[], mv: Move): Move {
+  if (mv.kind !== 'play' || !mv.color) return mv;
+  // Día y Noche: on the night side the same slot (morado)
+  const red = legal.find((l) => l.kind === 'play' && l.cardId === mv.cardId && !!l.color && colorSlot(l.color) === colorSlot(AUTO_COLOR) && l.target === mv.target);
+  return red ? { ...red, ...(mv.ku ? { ku: true } : {}) } : mv;
+}
+
+/**
+ * The move made for a human whose turn timer ran out (offline controller and room server alike):
+ *  - after a draw the player made themselves: pass, so the drawn card is NOT played (unless forcePlay
+ *    leaves no pass, then it is played, red if wild);
+ *  - otherwise the normal-level CPU policy picks among the turn moves (stack, challenge, shield, play,
+ *    draw…), any colour → red. When that move is a draw, apply it and then `afterAutoDraw`.
+ */
+export function timeoutMove(match: MatchState, seat: Seat): Move | null {
+  const r = match.round;
+  if (!r || r.over || match.over || r.turn !== seat) return null;
+  const legal = legalMoves(match, seat).filter((m) => TIMEOUT_KINDS.has(m.kind));
+  if (!legal.length) return null;
+  if (r.drewThisTurn) return legal.find((m) => m.kind === 'pass') ?? withAutoColor(legal, legal[0]);
+  const rng = new Rng(hashSeed(match.rng, seat, LEVEL_ID.normal, r.discard.length, r.deck.length, r.hands[seat].length, r.turn, r.roundNo));
+  const mv = chooseHeuristic(makeCtx(match, seat, 2, styleWeights(), null, rng), legal);
+  return withAutoColor(legal, mv && TIMEOUT_KINDS.has(mv.kind) ? mv : legal[0]);
+}
+
+/** after a draw made by the turn timer: the drawn card is played when it can be (red if wild), else pass */
+export function afterAutoDraw(match: MatchState, seat: Seat): Move | null {
+  const r = match.round;
+  if (!r || r.over || match.over || r.turn !== seat || !r.drewThisTurn) return null;
+  const legal = legalMoves(match, seat);
+  const play = legal.find((m) => m.kind === 'play' && m.cardId === r.drawnCardId);
+  if (play) {
+    const mv = withAutoColor(legal, play);
+    return mv.kind === 'play' && match.rules.kuCall && r.hands[seat].length === 2 ? { ...mv, ku: true } : mv;
+  }
+  return legal.find((m) => m.kind === 'pass') ?? null;
 }

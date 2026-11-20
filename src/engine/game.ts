@@ -14,8 +14,12 @@
  * The penalty stays pending (`pendingDraw`, `pendingFrom`, the victim on turn) when stacking is on, when
  * the victim may challenge it, or when someone may answer it with a shield / mirror; otherwise the
  * victim draws at once and loses the turn. A pending victim may: stack (stacking 'same' = same kind;
- * 'any' = any penalty card worth at least the top one, or a coloured one of the active colour on a wild
- * penalty), `respond`, `challenge`, or `acceptPenalty` (draws the whole stack, loses the turn).
+ * 'any' = any penalty card worth at least the top one, never a lower one), `respond`, `challenge`, or
+ * `acceptPenalty` (draws the whole stack, loses the turn).
+ * Stacking is MANDATORY: while the victim holds a card that can be stacked, `acceptPenalty` is not
+ * legal (closeWindow then only closes the window). Shield / mirror (`respond`) and `challenge` are not
+ * stacks and stay available, so on a wild +4 / +10 the victim must stack OR challenge (OR respond), and
+ * may accept only when nothing can be stacked.
  *
  * Response windows (`round.window`) are for things that may happen OUT of turn and need a timer:
  *  - 'ku': a seat went down to one card without calling ¡Ku! (no `ku: true` on the play and no earlier
@@ -37,10 +41,14 @@
  *   victim (`mirrorVictim`, engine-internal): the mirror used that seat's turn.
  * A response card that empties the responder's hand wins the round (a mirrored stack is drawn first).
  *
- * Challenge (`wild4Challenge`, wild4 and draw10): the victim of a pending wild penalty may `challenge`.
- *   If the player held a card of the active colour from before the wild (checked at play time, kept in
- *   the engine-internal `challenge` field), that player draws the whole pending stack and the victim
- *   keeps the turn as if no penalty; otherwise the challenger draws stack + 2 and loses the turn.
+ * Challenge (always on, every mode; wild4 and draw10): the victim of a pending wild penalty may
+ *   `challenge` (only a wild played with no penalty pending: one stacked on a +2 / +4 cannot be
+ *   challenged). Standard rule: the +4 may only be played when its player holds no card matching the
+ *   colour in play. If the player held a card of the colour in play before the wild that could have been
+ *   played instead (checked at play time, kept in the engine-internal `challenge` field), the challenge
+ *   succeeds: that player draws the whole pending stack (4 for a lone +4) and the challenger draws
+ *   nothing and keeps the turn as if no penalty; otherwise the challenger draws stack + 2 (6 for a lone
+ *   +4) and loses the turn. The `wild4Challenge` rule flag is ignored (kept for old saves).
  *
  * Other power / Cyclone cards:
  *  - swap (wild): `color` + `target`; hands (and ¡Ku! flags) are swapped like a 7-0 seven.
@@ -72,26 +80,36 @@
  * seat (or team) standing wins the round and also scores what the eliminated seats held when they went
  * out (`round.outPoints`). A round where nobody can play and nothing can be drawn ends "blocked": the
  * seat with the fewest points in hand wins it.
+ *
+ * Día y Noche (mode 'dayNight', deck 'dayNight'): every card has a day face and a night face
+ * (`Card.face` = the face of the side in play, `Card.other` = the other one, which is what everybody
+ * else sees of it). The round starts on the day side ('light'). An Eclipse ('flip', coloured, on both
+ * sides) is a plain card that, once on the pile, turns over every card in play: hands, deck and pile
+ * (each card keeps its place; face and other swap) and `round.side` changes. The active colour becomes
+ * the colour of the new top face (the Eclipse's other side), or the same slot of the other side's
+ * palette when that face is a wild. The new top face's effect does not trigger. Wild colour choices are
+ * always the colours of the side in play. Going out on an Eclipse ends the round without a flip.
  */
 import type { Card, CardFace, Color, GameEvent, MatchSetup, MatchState, Move, ResponseWindow, RoundState, RuleSettings, Seat } from '../contracts';
-import { COLORS } from '../contracts';
-import { buildDeck, cardPoints, isWildKind, PENALTY_DRAW } from './cards';
+import { COLORS, sideColors } from '../contracts';
+import { buildDeck, cardPoints, isWildKind, otherSideColor, PENALTY_DRAW, turnOver } from './cards';
 import { Rng } from './rng';
+import { modeRules } from './rules';
 
 const SEATS_FOR: Record<2 | 3 | 4, Seat[]> = { 2: [0, 2], 3: [0, 1, 3], 4: [0, 1, 2, 3] };
 
 export function createMatch(rules: RuleSettings, setup: MatchSetup, seed = Date.now()): MatchState {
-  const players = setup.mode === 'partners' ? 4 : setup.players;
+  const side = setup.mode === 'sideBySide';
+  const players = side ? 4 : setup.players;
   const seats = SEATS_FOR[players];
-  const teams: MatchState['teams'] =
-    setup.mode !== 'partners'
-      ? undefined
-      : (setup.seating ?? rules.seating) === 'side'
-        ? setup.partnerSide === 'before'
-          ? [[0, 3], [1, 2]] // Codo a codo, partner plays just before the human
-          : [[0, 1], [2, 3]] // Codo a codo: A A B B, partner plays just after the human
-        : [[0, 2], [1, 3]]; // Enfrente: A B A B
-  return { rules: { ...rules }, mode: setup.mode, seats, scores: [0, 0, 0, 0, 0, 0], round: null, teams, over: false, winner: null, rng: seed | 0 };
+  const teams: MatchState['teams'] = side
+    ? setup.partnerSide === 'before'
+      ? [[0, 3], [1, 2]] // Codo a codo, partner plays just before the human
+      : [[0, 1], [2, 3]] // Codo a codo: A A B B, partner plays just after the human
+    : setup.teams && players === 4
+      ? [[0, 2], [1, 3]] // 2 vs 2 Enfrente: A B A B
+      : undefined;
+  return { rules: modeRules(setup.mode, rules), mode: setup.mode, seats, scores: [0, 0, 0, 0, 0, 0], round: null, teams, over: false, winner: null, rng: seed | 0 };
 }
 
 export function shuffle<T>(xs: readonly T[], rng: Rng): T[] {
@@ -116,6 +134,7 @@ export function startRound(match: MatchState): { match: MatchState; events: Game
     first = deck.pop()!;
   }
   const roundNo = (match.round?.roundNo ?? 0) + 1;
+  const twoSided = !!first.other;
   const starter = match.seats[rng.int(match.seats.length)];
   const activeColor: Color = first.face.color ?? COLORS[0];
   const round: RoundState = {
@@ -123,12 +142,16 @@ export function startRound(match: MatchState): { match: MatchState; events: Game
     pendingDraw: 0, pendingFrom: null, window: null, kuCalled: [false, false, false, false, false, false],
     drewThisTurn: false, drawnCardId: null, side: 'light', eliminated: [false, false, false, false, false, false], over: false,
   };
-  const events: GameEvent[] = [
-    { type: 'deal', counts: hands.map((h) => h.length), starter, firstCard: first, activeColor, hand: hands[0].slice(), deck: deck.length },
-    { type: 'turn', seat: starter },
-  ];
+  const deal: GameEvent = { type: 'deal', counts: hands.map((h) => h.length), starter, firstCard: first, activeColor, hand: hands[0].slice(), deck: deck.length };
+  if (twoSided) Object.assign(deal, { backs: backsOf(hands), deckBack: deckBackOf(deck) });
+  const events: GameEvent[] = [deal, twoSided ? { type: 'turn', seat: starter, deckBack: deckBackOf(deck) } : { type: 'turn', seat: starter }];
   return { match: { ...match, round, rng: rng.s }, events };
 }
+
+/** Día y Noche: by seat, the faces everybody sees on the backs of the hands */
+const backsOf = (hands: readonly Card[][]): CardFace[][] => hands.map((h) => h.map((c) => c.other ?? c.face));
+/** Día y Noche: the back of the deck's top card (null when the deck is empty) */
+const deckBackOf = (deck: readonly Card[]): CardFace | null => deck[deck.length - 1]?.other ?? null;
 
 /** Can `card` go on the pile right now (turn play, no penalty pending)? */
 export function matches(card: Card, top: Card, activeColor: Color): boolean {
@@ -204,8 +227,7 @@ export function canStack(card: Card, r: RoundState, rules: RuleSettings): boolea
   const td = penaltyOf(top);
   if (!d || !td) return false;
   if (mode === 'same') return card.face.kind === top.kind;
-  if (d >= td) return true;
-  return isWildKind(top.kind) && card.face.color === r.activeColor;
+  return d >= td; // same or higher, never lower
 }
 
 /** may this card be played by the seat on turn right now? */
@@ -228,8 +250,9 @@ const isSeven = (c: Card) => c.face.kind === 'number' && c.face.value === 7;
 function playVariants(m: MatchState, r: RoundState, seat: Seat, card: Card): Move[] {
   const base = { kind: 'play' as const, seat, cardId: card.id };
   const targets = () => activeSeats(m, r).filter((t) => t !== seat);
-  if (card.face.kind === 'swap') return COLORS.flatMap((color) => targets().map((target) => ({ ...base, color, target })));
-  if (isWildKind(card.face.kind)) return COLORS.map((color) => ({ ...base, color }));
+  const colors = r.side === 'dark' ? sideColors('dark') : COLORS;
+  if (card.face.kind === 'swap') return colors.flatMap((color) => targets().map((target) => ({ ...base, color, target })));
+  if (isWildKind(card.face.kind)) return colors.map((color) => ({ ...base, color }));
   if (isSevenZero(m.rules) && isSeven(card)) return targets().map((target) => ({ ...base, target }));
   return [base];
 }
@@ -254,7 +277,7 @@ function responseCards(r: RoundState, s: Seat): Card[] {
 
 function canChallenge(m: MatchState, r: RoundState, s: Seat): boolean {
   const c = er(r).challenge;
-  return !!m.rules.wild4Challenge && !!c && c.victim === s && r.pendingDraw > 0 && er(r).mirrorVictim == null;
+  return !!c && c.victim === s && r.pendingDraw > 0 && er(r).mirrorVictim == null;
 }
 
 // ───────────────────────── legal moves ─────────────────────────
@@ -275,14 +298,16 @@ export function legalMoves(match: MatchState, seat?: Seat): Move[] {
   const out: Move[] = [];
 
   if (w?.reason === 'ku' && w.victim !== undefined && w.seats.includes(s)) out.push({ kind: 'catchKu', seat: s, target: w.victim });
-  if (rules.kuCall && hand.length >= 1 && hand.length <= 2 && !r.kuCalled[s]) out.push({ kind: 'callKu', seat: s });
+  // ¡Ku! (added at the end): only when it matters
+  const kuOpen = hand.length === 1 && w?.reason === 'ku' && w.victim === s;
 
   if (s === r.turn) {
     if (r.pendingDraw > 0) {
       for (const c of hand) if (canStack(c, r, rules)) out.push(...playVariants(match, r, s, c));
       for (const c of responseCards(r, s)) out.push({ kind: 'respond', seat: s, cardId: c.id });
+      const stacks = out.some((x) => x.kind === 'play');
       if (canChallenge(match, r, s)) out.push({ kind: 'challenge', seat: s });
-      out.push({ kind: 'acceptPenalty', seat: s });
+      if (!stacks) out.push({ kind: 'acceptPenalty', seat: s }); // stacking is mandatory
     } else if (r.drewThisTurn) {
       const drawn = r.drawnCardId != null ? hand.find((c) => c.id === r.drawnCardId) : hand[hand.length - 1];
       const playable = !!drawn && canPlay(drawn, r, rules);
@@ -298,6 +323,10 @@ export function legalMoves(match: MatchState, seat?: Seat): Move[] {
     const top = topCard(r);
     for (const c of hand) if (identical(c, top)) out.push(...jumpInVariants(match, r, s, c));
   }
+  // with two cards about to play the second-to-last (your turn or a jump-in), or with one card while the
+  // catch window is open against you
+  const kuNow = (hand.length === 2 && out.some((m) => m.kind === 'play' || m.kind === 'jumpIn')) || kuOpen;
+  if (rules.kuCall && kuNow && !r.kuCalled[s]) out.push({ kind: 'callKu', seat: s });
   return out;
 }
 
@@ -369,7 +398,19 @@ function setTurn(st: St, seat: Seat): void {
   st.r.turn = seat;
   st.r.drewThisTurn = false;
   st.r.drawnCardId = null;
-  st.ev.push({ type: 'turn', seat });
+  st.ev.push(st.r.discard[0]?.other ? { type: 'turn', seat, deckBack: deckBackOf(st.r.deck) } : { type: 'turn', seat });
+}
+
+/** Día y Noche: an Eclipse turns every card in play over (see DESIGN NOTES) */
+function flipAll(st: St, seat: Seat): void {
+  const { r } = st;
+  r.hands = r.hands.map((h) => h.map(turnOver));
+  r.deck = r.deck.map(turnOver);
+  r.discard = r.discard.map(turnOver);
+  r.side = r.side === 'dark' ? 'light' : 'dark';
+  r.activeColor = topCard(r).face.color ?? otherSideColor(r.activeColor);
+  er(r).challenge = null;
+  st.ev.push({ type: 'flip', side: r.side, color: r.activeColor, seat, hand: r.hands[0].slice(), backs: backsOf(r.hands), deckBack: deckBackOf(r.deck) });
 }
 
 function setWindow(st: St, w: ResponseWindow | null): void {
@@ -384,6 +425,9 @@ function reshuffle(st: St): boolean {
   const top = r.discard.pop()!;
   const rest = r.discard;
   r.deck = shuffle(rest, st.rng).concat(r.deck);
+  // a one-card "reshuffle" draws no random number: step the RNG anyway, so a near-empty table where
+  // every card sits in the hands can never replay the same state (and the same CPU choices) forever
+  if (rest.length < 2) st.rng.next();
   r.discard = [top];
   st.ev.push({ type: 'reshuffle', count: rest.length });
   return true;
@@ -418,7 +462,7 @@ function drawCards(st: St, seat: Seat, n: number, reason: DrawReason, until?: (c
   return drawn;
 }
 
-function endRound(st: St, winner: Seat): void {
+function endRound(st: St, winner: Seat, byTime = false): void {
   const { m, r } = st;
   r.over = true;
   r.window = null;
@@ -436,7 +480,7 @@ function endRound(st: St, winner: Seat): void {
     points[s] = total;
     m.scores[s] += total;
   }
-  st.ev.push({ type: 'roundEnd', winner, points });
+  st.ev.push(byTime ? { type: 'roundEnd', winner, points, byTime } : { type: 'roundEnd', winner, points });
   const target = Number(m.rules.target) || 0;
   if (target === 0 || winners.some((s) => m.scores[s] >= target)) {
     m.over = true;
@@ -452,6 +496,49 @@ function endBlocked(st: St): void {
   let best = act[0];
   for (const s of act) if (handPoints(st.r.hands[s]) < handPoints(st.r.hands[best])) best = s;
   endRound(st, best);
+}
+
+/**
+ * The time-up verdict: the fewest card points in hand wins (Parejas: the team with the lower combined
+ * points; the team's seat holding fewer points is named winner). Ties: fewer cards (combined for teams),
+ * then the seat (team) that would play soonest from the seat on turn, in play order, the player on turn
+ * first. Eliminated seats do not take part (their team plays on with the partner).
+ */
+export function timeUpWinner(m: MatchState, r: RoundState): Seat {
+  const act = activeSeats(m, r);
+  const order: Seat[] = [];
+  let s = r.turn;
+  for (let i = 0; i < m.seats.length && !order.includes(s); i++) {
+    if (act.includes(s)) order.push(s);
+    s = stepSeat(m, r, s);
+  }
+  for (const x of act) if (!order.includes(x)) order.push(x);
+  const group = (x: Seat): Seat[] => {
+    const t = teamOf(m, x);
+    return t === null ? [x] : m.teams![t].filter((y) => act.includes(y));
+  };
+  const key = (x: Seat): [number, number] => {
+    const g = group(x);
+    return [g.reduce((t: number, y) => t + handPoints(r.hands[y]), 0), g.reduce((t: number, y) => t + r.hands[y].length, 0)];
+  };
+  let best = order[0];
+  for (const x of order) {
+    const [p, c] = key(x);
+    const [bp, bc] = key(best);
+    if (p < bp || (p === bp && c < bc)) best = x;
+  }
+  // a team: name the partner holding fewer points (the score goes to both anyway)
+  const g = group(best);
+  return g.reduce((a, b) => (handPoints(r.hands[b]) < handPoints(r.hands[a]) ? b : a), best);
+}
+
+/** the round's time limit ran out: the round ends now (scored as any round end, the time-up verdict) */
+export function timeUp(match: MatchState): { match: MatchState; events: GameEvent[] } {
+  if (!match.round || match.round.over) return { match, events: [] };
+  const st = begin(match);
+  st.r.endedBy = 'time';
+  endRound(st, timeUpWinner(st.m, st.r), true);
+  return finish(st);
 }
 
 /** nobody can play and nothing can be drawn */
@@ -488,7 +575,9 @@ function checkEliminated(st: St, seat: Seat): void {
 function kuCheck(st: St, seat: Seat): void {
   const { m, r } = st;
   if (!m.rules.kuCall || r.window || r.over || r.eliminated[seat] || r.hands[seat].length !== 1 || r.kuCalled[seat]) return;
-  setWindow(st, { reason: 'ku', seats: activeSeats(m, r).filter((s) => s !== seat), victim: seat });
+  // only rivals can catch a missed ¡Ku!: never the player's own partner
+  const team = m.teams?.find((t) => t.includes(seat)) ?? [seat];
+  setWindow(st, { reason: 'ku', seats: activeSeats(m, r).filter((s) => !team.includes(s)), victim: seat });
 }
 
 // ───────────────────────── penalties ─────────────────────────
@@ -525,9 +614,11 @@ function penalty(st: St, from: Seat, n: number, challenge: { illegal: boolean } 
   const { m, r } = st;
   const victim = next(st, from);
   const stacking = m.rules.stacking === 'same' || m.rules.stacking === 'any';
+  // only a wild penalty played with nothing pending may be challenged (never one stacked on a penalty)
+  const stacked = r.pendingDraw > 0;
   r.pendingDraw += n;
   r.pendingFrom = from;
-  er(r).challenge = challenge ? { from, victim, illegal: challenge.illegal } : null;
+  er(r).challenge = challenge && !stacked ? { from, victim, illegal: challenge.illegal } : null;
   if (stacking) st.ev.push({ type: 'stack', total: r.pendingDraw });
   aimPenalty(st, victim, stacking || !!challenge);
 }
@@ -591,6 +682,7 @@ function challenge(st: St, seat: Seat): void {
   const c = er(r).challenge!;
   const total = r.pendingDraw;
   clearPenalty(st);
+  st.ev.push({ type: 'challenge', by: seat, target: c.from, caught: c.illegal });
   if (c.illegal) {
     // caught: the player draws the stack, the victim plays on as if nothing happened
     drawCards(st, c.from, total, 'penalty');
@@ -664,9 +756,9 @@ function resolvePlay(st: St, seat: Seat, card: Card, opts: PlayOpts): void {
     r.kuCalled[seat] = true;
     st.ev.push({ type: 'ku', seat });
   }
-  // wild4Challenge: did the player hold a card of the colour in play before this wild penalty?
+  // challenge: did the player hold a card of the colour in play that could have been played instead?
   const challengeInfo =
-    rules.wild4Challenge && (kind === 'wild4' || kind === 'draw10') ? { illegal: hand.some((c) => c !== card && c.face.color === prevColor) } : null;
+    kind === 'wild4' || kind === 'draw10' ? { illegal: hand.some((c) => c !== card && c.face.color === prevColor && canPlay(c, r, rules)) } : null;
 
   hand.splice(hand.indexOf(card), 1);
   r.discard.push(card);
@@ -752,7 +844,11 @@ function resolvePlay(st: St, seat: Seat, card: Card, opts: PlayOpts): void {
       if (!r.over) setTurn(st, next(st, victim));
       break;
     }
-    // wild, sweep (cards already swept), shield / mirror on their turn, flip (later phase): plain cards
+    case 'flip':
+      flipAll(st, seat);
+      setTurn(st, next(st, seat));
+      break;
+    // wild, sweep (cards already swept), shield / mirror on their turn: plain cards
     default:
       setTurn(st, next(st, seat));
       break;
@@ -845,7 +941,8 @@ export function closeWindow(match: MatchState): { match: MatchState; events: Gam
   const w = match.round?.window;
   if (!w || match.round!.over) return { match, events: [] };
   const st = begin(match);
-  if (w.reason === 'penalty' && w.victim !== undefined) takePenalty(st, w.victim);
+  // mandatory stacking: a victim who can stack keeps the turn (only the window closes)
+  if (w.reason === 'penalty' && w.victim !== undefined && !legalMoves(match, w.victim).some((x) => x.kind === 'play')) takePenalty(st, w.victim);
   else setWindow(st, null);
   return finish(st);
 }

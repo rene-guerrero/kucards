@@ -5,7 +5,7 @@
 import { createTableView, type TableViewExt } from './index';
 import { createMatch, startRound, buildDeck, matches, DEFAULT_RULES } from '../engine';
 import type { CardBack, Card, CardFace, Color, GameEvent, Quality, RoundState, Seat, SeatPlate, SfxName, TableStyle } from '../contracts';
-import { initAudio, playSfx } from '../audio/sfx';
+import { initAudio, playSfx, powerSfxForEvent } from '../audio/sfx';
 import '../ui/styles.css';
 import { Overlay } from '../ui/overlay';
 import { Hud } from '../ui/hud';
@@ -98,6 +98,7 @@ async function send(e: GameEvent) {
   // the avatars react as in the game (hurt when caught, cheers, moods)
   avatars.onEvent(e);
   await view.handle(e);
+  powerSfxForEvent(e);
   if (openSeat !== null && round) view.setOpenHand(openSeat, round.hands[openSeat].slice());
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -589,7 +590,7 @@ async function caught() {
   await send({ type: 'draw', seat: t, count: 2, cards: cs, reason: 'catch' });
 }
 
-const SOUNDS: SfxName[] = ['clack', 'slam', 'thump', 'deal', 'draw', 'shuffle', 'pass', 'select', 'invalid', 'charge', 'ku', 'shield', 'mirror', 'winHand', 'loseHand', 'winMatch', 'loseMatch', 'tranque'];
+const SOUNDS: SfxName[] = ['clack', 'slam', 'thump', 'deal', 'draw', 'shuffle', 'pass', 'select', 'invalid', 'charge', 'ku', 'shield', 'mirror', 'winHand', 'loseHand', 'winMatch', 'loseMatch', 'tranque', 'skip', 'reverse', 'hit2', 'hit4', 'hit6', 'wild', 'sweep', 'flip', 'swap'];
 const sndBar = document.getElementById('snd');
 if (sndBar)
   for (const n of SOUNDS) {

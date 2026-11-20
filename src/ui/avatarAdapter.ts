@@ -31,8 +31,8 @@ export const humanFace = (f: number | FaceSpec): FaceSpec => sanitizeFace(f);
 const box = (el: Element): HTMLElement => h('span.face-static.av-fill', el as unknown as HTMLElement);
 
 /** A still face (grids, summaries, pickers). `_initial` is kept for the old placeholder call sites. */
-export function staticFace(spec: FaceSpec | number, expr: AvatarExpr = 'idle', _initial = ''): HTMLElement {
-  return box(kuStaticFace(spec, mood(expr)));
+export function staticFace(spec: FaceSpec | number, expr: AvatarExpr = 'idle', _initial = '', gesture?: Gesture): HTMLElement {
+  return box(kuStaticFace(spec, mood(expr), gesture ? { gesture } : {}));
 }
 
 /** A face that blinks and glances, whose expression can change (new-game seats). */
@@ -129,6 +129,11 @@ export class AvatarController {
         // KuAvatars' hurt face plus its facepalm hands
         this.gesture(ev.target, 'facepalm', 0.1);
         this.gesture(ev.by, 'thumbsUp');
+        break;
+      case 'challenge':
+        // the loser of the challenge winces, the winner looks smug
+        this.react(ev.caught ? ev.target : ev.by, 'hurt', 1.8);
+        this.react(ev.caught ? ev.by : ev.target, 'smug', 1.6);
         break;
       case 'shield':
         this.react(ev.seat, 'smug', 1.4);

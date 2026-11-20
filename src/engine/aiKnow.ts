@@ -16,9 +16,10 @@
  * turn it was), so sharing a track between the seats of one match leaks nothing.
  */
 import type { Card, CardKind, Color, MatchState, RoundState, Seat } from '../contracts';
-import { COLORS } from '../contracts';
+import { colorSlot } from '../contracts';
 
-export const colorIdx = (c: Color): number => COLORS.indexOf(c);
+/** a colour's slot 0–3 (Día y Noche: night colours share the slots of the day ones; one side is in play) */
+export const colorIdx = (c: Color): number => colorSlot(c);
 export const bit = (c: Color): number => 1 << colorIdx(c);
 
 /** wild-type card (no colour of its own): wild, wild4, swap, draw10, wildColor… */

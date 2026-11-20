@@ -5,7 +5,7 @@ import type { FaceSpec } from 'kuavatars/faces';
  * pick a CPU character), the room rules sheet, the in-game menu (the match keeps going) and the
  * quick-phrase grid. Pure builders: the online controller (src/app/online.ts) owns state and connection.
  */
-import type { GameMode, RuleSettings, Seat, Seating } from '../contracts';
+import type { GameMode, RuleSettings, Seat } from '../contracts';
 import type { PublicRoom, QuickPhraseId, SeatOccupant } from '../net/protocol';
 import { activeSeatsOf, MAX_NAME_LENGTH, QUICK_PHRASES, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '../net/protocol';
 import { Perspective } from '../net/perspective';
@@ -16,7 +16,8 @@ import { loc, t, type Key } from './i18n';
 import { btn, ICONS, segmented } from './overlay';
 import { screenHeader } from './howto';
 import { staticFace } from './avatarAdapter';
-import { levelBadge } from './newgame';
+import { clockPicker, levelBadge } from './newgame';
+import { sanitizeClock, type ClockSettings } from '../engine/clock';
 import { audioToggle, type AudioKey } from './summary';
 
 export { activeSeatsOf };
@@ -166,9 +167,10 @@ export interface LobbyOpts {
   presetName(mode: GameMode, rules: RuleSettings): string;
   onShare(): void;
   onSeat(seat: Seat): void;
-  onMode(mode: GameMode, count: number): void;
-  onSeating(s: Seating): void;
+  onMode(mode: GameMode, count: number, teamPlay?: boolean): void;
   onRules(): void;
+  /** host: round limit / move times for the room */
+  onClock(c: ClockSettings): void;
   onStart(): void;
   onLeave(): void;
 }
@@ -182,7 +184,7 @@ export interface Lobby {
 }
 
 const POS = ['bottom', 'right', 'top', 'left'] as const;
-const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'partners'];
+const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'sideBySide'];
 
 export function occupantName(o: SeatOccupant): string {
   if (o.kind === 'human') return o.name || t('seat.player');
@@ -244,9 +246,12 @@ export function buildLobby(o: LobbyOpts): Lobby {
   const rulesLine = h('div.ng-rules', h('span.preset-k', `${t('newgame.rules')}:`), rulesValue, rulesDot, rulesLink);
   const start = btn(t('lobby.start'), o.onStart, 'primary lobby-start', icon(ICONS.play));
   const wait = h('p.lobby-wait', h('span.lobby-wait-dot'), t('lobby.waitHost'));
-  const foot = h('div.ng-foot.lobby-foot', rulesLine, status, start, wait);
+  const clockHost = clockPicker(o.onClock);
+  const clockGuest = clockPicker(null);
+  const foot = h('div.ng-foot.lobby-foot', rulesLine, clockHost.el, clockGuest.el, status, start, wait);
 
   let lastModeKey = '';
+  let lastClockKey = '';
   const el = h('section.screen.panel-screen.newgame.ng2.lobby', screenHeader(t('lobby.title'), o.onLeave), h('div.ng-body', h('div.ng-left', modeRow, feltBox), h('div.ng-right', codeCard, foot)));
 
   const update = (room: PublicRoom, me: { seat: Seat | null; isHost: boolean }) => {
@@ -292,39 +297,57 @@ export function buildLobby(o: LobbyOpts): Lobby {
         el.b.disabled = false;
       }
     }
-    const seating: Seating = room.rules.seating === 'side' ? 'side' : 'across';
-    const modeKey = `${me.isHost}|${room.mode}|${room.playerCount}|${seating}`;
+    const tp = !!room.teamPlay && room.playerCount === 4 && room.mode !== 'sideBySide';
+    const modeKey = `${me.isHost}|${room.mode}|${room.playerCount}|${tp}`;
     if (modeKey !== lastModeKey) {
       lastModeKey = modeKey;
       if (me.isHost) {
         const modeSeg = segmented<GameMode>(
           MODES.map((m) => ({ value: m, label: t(`mode.${m}` as Key) })),
           room.mode,
-          (v) => o.onMode(v, v === 'partners' ? 4 : room.mode === 'partners' ? 4 : room.playerCount),
+          (v) => o.onMode(v, v === 'sideBySide' || room.mode === 'sideBySide' ? 4 : room.playerCount, tp),
           t('newgame.mode'),
         );
         modeSeg.classList.add('seg-mode');
         const extra =
-          room.mode === 'partners'
-            ? h(
-                'div.ng-opp',
-                h('span.ng-opp-label', t('newgame.seating')),
-                segmented<Seating>((['across', 'side'] as Seating[]).map((s) => ({ value: s, label: t(`seating.${s}` as Key) })), seating, (v) => o.onSeating(v), t('newgame.seating')),
-              )
+          room.mode === 'sideBySide'
+            ? h('div.ng-opp', h('span.ng-opp-label', t('newgame.fixed4')))
             : h(
                 'div.ng-opp',
                 h('span.ng-opp-label', t('newgame.players')),
-                segmented<number>([2, 3, 4].map((n) => ({ value: n, label: String(n) })), room.playerCount, (v) => o.onMode(room.mode, v), t('newgame.players')),
+                segmented<number>([2, 3, 4].map((n) => ({ value: n, label: String(n) })), room.playerCount, (v) => o.onMode(room.mode, v, tp), t('newgame.players')),
               );
-        modeRow.replaceChildren(modeSeg, extra);
+        const teamsRow =
+          room.mode !== 'sideBySide' && room.playerCount === 4
+            ? h(
+                'div.ng-opp',
+                h('span.ng-opp-label', t('newgame.teams')),
+                segmented<string>(
+                  [
+                    { value: 'ffa', label: t('newgame.ffa') },
+                    { value: 'teams', label: t('newgame.teams2v2') },
+                  ],
+                  tp ? 'teams' : 'ffa',
+                  (v) => o.onMode(room.mode, 4, v === 'teams'),
+                  t('newgame.teams'),
+                ),
+              )
+            : null;
+        modeRow.replaceChildren(modeSeg, extra, ...(teamsRow ? [teamsRow] : []));
       } else {
-        const label = room.mode === 'partners' ? `${t('mode.partners')} · ${t(`seating.${seating}` as Key)}` : `${t(`mode.${room.mode}` as Key)} · ${room.playerCount}`;
+        const label = `${t(`mode.${room.mode}` as Key)} · ${room.mode === 'sideBySide' ? '2 vs 2' : tp ? t('newgame.teams2v2') : room.playerCount}`;
         modeRow.replaceChildren(h('span.lobby-mode-label', label));
       }
     }
     rulesValue.textContent = o.presetName(room.mode, room.rules);
     rulesLink.hidden = !me.isHost;
     rulesDot.hidden = !me.isHost;
+    const clock = sanitizeClock(room.clock);
+    clockHost.el.hidden = !me.isHost;
+    clockGuest.el.hidden = me.isHost;
+    const clockKey = `${me.isHost}|${JSON.stringify(clock)}`;
+    if (clockKey !== lastClockKey) (me.isHost ? clockHost : clockGuest).render(clock);
+    lastClockKey = clockKey;
     const humans = act.filter((s) => room.seats[s]?.kind === 'human').length;
     status.textContent = `${humans === 1 ? t('lobby.players1') : t('lobby.players', { n: humans, total: act.length })} · ${t('lobby.cpuNote')}`;
     start.hidden = !me.isHost;
@@ -428,7 +451,7 @@ export function buildOnlinePause(o: { audio: Record<AudioKey, boolean>; onAudio(
     h(
       'div.stack',
       resume,
-      h('div.pause-row', audioToggle('sound', o.audio.sound, o.onAudio), audioToggle('music', o.audio.music, o.onAudio), canVibrate ? audioToggle('vibration', o.audio.vibration, o.onAudio) : null),
+      h('div.pause-row', audioToggle('sound', o.audio.sound, o.onAudio), audioToggle('voice', o.audio.voice, o.onAudio), audioToggle('music', o.audio.music, o.onAudio), canVibrate ? audioToggle('vibration', o.audio.vibration, o.onAudio) : null),
       btn(t('online.leave'), o.onLeave, 'ghost', icon(ONLINE_ICONS.exit)),
     ),
   );

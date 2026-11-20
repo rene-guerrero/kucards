@@ -4,13 +4,25 @@
  */
 import type { AppSettings, GameMode, Lineup, RulePreset, RuleSettings, SettingDescriptor } from '../contracts';
 import { CARD_BACKS, TABLE_STYLES } from '../contracts';
-import { DEFAULT_RULES, RULE_PRESETS, RULE_SETTINGS, RULES_VERSION } from '../engine/rules';
+import { DEFAULT_RULES, modeRules, RULE_PRESETS, RULE_SETTINGS, RULES_VERSION } from '../engine/rules';
+import { DEFAULT_CLOCK, sanitizeClock } from '../engine/clock';
+import { DEFAULT_GESTURES, sanitizeGestures } from '../net/protocol';
 import { DEFAULT_LINEUP, isCharacter } from '../roster';
 import { sanitizeFace } from 'kuavatars/faces';
 import { resolveQuality } from './perf';
 
 export const SETTINGS_KEY = 'kucards.settings.v1';
-export const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'partners'];
+export const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'sideBySide', 'dayNight'];
+
+/**
+ * The old 'partners' (Parejas) mode, from stored settings / profiles / saves: side seating became the
+ * Codo a codo mode, across became Clásico with 2 vs 2 on. Any other value passes through.
+ */
+export function legacyMode(mode: unknown, rules: unknown): { mode: unknown; teams: boolean } {
+  if (mode !== 'partners') return { mode, teams: false };
+  const side = !!rules && typeof rules === 'object' && (rules as Record<string, unknown>).seating === 'side';
+  return side ? { mode: 'sideBySide', teams: true } : { mode: 'classic', teams: true };
+}
 
 export interface RulesSource {
   RULE_SETTINGS: SettingDescriptor[];
@@ -47,7 +59,7 @@ export function sanitizeRules(stored: unknown, mode: GameMode, src: RulesSource 
     } else if (typeof v !== typeof d.default) continue;
     out[d.key] = v as RuleSettings[string];
   }
-  return out;
+  return modeRules(mode, out);
 }
 
 export function defaultRulesByMode(src: RulesSource = ENGINE): Record<GameMode, RuleSettings> {
@@ -61,6 +73,7 @@ export function defaultSettings(src: RulesSource = ENGINE): AppSettings {
     quality: 'medium',
     qualityMode: 'auto',
     sound: true,
+    voice: true,
     music: false,
     vibration: true,
     animationSpeed: 'normal',
@@ -71,12 +84,15 @@ export function defaultSettings(src: RulesSource = ENGINE): AppSettings {
     rulesVersion: RULES_VERSION,
     reducedMotion: false,
     players: 4,
+    teamPlay: false,
     lineup: { ...DEFAULT_LINEUP },
     avatars: true,
     avatarFace: 0,
     tableStyle: 'teal',
     cardBack: 'ku',
     settingsTab: 'game',
+    gestures: [...DEFAULT_GESTURES],
+    clock: { ...DEFAULT_CLOCK },
   };
 }
 
@@ -103,9 +119,19 @@ export function migrateSettings(raw: unknown, src: RulesSource = ENGINE): AppSet
   if (!raw || typeof raw !== 'object') return def;
   const s = raw as Partial<AppSettings>;
   const pick = <K extends keyof AppSettings>(k: K, ok: (v: unknown) => boolean): AppSettings[K] => (ok(s[k]) ? (s[k] as AppSettings[K]) : def[k]);
-  const mode: GameMode = isMode(s.mode) ? s.mode : 'classic';
   // an older rules version keeps only what still validates (sanitizeRules), on top of the new presets
-  const storedByMode = (s.rulesByMode && typeof s.rulesByMode === 'object' ? s.rulesByMode : {}) as Partial<Record<GameMode, unknown>>;
+  const storedByMode = { ...(s.rulesByMode && typeof s.rulesByMode === 'object' ? s.rulesByMode : {}) } as Partial<Record<GameMode | 'partners', unknown>>;
+  // old Parejas: its rules go to Codo a codo (side seating) or, played across, to Clásico with 2 vs 2
+  const oldPartners = storedByMode.partners ?? ((s.mode as string) === 'partners' && !s.rulesByMode ? s.rules : undefined);
+  const legacy = legacyMode(s.mode, oldPartners);
+  if (oldPartners) {
+    const side = legacyMode('partners', oldPartners).mode === 'sideBySide';
+    if (side) storedByMode.sideBySide ??= oldPartners;
+    else if (legacy.teams) storedByMode.classic = oldPartners;
+  }
+  delete storedByMode.partners;
+  const mode: GameMode = isMode(legacy.mode) ? legacy.mode : 'classic';
+  const teamPlay = legacy.teams && mode !== 'sideBySide' ? true : isBool(s.teamPlay) ? s.teamPlay : false;
   const rulesByMode = Object.fromEntries(
     MODES.map((m) => [m, sanitizeRules(storedByMode[m] ?? (m === mode && !s.rulesByMode ? s.rules : undefined), m, src)]),
   ) as Record<GameMode, RuleSettings>;
@@ -115,6 +141,7 @@ export function migrateSettings(raw: unknown, src: RulesSource = ENGINE): AppSet
     qualityMode: s.qualityMode === 'manual' && isQuality(s.quality) ? 'manual' : 'auto',
     autoQuality: isQuality(s.autoQuality) ? s.autoQuality : undefined,
     sound: pick('sound', isBool),
+    voice: pick('voice', isBool),
     music: pick('music', isBool),
     vibration: pick('vibration', isBool),
     animationSpeed: pick('animationSpeed', (v) => v === 'normal' || v === 'fast'),
@@ -124,12 +151,15 @@ export function migrateSettings(raw: unknown, src: RulesSource = ENGINE): AppSet
     rulesByMode,
     rulesVersion: RULES_VERSION,
     reducedMotion: isBool(s.reducedMotion) ? s.reducedMotion : false,
-    players: s.players === 2 || s.players === 3 || s.players === 4 ? s.players : 4,
+    players: teamPlay ? 4 : s.players === 2 || s.players === 3 || s.players === 4 ? s.players : 4,
+    teamPlay,
     lineup: sanitizeLineupSetting(s.lineup),
     avatars: isBool(s.avatars) ? s.avatars : true,
     avatarFace: sanitizeFace(s.avatarFace ?? 0),
     tableStyle: TABLE_STYLES.includes(s.tableStyle as never) ? s.tableStyle : def.tableStyle,
     cardBack: CARD_BACKS.includes(s.cardBack as never) ? s.cardBack : def.cardBack,
+    gestures: sanitizeGestures(s.gestures),
+    clock: sanitizeClock(s.clock),
     settingsTab: s.settingsTab === 'game' || s.settingsTab === 'rules' || s.settingsTab === 'av' ? s.settingsTab : 'game',
   };
 }

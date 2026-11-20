@@ -56,7 +56,7 @@ export function buildMenu(o: MenuOpts): HTMLElement {
     h(
       'div.row.menu-row',
       squareBtn(ICONS.gear, t('menu.settings'), o.onSettings, 'settings-btn'),
-      btn(t('menu.howto'), o.onHowto, 'ghost', icon(ICONS.book)),
+      squareBtn(ICONS.book, t('menu.howto'), o.onHowto),
       squareBtn(ICONS.info, t('menu.about'), o.onAbout),
       // fullscreen (Android browsers; hidden on iPhone and when installed as an app)
       canFullscreen() ? squareBtn(ICONS.fullscreen, t('menu.fullscreen'), () => void toggleFullscreen()) : null,

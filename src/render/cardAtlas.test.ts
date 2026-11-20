@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ATLAS_CELLS, ATLAS_COLS, ATLAS_ROWS, CELL_SU, CELL_SV, FaceMap, baseFaces, cellPx, cellUv, faceKey, playedFace } from './cardAtlas';
+import { ATLAS_CELLS, ATLAS_COLS, ATLAS_ROWS, CELL_SU, CELL_SV, COLOR_DEEP, COLOR_GLOW, COLOR_HEX, FaceMap, NIGHT_COLORS, baseFaces, cellPx, cellUv, faceKey, isNightFace, nightFace, playedFace } from './cardAtlas';
 import { buildDeck } from '../engine/cards';
 import { DEFAULT_RULES } from '../engine/rules';
 
@@ -113,5 +113,60 @@ describe('played wild-type faces', () => {
     const red = { kind: 'skip', color: 'coral' } as const;
     expect(playedFace(red, 'sol')).toBe(red);
     expect(playedFace({ kind: 'flip', color: null }, 'sol')).not.toHaveProperty('tint');
+  });
+});
+
+describe('atlas: night side (Día y Noche)', () => {
+  it('has the four night colours, each with its own hex, deep and glow', () => {
+    expect([...NIGHT_COLORS]).toEqual(['naranja', 'celeste', 'rosa', 'morado']);
+    for (const map of [COLOR_HEX, COLOR_DEEP, COLOR_GLOW]) {
+      const all = Object.values(map);
+      expect(all.length).toBe(8);
+      expect(new Set(all).size).toBe(8);
+    }
+  });
+
+  it('keeps the day cells where they were and gives every night face its own cell', () => {
+    const map = new FaceMap();
+    const faces = baseFaces();
+    const firstNight = faces.findIndex((f) => isNightFace(f));
+    expect(firstNight).toBe(102);
+    expect(faces.slice(firstNight).every((f) => isNightFace(f))).toBe(true);
+    for (const c of NIGHT_COLORS) {
+      for (let v = 0; v <= 9; v++) expect(map.lookup({ kind: 'number', color: c, value: v })).toBeGreaterThanOrEqual(firstNight);
+      for (const f of [{ kind: 'draw6', color: c, draw: 5 }, { kind: 'skip', color: c }, { kind: 'reverse', color: c }, { kind: 'flip', color: c }] as const)
+        expect(map.lookup(f), faceKey(f)).toBeGreaterThanOrEqual(firstNight);
+    }
+    // room left for odd night faces (a +1, a +6 …), which get a cell on first use
+    expect(map.size).toBeLessThanOrEqual(ATLAS_CELLS - 24);
+    expect(map.index({ kind: 'draw2', color: 'rosa', draw: 1 }).added).toBe(true);
+  });
+
+  it('tells the night wilds from the day ones, in hand and played', () => {
+    const map = new FaceMap();
+    const day = { kind: 'wild', color: null } as const;
+    const night = nightFace(day);
+    expect(isNightFace(day)).toBe(false);
+    expect(isNightFace(night)).toBe(true);
+    expect(map.lookup(night)).toBeGreaterThanOrEqual(0);
+    expect(map.lookup(night)).not.toBe(map.lookup(day));
+    const cells = new Set<number>([map.lookup(day), map.lookup(night)]);
+    for (const c of NIGHT_COLORS) {
+      const played = playedFace(night, c);
+      expect(map.index(played).added).toBe(false);
+      // the night colour alone says it is a night face
+      expect(map.lookup(playedFace(day, c))).toBe(map.lookup(played));
+      cells.add(map.lookup(played));
+      expect(map.index(playedFace(nightFace({ kind: 'wild4', color: null, draw: 6 }), c)).added).toBe(false);
+    }
+    expect(cells.size).toBe(6);
+  });
+
+  it('covers both sides of the Día y Noche deck when the engine builds one', async () => {
+    const cards = (await import('../engine/cards')) as unknown as { nightFaces?: () => Parameters<typeof faceKey>[0][]; dayFaces?: () => Parameters<typeof faceKey>[0][] };
+    if (!cards.nightFaces || !cards.dayFaces) return; // engine work in progress
+    const map = new FaceMap();
+    for (const f of cards.dayFaces()) expect(map.index(f).added, faceKey(f)).toBe(false);
+    for (const f of cards.nightFaces()) expect(map.index(nightFace(f)).added, faceKey(f)).toBe(false);
   });
 });

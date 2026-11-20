@@ -55,18 +55,23 @@ const SECTIONS: Section[] = [
     items: [
       { text: 'howto.power.intro' },
       { cards: [{ kind: 'swap', color: null }], title: 'card.swap', text: 'howto.swap' },
-      { cards: [{ kind: 'shield', color: 'sol' }], title: 'card.shield', text: 'howto.shield' },
-      { cards: [{ kind: 'mirror', color: 'mar' }], title: 'card.mirror', text: 'howto.mirror' },
       { cards: [{ kind: 'sweep', color: 'palma' }], title: 'card.sweep', text: 'howto.sweep' },
     ],
   },
   {
     title: 'howto.cyclone.title',
     items: [
-      { cards: [{ kind: 'skipAll', color: 'coral' }], title: 'card.skipAll', text: 'howto.skipAll' },
       { cards: [{ kind: 'draw6', color: 'mar', draw: 6 }], title: 'card.draw6', text: 'howto.draw6' },
       { cards: [{ kind: 'draw10', color: null, draw: 10 }], title: 'card.draw10', text: 'howto.draw10' },
-      { cards: [{ kind: 'wildColor', color: null }], title: 'card.wildColor', text: 'howto.wildColor' },
+    ],
+  },
+  {
+    title: 'howto.flip.title',
+    items: [
+      { cards: [{ kind: 'flip', color: 'sol' }, { kind: 'flip', color: 'morado' }], title: 'card.flip', text: 'howto.flip' },
+      { cards: [{ kind: 'draw6', color: 'naranja', draw: 5 }], title: 'card.draw5', text: 'howto.draw5' },
+      { cards: [{ kind: 'skipAll', color: 'celeste' }], title: 'card.skipAll', text: 'howto.skipAll' },
+      { cards: [{ kind: 'wild4', color: null, draw: 6, night: true }], title: 'card.wild6', text: 'howto.wild6' },
     ],
   },
   {
@@ -75,7 +80,9 @@ const SECTIONS: Section[] = [
       { title: 'mode.classic', text: 'howto.mode.classic' },
       { title: 'mode.action', text: 'howto.mode.action' },
       { title: 'mode.cyclone', text: 'howto.mode.cyclone' },
-      { title: 'mode.partners', text: 'howto.mode.partners' },
+      { title: 'mode.sideBySide', text: 'howto.mode.sideBySide' },
+      { title: 'mode.dayNight', text: 'howto.mode.dayNight' },
+      { title: 'newgame.teams', text: 'howto.mode.teams' },
       { seats: 'ABAB', title: 'seating.across', text: 'howto.seat.across' },
       { seats: 'AABB', title: 'seating.side', text: 'howto.seat.side' },
     ],
@@ -91,7 +98,6 @@ const SECTIONS: Section[] = [
       { text: 'howto.rule.forcePlay', lead: true },
       { text: 'howto.rule.partnerOpen', lead: true },
       { text: 'howto.rule.partnerPass', lead: true },
-      { cards: [{ kind: 'shield', color: 'palma' }], text: 'howto.rule.partnerShield', lead: true },
     ],
   },
   { title: 'howto.score.title', items: [{ text: 'howto.score.body' }] },

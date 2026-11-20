@@ -3,12 +3,14 @@
  * and tears them down again. main.ts owns the screens; this owns everything in-game.
  */
 import type { AppSettings, Lineup, MatchState, Seat, SeatPlate } from '../contracts';
-import { playSfx, setAudioPrefs } from '../audio/sfx';
+import { playSfx, setAudioPrefs, setMusicMode } from '../audio/sfx';
 import { engine, giveOptions } from '../engine';
 import { character, DEFAULT_LINEUP } from '../roster';
 import { AvatarController, humanFace } from '../ui/avatarAdapter';
+import { ChatButton, sanitizeGestures } from '../ui/chat';
 import { Hud, type HudPlayer } from '../ui/hud';
 import { t } from '../ui/i18n';
+import { phraseText } from '../ui/online';
 import type { Overlay } from '../ui/overlay';
 import { bubbleFor, SeatPlates } from '../ui/plates';
 import { buildMatchEnd, buildPause, buildRoundSummary } from '../ui/summary';
@@ -67,7 +69,7 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
     const cur = deps.settings();
     pauseClose = overlay.openModal(
       buildPause({
-        audio: { sound: cur.sound, music: cur.music, vibration: cur.vibration },
+        audio: { sound: cur.sound, voice: cur.voice, music: cur.music, vibration: cur.vibration },
         onAudio: (key, on) => {
           deps.updateSettings({ ...deps.settings(), [key]: on });
           setAudioPrefs({ [key]: on });
@@ -121,11 +123,21 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
     },
     onError: (e) => console.error('[table]', e),
   });
+  // gestures and quick phrases in every game: offline they play on the player's own avatar / plate
+  const chat = new ChatButton({
+    layer: overlay.hudLayer,
+    plates,
+    gestures: () => sanitizeGestures(deps.settings().gestures),
+    face: () => humanFace(deps.settings().avatarFace ?? 0),
+    onGesture: (g) => avatars.gesture(0, g),
+    onPhrase: (id) => plates.say(0, phraseText(id), false, 2400),
+  });
   hud.colorAnchor = () => view.pileScreenPoint();
   if (match.teams) view.setTeams(match.teams);
   deps.container.classList.add('kc-ready');
   overlay.hudLayer.append(plates.el, hud.el);
   hud.show(true);
+  chat.show();
 
   const modal = <T>(build: (done: (v: T) => void) => HTMLElement): Promise<T> =>
     new Promise((resolve) => {
@@ -153,6 +165,9 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
       hud,
       say: (seat, text, strong) => plates.say(seat, text, strong),
       catchable: (seat, onCatch) => plates.setCatchable(seat, onCatch),
+      setTimer: (seat, endsAt, total) => plates.setTimer(seat, endsAt, total, seat === 0 ? 5000 : 0, () => plates.pulse(0)),
+      musicMode: setMusicMode,
+      rank: (seat, n) => plates.setRank(seat, n),
       bubbleFor,
       avatarEvent: (ev) => avatars.onEvent(ev),
       t: (k, p) => t(k, p),
@@ -195,6 +210,7 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
       disposed = true;
       stopLandscape();
       controller?.stop();
+      chat.hide();
       hud.closeAll();
       avatars.setVisible(false);
       plates.el.remove();

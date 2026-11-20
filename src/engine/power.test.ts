@@ -10,14 +10,14 @@ const kinds = (m: MatchState, seat?: Seat) => legalMoves(m, seat).map((x) => x.k
 const deck = (n = 20) => Array.from({ length: n }, () => num('coral', 9));
 
 describe('cyclone deck', () => {
-  it('adds skipAll / +6 per colour and 4 +10 / 4 wildColor; the preset uses it', () => {
+  it('adds +6 and 2 Sweep per colour (no skipAll) and 6 +10, 6 wild +4, no wildColor; the preset uses it', () => {
     const rules = RULE_PRESETS.find((p) => p.id === 'cyclone')!.rules;
     expect(rules.deck).toBe('cyclone');
     const d = buildDeck(rules);
-    expect(d).toHaveLength(124);
+    expect(d).toHaveLength(128);
     expect(d.map((c) => c.id)).toEqual(d.map((_, i) => i));
     const count = (k: string) => d.filter((c) => c.face.kind === k).length;
-    expect([count('skipAll'), count('draw6'), count('draw10'), count('wildColor')]).toEqual([4, 4, 4, 4]);
+    expect([count('skipAll'), count('sweep'), count('draw6'), count('draw10'), count('wildColor'), count('wild4')]).toEqual([0, 8, 4, 6, 0, 6]);
     expect(d.find((c) => c.face.kind === 'draw6')!.face.draw).toBe(6);
     expect(d.find((c) => c.face.kind === 'draw10')!.face).toMatchObject({ color: null, draw: 10 });
     expect(buildDeck(DEFAULT_RULES).some((c) => c.face.kind === 'draw6')).toBe(false);
@@ -41,7 +41,7 @@ describe('cyclone deck', () => {
     expect(match.round!.turn).toBe(0);
   });
 
-  it('+6 and +10 are penalties; stacking any = equal or bigger (or coloured of the active colour on a wild)', () => {
+  it('+6 and +10 are penalties; stacking any = equal or bigger, never lower', () => {
     const d2 = card('draw2', 'sol');
     const d6 = card('draw6', 'mar');
     const d10 = card('draw10');
@@ -54,8 +54,8 @@ describe('cyclone deck', () => {
     expect(new Set(ids)).toEqual(new Set([d10.id])); // a +2 does not go on a +6
     const c = play(b, { kind: 'play', seat: 2, cardId: d10.id, color: 'mar' }).match;
     expect(c.round!.pendingDraw).toBe(18);
-    // +2 of the chosen colour may go on the wild +10
-    expect(legalMoves(c).some((x) => x.kind === 'play')).toBe(true);
+    // no +2 on the wild +10, even of the chosen colour
+    expect(legalMoves(c).some((x) => x.kind === 'play')).toBe(false);
     const r = play(c, { kind: 'acceptPenalty', seat: 3 }).match.round!;
     expect(r.hands[3]).toHaveLength(20);
     expect(r.turn).toBe(0);
@@ -271,7 +271,7 @@ describe('penalty response window', () => {
     const sh = card('shield', 'coral');
     const m = scenario({ rules: { ...rules, stacking: 'same' }, hands: { 0: [d2, num('mar', 1)], 1: [sh, d2b, num('mar', 3)], 2: [num('palma', 1), num('palma', 2)] }, top: num('sol', 5) });
     const a = play(m, { kind: 'play', seat: 0, cardId: d2.id }).match;
-    expect(kinds(a)).toEqual(['play', 'respond', 'acceptPenalty']);
+    expect(kinds(a)).toEqual(['play', 'respond']); // stacking is mandatory: no accept
     const b = play(a, { kind: 'play', seat: 1, cardId: d2b.id });
     expect(b.match.round!.window).toBeNull();
     expect(b.match.round!.turn).toBe(2);
@@ -305,8 +305,8 @@ describe('penalty response window', () => {
       const partner: Seat = seating === 'across' ? 0 : 3; // seat 2's partner
       const hands: Partial<Record<Seat, ReturnType<typeof num>[]>> = { 0: [num('palma', 1), num('palma', 2)], 1: [d2, num('mar', 1)], 2: [num('mar', 3)], 3: [num('coral', 1), num('coral', 2)] };
       hands[partner] = [sh, ...hands[partner]!];
-      const on = scenario({ mode: 'partners', seating, rules: { ...rules, partnerShield: true }, hands, top: num('sol', 5), turn: 1 });
-      const off = scenario({ mode: 'partners', seating, rules, hands, top: num('sol', 5), turn: 1 });
+      const on = scenario({ seating, rules: { ...rules, partnerShield: true }, hands, top: num('sol', 5), turn: 1 });
+      const off = scenario({ seating, rules, hands, top: num('sol', 5), turn: 1 });
       expect(play(off, { kind: 'play', seat: 1, cardId: d2.id }).match.round!.window).toBeNull();
       const a = play(on, { kind: 'play', seat: 1, cardId: d2.id }).match;
       expect(a.round!.window).toEqual({ reason: 'penalty', seats: [partner], victim: 2 });
@@ -323,15 +323,15 @@ describe('penalty response window', () => {
 
   it('partnerShield: not against a penalty the partner played itself (side by side)', () => {
     const d2 = card('draw2', 'sol');
-    const m = scenario({ mode: 'partners', seating: 'side', rules: { ...rules, partnerShield: true }, hands: { 0: [d2, card('shield', 'mar'), num('mar', 1)], 1: [num('mar', 3)] }, top: num('sol', 5) });
+    const m = scenario({ seating: 'side', rules: { ...rules, partnerShield: true }, hands: { 0: [d2, card('shield', 'mar'), num('mar', 1)], 1: [num('mar', 3)] }, top: num('sol', 5) });
     const r = play(m, { kind: 'play', seat: 0, cardId: d2.id }).match.round!;
     expect(r.window).toBeNull();
-    expect(r.hands[1]).toHaveLength(3);
+    expect(r.pendingDraw).toBe(2); // Codo a codo always stacks: seat 1 must stack or accept
   });
 
   it('a partner may not answer with a mirror', () => {
     const d2 = card('draw2', 'sol');
-    const m = scenario({ mode: 'partners', rules: { ...rules, partnerShield: true }, hands: { 0: [d2, num('mar', 1)], 1: [num('mar', 3)], 3: [card('mirror', 'mar'), num('coral', 1)] }, top: num('sol', 5) });
+    const m = scenario({ seating: 'across', rules: { ...rules, partnerShield: true }, hands: { 0: [d2, num('mar', 1)], 1: [num('mar', 3)], 3: [card('mirror', 'mar'), num('coral', 1)] }, top: num('sol', 5) });
     expect(play(m, { kind: 'play', seat: 0, cardId: d2.id }).match.round!.window).toBeNull();
   });
 });
@@ -371,7 +371,7 @@ describe('wild4Challenge', () => {
     expect(match.round!.turn).toBe(2);
   });
 
-  it('also applies to +10, not to +2; off by default', () => {
+  it('also applies to +10, not to +2; always on', () => {
     const d10 = card('draw10');
     const m = scenario({ rules: { wild4Challenge: true }, hands: { 0: [d10, num('mar', 1)], 1: [num('mar', 3)] }, top: num('sol', 5) });
     const a = play(m, { kind: 'play', seat: 0, cardId: d10.id, color: 'sol' }).match;
@@ -381,20 +381,32 @@ describe('wild4Challenge', () => {
     expect(play(m2, { kind: 'play', seat: 0, cardId: d2.id }).match.round!.hands[1]).toHaveLength(3);
     const w4 = card('wild4');
     const m3 = scenario({ hands: { 0: [w4, num('mar', 1)], 1: [num('mar', 3)] }, top: num('sol', 5) });
-    expect(play(m3, { kind: 'play', seat: 0, cardId: w4.id, color: 'sol' }).match.round!.pendingDraw).toBe(0);
+    expect(play(m3, { kind: 'play', seat: 0, cardId: w4.id, color: 'sol' }).match.round!.pendingDraw).toBe(4);
   });
 
   it('with stacking the challenge is offered next to accepting', () => {
     const a = setup(true, { stacking: 'any' });
     expect(kinds(a)).toEqual(['challenge', 'acceptPenalty']);
   });
+
+  for (const mode of ['classic', 'sideBySide'] as const) {
+    it(`${mode}: a +4 stacked on a pending penalty cannot be challenged`, () => {
+      const w4 = card('wild4');
+      // seat 0 holds a sol card (an "illegal" +4 if it were played alone), but it lands on a pending +2
+      const m = scenario({ mode, rules: { stacking: 'any', kuCall: false }, hands: { 0: [w4, num('sol', 1), num('coral', 4)], 1: [num('mar', 3)], 2: [num('mar', 4)], 3: [num('mar', 6)] }, top: card('draw2', 'sol'), pendingDraw: 2 });
+      const a = play(m, { kind: 'play', seat: 0, cardId: w4.id, color: 'palma' }).match;
+      expect(a.round!.pendingDraw).toBe(6);
+      expect(legalMoves(a, a.round!.turn).some((x) => x.kind === 'challenge')).toBe(false);
+      expect(legalMoves(a, a.round!.turn).some((x) => x.kind === 'acceptPenalty')).toBe(true);
+    });
+  }
 });
 
 describe('partners extras', () => {
   it('partnerPass: a 7 may carry one card to the partner', () => {
     const seven = num('sol', 7);
     const gift = card('wild');
-    const m = scenario({ mode: 'partners', rules: { partnerPass: true, kuCall: false }, hands: { 0: [seven, gift, num('mar', 1)], 2: [num('coral', 1)] }, top: num('sol', 5) });
+    const m = scenario({ seating: 'across', rules: { partnerPass: true, kuCall: false }, hands: { 0: [seven, gift, num('mar', 1)], 2: [num('coral', 1)] }, top: num('sol', 5) });
     const mv: Move = { kind: 'play', seat: 0, cardId: seven.id, give: gift.id };
     expect(giveOptions(m, mv)).toHaveLength(2);
     expect(isLegal(m, mv)).toBe(true);
@@ -414,36 +426,36 @@ describe('partners extras', () => {
     const hands = { 0: [seven, other, num('mar', 2)] };
     const mv: Move = { kind: 'play', seat: 0, cardId: seven.id, give: other.id };
     expect(isLegal(scenario({ rules: { partnerPass: true }, hands, top: num('sol', 5) }), mv)).toBe(false);
-    expect(isLegal(scenario({ mode: 'partners', hands, top: num('sol', 5) }), mv)).toBe(false);
-    const sz = scenario({ mode: 'partners', rules: { partnerPass: true, sevenZero: true }, hands, top: num('sol', 5) });
+    expect(isLegal(scenario({ seating: 'across', hands, top: num('sol', 5) }), mv)).toBe(false);
+    const sz = scenario({ seating: 'across', rules: { partnerPass: true, sevenZero: true }, hands, top: num('sol', 5) });
     expect(isLegal(sz, { ...mv, target: 1 })).toBe(false);
     expect(isLegal(sz, { kind: 'play', seat: 0, cardId: seven.id, target: 1 })).toBe(true);
-    const two = scenario({ mode: 'partners', rules: { partnerPass: true }, hands: { 0: [seven, other] }, top: num('sol', 5) });
+    const two = scenario({ seating: 'across', rules: { partnerPass: true }, hands: { 0: [seven, other] }, top: num('sol', 5) });
     expect(isLegal(two, mv)).toBe(false);
     const n = num('sol', 3);
-    expect(isLegal(scenario({ mode: 'partners', rules: { partnerPass: true }, hands: { 0: [n, other, seven] }, top: num('sol', 5) }), { kind: 'play', seat: 0, cardId: n.id, give: other.id })).toBe(false);
+    expect(isLegal(scenario({ seating: 'across', rules: { partnerPass: true }, hands: { 0: [n, other, seven] }, top: num('sol', 5) }), { kind: 'play', seat: 0, cardId: n.id, give: other.id })).toBe(false);
   });
 
   it('partnerPass: giving down to one card follows the ¡Ku! rules', () => {
     const seven = num('sol', 7);
     const gift = num('mar', 1);
-    const m = scenario({ mode: 'partners', rules: { partnerPass: true }, hands: { 0: [seven, gift, num('mar', 2)], 2: [num('coral', 1), num('coral', 2)] }, top: num('sol', 5) });
+    const m = scenario({ seating: 'across', rules: { partnerPass: true }, hands: { 0: [seven, gift, num('mar', 2)], 2: [num('coral', 1), num('coral', 2)] }, top: num('sol', 5) });
     expect(play(m, { kind: 'play', seat: 0, cardId: seven.id, give: gift.id }).match.round!.window).toMatchObject({ reason: 'ku', victim: 0 });
     expect(play(m, { kind: 'play', seat: 0, cardId: seven.id, give: gift.id, ku: true }).match.round!.window).toBeNull();
   });
 
   it('visibleHands: own seat, plus the partner with partnerOpen', () => {
-    const across = scenario({ mode: 'partners', hands: {}, top: num('sol', 5) });
+    const across = scenario({ seating: 'across', hands: {}, top: num('sol', 5) });
     expect(visibleHands(across, 0)).toEqual([0, 2]);
     expect(visibleHands(across, 3)).toEqual([3, 1]);
-    const side = scenario({ mode: 'partners', seating: 'side', hands: {}, top: num('sol', 5) });
+    const side = scenario({ seating: 'side', hands: {}, top: num('sol', 5) });
     expect(visibleHands(side, 0)).toEqual([0, 1]);
-    expect(visibleHands(scenario({ mode: 'partners', rules: { partnerOpen: false }, hands: {}, top: num('sol', 5) }), 0)).toEqual([0]);
+    expect(visibleHands(scenario({ seating: 'across', rules: { partnerOpen: false }, hands: {}, top: num('sol', 5) }), 0)).toEqual([0]);
     expect(visibleHands(scenario({ hands: {}, top: num('sol', 5) }), 1)).toEqual([1]);
   });
 
-  it('partnerShield has a descriptor in the partners group, off by default', () => {
-    expect(RULE_SETTINGS.find((d) => d.key === 'partnerShield')).toMatchObject({ group: 'partners', default: false });
+  it('Escudo / Espejo / partnerShield are retired: no rule toggle', () => {
+    for (const k of ['partnerShield', 'power.shield', 'power.mirror']) expect(RULE_SETTINGS.find((d) => d.key === k)).toBeUndefined();
   });
 });
 

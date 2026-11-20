@@ -42,6 +42,8 @@ export interface RoundSummaryCtx {
   teams?: [SummaryTeam, SummaryTeam];
   target: number | null;
   matchOver: boolean;
+  /** the round ended because its time ran out (the fewest card points won) */
+  byTime?: boolean;
   avatars?: boolean;
   /** animation speed factor (1 normal, < 1 faster) */
   speed?: number;
@@ -75,12 +77,13 @@ export function buildRoundSummary(ctx: RoundSummaryCtx, onNext: () => void, onMe
   const partners = !!ctx.teams;
   const myTeam = ctx.players.find((p) => p.seat === 0)?.team;
   const won = partners ? w?.team === myTeam : ctx.winner === 0;
+  const u = t(ctx.points === 1 ? 'summary.point' : 'summary.points');
   const title = won ? t('summary.youWin') : t('summary.theyWin', { name: w?.name ?? '' });
   const sub = partners
-    ? t('summary.teamPoints', { team: ctx.teams![w?.team ?? 0].name, n: ctx.points })
+    ? t('summary.teamPoints', { team: ctx.teams![w?.team ?? 0].name, n: ctx.points, u })
     : ctx.winner === 0
-      ? t('summary.pointsYou', { n: ctx.points })
-      : t('summary.pointsBy', { name: w?.name ?? '', n: ctx.points });
+      ? t('summary.pointsYou', { n: ctx.points, u })
+      : t('summary.pointsBy', { name: w?.name ?? '', n: ctx.points, u });
 
   const rows = ctx.players.map((p, i) => {
     const num = h('span.sum-total', String(p.prev));
@@ -91,7 +94,7 @@ export function buildRoundSummary(ctx: RoundSummaryCtx, onNext: () => void, onMe
       { class: `${p.seat === 0 ? 'me' : ''}${isW ? ' winner' : ''}${p.team !== undefined ? ` team-${p.team}` : ''}${p.eliminated ? ' out' : ''}`, style: `--i:${i}` },
       face(p, avatars, expr),
       h('span.sum-name', p.name, p.eliminated ? h('span.sum-out', ` · ${t('summary.out')}`) : null),
-      h('span.sum-left', miniCards(p.cardsLeft), h('span.sum-left-n', isW ? t('summary.empty') : t(p.cardsLeft === 1 ? 'summary.cards1' : 'summary.cardsN', { n: p.cardsLeft }))),
+      h('span.sum-left', miniCards(p.cardsLeft), h('span.sum-left-n', isW && !ctx.byTime ? t('summary.empty') : t(p.cardsLeft === 1 ? 'summary.cards1' : 'summary.cardsN', { n: p.cardsLeft }))),
       h('span.sum-hand', isW ? '—' : String(p.handPoints)),
       num,
     );
@@ -115,7 +118,7 @@ export function buildRoundSummary(ctx: RoundSummaryCtx, onNext: () => void, onMe
   const card = h(
     'div.card.sheet.summary',
     { class: won ? 'tone-win' : 'tone-lose' },
-    h('header.sum-head', h('div.kicker', t('summary.round', { n: ctx.roundNo })), h('h2.summary-title', title), h('p.summary-sub', sub)),
+    h('header.sum-head', h('div.kicker', t('summary.round', { n: ctx.roundNo }), ctx.byTime ? ` · ${t('summary.byTime')}` : ''), h('h2.summary-title', title), h('p.summary-sub', ctx.byTime ? `${t('summary.byTimeWhy')} ${sub}` : sub)),
     body,
     h('footer.sum-foot', btn(t('match.menu'), onMenu, 'ghost lg', h('span.btn-icon', { html: ICONS.home })), next),
   );
@@ -185,7 +188,7 @@ export function buildMatchEnd(ctx: MatchEndCtx, onRematch: () => void, onMenu: (
   );
 }
 
-export type AudioKey = 'sound' | 'music' | 'vibration';
+export type AudioKey = 'sound' | 'voice' | 'music' | 'vibration';
 
 export function audioToggle(key: AudioKey, on: boolean, onChange: (key: AudioKey, on: boolean) => void): HTMLButtonElement {
   const label = t(`settings.${key}`);
@@ -195,6 +198,14 @@ export function audioToggle(key: AudioKey, on: boolean, onChange: (key: AudioKey
     b.setAttribute('aria-pressed', String(on));
     onChange(key, on);
   });
+  return b;
+}
+
+/** an icon-only fullscreen button, styled like the audio toggles */
+function fullscreenToggle(): HTMLButtonElement {
+  const label = t('menu.fullscreen');
+  const b = h('button.icon-btn.audio-tg.fs-tg', { type: 'button', 'aria-label': label, title: label, html: ICONS.fullscreen });
+  b.addEventListener('click', () => void toggleFullscreen());
   return b;
 }
 
@@ -214,14 +225,20 @@ export function buildPause(o: {
     h(
       'div.stack',
       resume,
-      btn(t('menu.settings'), o.onSettings, 'secondary', h('span.btn-icon', { html: ICONS.gear })),
+      // two equal halves: settings, how to play
       h(
-        'div.pause-row',
+        'div.pause-grid',
+        btn(t('menu.settings'), o.onSettings, 'secondary', h('span.btn-icon', { html: ICONS.gear })),
+        btn(t('menu.howto'), o.onHowto, 'secondary', h('span.btn-icon', { html: ICONS.book })),
+      ),
+      // equal icon toggles across the whole row: sound, music, vibration, fullscreen
+      h(
+        'div.pause-grid.pause-icons',
         audioToggle('sound', o.audio.sound, o.onAudio),
+        audioToggle('voice', o.audio.voice, o.onAudio),
         audioToggle('music', o.audio.music, o.onAudio),
         typeof navigator.vibrate === 'function' ? audioToggle('vibration', o.audio.vibration, o.onAudio) : null,
-        btn(t('menu.howto'), o.onHowto, 'secondary pause-howto', h('span.btn-icon', { html: ICONS.book })),
-        canFullscreen() ? btn(t('menu.fullscreen'), () => void toggleFullscreen(), 'secondary', h('span.btn-icon', { html: ICONS.fullscreen })) : null,
+        canFullscreen() ? fullscreenToggle() : null,
       ),
       btn(t('pause.quit'), o.onQuit, 'ghost', h('span.btn-icon', { html: ICONS.home })),
     ),
@@ -232,6 +249,7 @@ const STROKE = 'fill="none" stroke="currentColor" stroke-width="2.2" stroke-line
 const SLASH = `<path class="off" d="M4 4l16 16" ${STROKE}/>`;
 const AUDIO_ICONS: Record<AudioKey, string> = {
   sound: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 9.2h3.6L11.8 5v14l-4.7-4.2H3.5z"/><path class="on" d="M15.2 9a4.2 4.2 0 0 1 0 6M17.9 6.3a8 8 0 0 1 0 11.4" ${STROKE}/><path class="off" d="M15.5 9.5l5 5M20.5 9.5l-5 5" ${STROKE}/></svg>`,
+  voice: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3.5" width="6" height="11" rx="3" ${STROKE}/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v2.6M8.8 20.6h6.4" ${STROKE}/>${SLASH}</svg>`,
   music: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 17.2V6.4l10-2.2v10.6" ${STROKE}/><circle cx="7" cy="17.4" r="2.7"/><circle cx="17" cy="15" r="2.7"/>${SLASH}</svg>`,
   vibration: `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3.5" width="8" height="17" rx="2.2" ${STROKE}/><path class="on" d="M4.6 9v6M19.4 9v6M1.8 10.6v2.8M22.2 10.6v2.8" ${STROKE}/>${SLASH}</svg>`,
 };
