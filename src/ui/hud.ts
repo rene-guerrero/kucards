@@ -169,8 +169,8 @@ export class Hud {
     this.clockEl.classList.toggle('last10', urgent && sec <= 10);
     // the final minute ticks: a little kick on every second (harder in the last ten)
     if (urgent && sec > 0 && !prefersReducedMotion()) {
-      const k = sec <= 10 ? 1.32 : 1.18;
-      this.clockEl.animate([{ transform: `scale(${k})` }, { transform: 'scale(1)' }], { duration: 320, easing: 'cubic-bezier(.2,1.5,.4,1)' });
+      const k = sec <= 10 ? 1.4 : 1.25;
+      this.clockEl.animate([{ transform: `scale(${k})` }, { transform: 'scale(1)' }], { duration: 380, easing: 'cubic-bezier(.2,1.5,.4,1)' });
     }
   }
 
@@ -202,7 +202,12 @@ export class Hud {
   }
 
   /** the stacked penalty waiting to be drawn (0 hides it) */
-  setPending(n: number): void {
+  setPending(_n: number): void {
+    // the pending-draw chip is no longer shown: the table's +N mark and the voice say it
+    this.pendingEl.hidden = true;
+  }
+
+  private setPendingOld(n: number): void {
     this.pendingEl.hidden = n <= 0;
     this.pendingEl.textContent = `+${n}`;
     this.pendingEl.setAttribute('aria-label', t('hud.pendingAria', { n }));

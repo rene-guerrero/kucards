@@ -5,7 +5,8 @@
 import { createTableView, type TableViewExt } from './index';
 import { createMatch, startRound, buildDeck, matches, DEFAULT_RULES } from '../engine';
 import type { CardBack, Card, CardFace, Color, GameEvent, Quality, RoundState, Seat, SeatPlate, SfxName, TableStyle } from '../contracts';
-import { initAudio, playSfx, powerSfxForEvent } from '../audio/sfx';
+import { initAudio, playSfx, powerSfxForEvent, setAudioPrefs, setMusicMode, setMusicScene } from '../audio/sfx';
+import { speak } from '../audio/voice';
 import '../ui/styles.css';
 import { Overlay } from '../ui/overlay';
 import { Hud } from '../ui/hud';
@@ -793,6 +794,44 @@ on('bSweep', sweep);
 on('bKu', kuMoment);
 on('bCaught', caught);
 on('bCatchWin', catchWindow);
+// the game's final-minute "hurry" effect (same CSS as the HUD's), toggled over the table
+const hurryEl = document.createElement('div');
+hurryEl.className = 'hurry-fx';
+hurryEl.setAttribute('aria-hidden', 'true');
+hurryEl.style.zIndex = '4';
+app.appendChild(hurryEl);
+// the game's music (menu / game / final minute) and the voice callouts, to listen to them here
+let musicOn = false;
+const music = (scene: 'menu' | 'game', mode: 'normal' | 'frenzy') => {
+  initAudio({ sound: true, voice: true, music: true, vibration: false });
+  setAudioPrefs({ music: true, sound: true, voice: true });
+  setMusicScene(scene);
+  if (scene === 'game') setMusicMode(mode);
+  musicOn = true;
+  log(`music: ${scene === 'menu' ? 'menu' : mode === 'frenzy' ? 'final minute' : 'game'}`);
+};
+on('bMusicMenu', () => music('menu', 'normal'));
+on('bMusicGame', () => music('game', 'normal'));
+on('bMusicFrenzy', () => music('game', 'frenzy'));
+on('bMusicOff', () => {
+  if (musicOn) setAudioPrefs({ music: false });
+  musicOn = false;
+  log('music off');
+});
+on('bVoices', async () => {
+  initAudio({ sound: true, voice: true, music: musicOn, vibration: false });
+  setAudioPrefs({ voice: true, sound: true });
+  for (const p of ['Draw two!', 'Draw four!', 'Draw six!', 'Draw cards!', 'Skip!', 'Reverse!', 'Red!', 'Blue!', 'Yellow!', 'Green!']) {
+    log(`voice: ${p}`);
+    speak(p);
+    await new Promise((r) => setTimeout(r, 1300));
+  }
+});
+on('bHurry', () => {
+  const onNow = !hurryEl.classList.contains('on');
+  hurryEl.classList.toggle('on', onNow);
+  log(onNow ? 'hurry effect on (tap again to stop)' : 'hurry effect off');
+});
 on('bNext', nextTurn);
 on('bOpen', toggleOpen);
 on('bTeams', toggleTeams);

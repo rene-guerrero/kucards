@@ -30,7 +30,7 @@ export class ChatButton {
   private shown = false;
 
   constructor(private o: ChatOpts) {
-    this.btn = h('button.qp-btn', { type: 'button', 'aria-label': t('chat.title'), title: t('chat.title'), 'aria-expanded': 'false', html: ONLINE_ICONS.chat }) as HTMLButtonElement;
+    this.btn = h('button.qp-btn.icon-btn', { type: 'button', 'aria-label': t('chat.title'), title: t('chat.title'), 'aria-expanded': 'false', html: ONLINE_ICONS.chat }) as HTMLButtonElement;
     this.btn.addEventListener('click', () => this.toggle());
   }
 
@@ -62,15 +62,19 @@ export class ChatButton {
       return;
     }
     const W = window.innerWidth;
-    const size = 40;
+    const size = 46;
     const pw = box.w * box.scale;
     const ph = box.h * box.scale;
     let x = box.x + pw / 2 + 10;
     if (x + size > W - 8) x = box.x - pw / 2 - 10 - size;
     let y = box.y - size / 2;
     if (box.layout === 'stack') {
-      x = box.x - size / 2;
-      y = box.y - ph / 2 - size - 8;
+      // beside the avatar circle, on its right, level with the lower half of the face
+      const d = (box.d ?? box.h * 0.7) * box.scale;
+      x = box.x + d / 2 + 6;
+      // its bottom stays above the name bar (which starts about 0.96 d down the plate)
+      y = box.y - ph / 2 + d * 0.96 - size - 4;
+      if (x + size > W - 8) x = box.x - d / 2 - 6 - size;
     }
     b.style.transform = `translate(${Math.round(x)}px,${Math.round(Math.max(8, y))}px)`;
     b.classList.add('on');

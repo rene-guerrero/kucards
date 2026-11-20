@@ -66,6 +66,8 @@ const FX_SHIELD = new THREE.Color('#9fe6ff');
 const ARENA_SIZE = 22;
 /** height of a full deck (world units, as tuned in the fan demo) */
 const DECK_MAX_H = 0.25;
+/** the small +N counter by the deck is no longer shown */
+const HIDE_PEN_COUNTER = true;
 const DECK_GUESS = 108;
 const UP = new THREE.Vector3(0, 1, 0);
 const Q_LAY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
@@ -2105,6 +2107,9 @@ export class CardTable implements TableView {
       this.penMarkOff();
       return;
     }
+    // no small "+N" counter by the deck any more: the big +N mark and the voice already say it
+    this.badge.visible = false;
+    if (HIDE_PEN_COUNTER) return;
     A.drawBadge(this.badgeCanvas.getContext('2d')!, 128, 72, `+${total}`);
     this.badgeTex.needsUpdate = true;
     const p = tmpV.set((this.deckPos.x + this.pilePos.x) / 2, 0.45, this.pilePos.z - 0.8);

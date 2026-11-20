@@ -3379,7 +3379,7 @@ button.ng-seat:hover {
   height: 0;
   z-index: 30;
   pointer-events: none;
-  --cq: 150px; /* side of the square before its 45° turn (diagonal ≈ 212px) */
+  --cq: 196px; /* side of the square before its 45° turn (diagonal ≈ 277px) */
 }
 .color-pane-title {
   position: absolute;
@@ -3470,7 +3470,7 @@ button.ng-seat:hover {
 }
 @media (max-height: 460px), (max-width: 460px) {
   .color-pane {
-    --cq: 128px;
+    --cq: 164px;
   }
 }
 @keyframes cp-spring {
@@ -5133,7 +5133,7 @@ button.ng-seat:hover {
   z-index: 6 !important;
 }
 .plate.catchable .plate-av {
-  transform: scale(1.55);
+  transform: scale(1.2);
   transition: transform 0.22s cubic-bezier(0.3, 1.8, 0.5, 1);
   z-index: 2;
 }
@@ -5157,7 +5157,7 @@ button.ng-seat:hover {
   pointer-events: none;
 }
 .plate.catchable:active .plate-av {
-  transform: scale(1.35);
+  transform: scale(1.08);
 }
 @keyframes kc-catch-ring {
   0%, 100% { transform: scale(1); opacity: 1; }
@@ -5634,24 +5634,37 @@ button.ng-seat:hover {
 /* round clock (next to the round pill); the final minute turns red, glows and ticks (hud.ts kicks it
    every second); the last ten seconds glow harder */
 .hud-clock { display: inline-block; margin-left: .45em; padding: 0 .45em; border-radius: 999px; background: rgba(0,0,0,.28); font-variant-numeric: tabular-nums; font-weight: 700; transition: background .3s, color .3s; }
-.hud-clock.urgent { background: linear-gradient(#ef4650, #c9222d); color: #fff; text-shadow: 0 1px 0 rgba(0,0,0,.3); animation: hud-clock-glow 1s ease-in-out infinite; }
+.hud-clock.urgent { background: linear-gradient(#ef4650, #c9222d); color: #fff; text-shadow: 0 1px 0 rgba(0,0,0,.3); animation: hud-clock-glow 1s ease-in-out infinite; font-size: 1.3em; padding: .05em .6em; transition: background .3s, color .3s, font-size .4s, padding .4s; }
 .hud-clock.urgent.last10 { animation-duration: .5s; }
 @keyframes hud-clock-glow {
   0%, 100% { box-shadow: 0 0 0 0 rgba(239,70,80,.7), 0 0 .3em rgba(239,70,80,.4); }
   50% { box-shadow: 0 0 0 .28em rgba(239,70,80,0), 0 0 1.1em rgba(239,70,80,.85); }
 }
-/* the final minute's "hurry": a soft red pulse around the screen edges and a warmer, brighter table */
-.hurry-fx { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .8s; }
-.hurry-fx::before, .hurry-fx::after { content: ''; position: absolute; inset: 0; }
-.hurry-fx::before { background: radial-gradient(ellipse at 50% 48%, rgba(255,214,150,.09), rgba(255,214,150,0) 55%); mix-blend-mode: screen; }
-.hurry-fx::after { background: radial-gradient(ellipse at center, rgba(200,20,30,0) 58%, rgba(200,20,30,.32) 100%); box-shadow: inset 0 0 3.5em rgba(220,30,40,.35); }
-.hurry-fx.on { opacity: 1; }
-.hurry-fx.on::after { animation: hurry-pulse 2s ease-in-out infinite; }
-@keyframes hurry-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) {
-  .hud-clock.urgent { animation: none; box-shadow: 0 0 .6em rgba(239,70,80,.7); }
-  .hurry-fx.on::after { animation: none; opacity: .7; }
+/* the final minute's "hurry": subtle anime speed lines streaking in from the screen edges (the middle stays
+   clear), flickering a little, plus a slightly warmer table light */
+.hurry-fx { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .8s; overflow: hidden; }
+.hurry-fx::before, .hurry-fx::after { content: ''; position: absolute; }
+.hurry-fx::before { inset: 0; background: radial-gradient(ellipse at 50% 48%, rgba(255,214,150,.08), rgba(255,214,150,0) 55%); mix-blend-mode: screen; }
+.hurry-fx::after {
+  inset: -25%;
+  background: repeating-conic-gradient(from 0deg at 50% 50%,
+    rgba(255,255,255,0) 0deg 2.2deg, rgba(255,255,255,.7) 2.2deg 2.5deg, rgba(255,255,255,0) 2.5deg 5.3deg,
+    rgba(255,255,255,.45) 5.3deg 5.5deg, rgba(255,255,255,0) 5.5deg 9deg);
+  -webkit-mask: radial-gradient(ellipse 50% 46% at center, transparent 55%, rgba(0,0,0,.55) 78%, #000 100%);
+  mask: radial-gradient(ellipse 50% 46% at center, transparent 55%, rgba(0,0,0,.55) 78%, #000 100%);
+  opacity: .12;
 }
+.hurry-fx.on { opacity: 1; }
+.hurry-fx.on::after { animation: speed-lines .36s steps(3) infinite; }
+@keyframes speed-lines {
+  0% { transform: rotate(0deg); opacity: .16; }
+  33% { transform: rotate(1.7deg); opacity: .24; }
+  66% { transform: rotate(3.4deg); opacity: .19; }
+  100% { transform: rotate(5.1deg); opacity: .22; }
+}
+/* the game's own reduced-motion setting (not the OS one, which is often on by default on Windows) */
+:root.reduce-motion .hud-clock.urgent { animation: none; box-shadow: 0 0 .6em rgba(239,70,80,.7); }
+:root.reduce-motion .hurry-fx.on::after { animation: none; opacity: .14; }
 .ng-clock { display: flex; flex-wrap: wrap; align-items: center; gap: .35em .5em; margin-top: .4em; }
 .ng-clock .rsel-label { min-width: 0; }
 .ng-clock-item { display: flex; align-items: center; gap: .3em; font-size: .85em; opacity: .95; }
@@ -5883,4 +5896,19 @@ button.ng-seat:hover {
 .color-pane.still .color-quad.pressed {
   animation: none;
   transform: scale(1.06);
+}
+
+/* chat button: the pause button's look (rounded square, dark glass), a bit bigger, beside your avatar */
+.layer-hud > .qp-btn.icon-btn {
+  width: 46px;
+  height: 46px;
+  border-radius: 16px;
+  background: rgba(10, 21, 28, 0.72);
+  box-shadow:
+    0 3px 0 rgba(0, 0, 0, 0.45),
+    inset 0 0 0 2px rgba(255, 246, 230, 0.14);
+}
+.layer-hud > .qp-btn.icon-btn svg {
+  width: 24px;
+  height: 24px;
 }
