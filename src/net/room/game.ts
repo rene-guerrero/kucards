@@ -2,9 +2,9 @@
  * Pure game-driving helpers for the room: CPU pacing and decisions, move validation. Mirrors the local
  * game loop (src/app/controller.ts) so online CPUs feel the same. Only the engine's public API is used.
  */
-import type { Difficulty, MatchState, Move, PlayStyle, Seat } from '../../src/contracts';
-import { chooseMove } from '../../src/engine/ai';
-import { giveOptions, legalMoves, sameMove } from '../../src/engine/game';
+import type { Difficulty, MatchState, Move, PlayStyle, Seat } from '../../contracts';
+import { chooseMove } from '../../engine/ai';
+import { giveOptions, legalMoves, sameMove } from '../../engine/game';
 
 const TURN_KINDS = new Set<Move['kind']>(['play', 'draw', 'pass', 'acceptPenalty', 'respond', 'challenge']);
 export const isTurnMove = (m: Move): boolean => TURN_KINDS.has(m.kind);

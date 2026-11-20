@@ -2,7 +2,7 @@
  * Server tunables. The protocol constants are the defaults; tests (and only tests) shorten them via
  * Worker vars, e.g. `wrangler dev --var KUCA_TURN_TIMEOUT_MS:1500`.
  */
-import type { Tunables } from './core';
+import type { Tunables } from '../../src/net/room/core';
 import { DISCONNECT_GRACE_MS, NEXT_ROUND_MS, ROOM_IDLE_TTL_MS, TURN_TIMEOUT_MS, WINDOW_MS } from '../../src/net/protocol';
 
 export interface Env {

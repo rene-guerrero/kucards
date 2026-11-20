@@ -21,12 +21,12 @@
  *  - out-of-turn moves are first come, first served: each message is checked with legalMoves for that
  *    seat when it arrives; a late one gets 'too_late'.
  */
-import type { GameEvent, MatchState, Move, Seat } from '../../src/contracts';
-import { applyMove, closeWindow, createMatch, legalMoves, startRound, timeUp } from '../../src/engine/game';
-import { FINAL_MS, fitThink, inFinalMinute, moveMs } from '../../src/engine/clock';
-import { afterAutoDraw, timeoutMove } from '../../src/engine/ai';
-import { finalRanks } from '../../src/engine/ranks';
-import { redactEvents, seatView, snapshotFor } from '../../src/net/redact';
+import type { GameEvent, MatchState, Move, Seat } from '../../contracts';
+import { applyMove, closeWindow, createMatch, legalMoves, startRound, timeUp } from '../../engine/game';
+import { FINAL_MS, fitThink, inFinalMinute, moveMs } from '../../engine/clock';
+import { afterAutoDraw, timeoutMove } from '../../engine/ai';
+import { finalRanks } from '../../engine/ranks';
+import { redactEvents, seatView, snapshotFor } from '../redact';
 import {
   COVER_LEVEL,
   PROTOCOL_VERSION,
@@ -36,8 +36,8 @@ import {
   type RoomInfoResponse,
   type SeatView,
   type ServerMsg,
-} from '../../src/net/protocol';
-import { profileOf } from '../../src/roster';
+} from '../protocol';
+import { profileOf } from '../../roster';
 import { cpuDecide, cpuTurnMove, isTurnMove, reactDelay, thinkDelay, validMove } from './game';
 import {
   autoSeat,

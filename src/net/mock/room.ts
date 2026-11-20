@@ -1,11 +1,11 @@
 /**
- * DEV ONLY (`?mpmock=1`) — an in-browser room: the real server room logic (server/src/core.ts, the same
+ * DEV ONLY (`?mpmock=1`) — an in-browser room: the real server room logic (src/net/room/core.ts, the same
  * code the Durable Object runs) with setTimeout as its single alarm and in-page sockets, so the online
  * UI can be built and clicked through without wrangler. Lazily imported, never in production builds.
  */
 import type { RoomInfoResponse, ServerMsg } from '../protocol';
 import { DISCONNECT_GRACE_MS, NEXT_ROUND_MS, TURN_TIMEOUT_MS, WINDOW_MS } from '../protocol';
-import { RoomCore, type Attachment } from '../../../server/src/core';
+import { RoomCore, type Attachment } from '../room/core';
 
 /** the mock server's clock runs ahead of the browser's, to exercise the client's clock offset */
 export const MOCK_SKEW_MS = 2500;

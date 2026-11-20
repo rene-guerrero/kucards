@@ -29,6 +29,7 @@ export const ONLINE_ICONS = {
   share:
     '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5.5" r="2.6"/><circle cx="6" cy="12" r="2.6"/><circle cx="18" cy="18.5" r="2.6"/><path d="M8.3 10.8l7.4-4M8.3 13.2l7.4 4" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
   chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a2 2 0 0 1 2 2v7.2a2 2 0 0 1-2 2h-7.4L7 20v-3.3H5a2 2 0 0 1-2-2V7.5a2 2 0 0 1 2-2z"/><circle cx="8.4" cy="11.1" r="1.25" fill="#13232e"/><circle cx="12" cy="11.1" r="1.25" fill="#13232e"/><circle cx="15.6" cy="11.1" r="1.25" fill="#13232e"/></svg>',
+  qr: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M6.5 6.5h1v1h-1zM16.5 6.5h1v1h-1zM6.5 16.5h1v1h-1z" fill="currentColor" stroke="currentColor" stroke-width="1"/><path d="M14 14h2.5v2.5H14zM17.5 17.5H20V20h-2.5zM14 19h2M19 14v2" fill="currentColor" stroke="currentColor" stroke-width="1.2"/></svg>',
   exit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4.5H6.5A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5H14" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/><path d="M11 12h9M16.5 8l3.8 4-3.8 4" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
@@ -42,10 +43,66 @@ export interface OnlineHomeOpts {
   avatars: boolean;
   /** prefilled code (from a link that failed, or the last one typed) */
   code?: string;
+  /** Jugar con amigos (a host nearby) instead of online */
+  local?: boolean;
+  /** the app can host on this phone and find games nearby (Android): the screen shows those options */
+  native?: {
+    /** a saved room of this phone can be resumed */
+    onResume: (() => void) | null;
+    onJoinHost(host: NearbyGame): void;
+    /** "Buscar también por Bluetooth" (shown until the permission is granted) */
+    onBluetooth(): void;
+    /** "Activar ubicación" (Bluetooth search needs Location on) */
+    onLocation(): void;
+  };
   onName(name: string): void;
   onCreate(): void;
-  onJoin(code: string): void;
+  /** `origin` (http://192.168.1.37:8787) when joining another phone by its address */
+  onJoin(code: string, origin?: string): void;
   onBack(): void;
+}
+
+/** a game another phone hosts nearby: on this Wi-Fi (origin) or over Bluetooth (endpoint) */
+export interface NearbyGame {
+  key: string;
+  name: string;
+  code: string;
+  origin: string;
+  via?: 'wifi' | 'bluetooth';
+  /** Bluetooth: the host's Nearby endpoint */
+  endpoint?: string;
+}
+
+/** "192.168.1.37:8787", "http://192.168.1.37:8787/?sala=7KQM" → origin (+ code when the link has one) */
+export function parseAddress(raw: string): { origin: string; code: string } | null {
+  let s = raw.trim();
+  if (!s) return null;
+  if (!/^https?:\/\//i.test(s)) s = `http://${s}`;
+  let u: URL;
+  try {
+    u = new URL(s);
+  } catch {
+    return null;
+  }
+  if (!u.hostname || !/^[\w.-]+$|^\[[0-9a-f:]+\]$/i.test(u.hostname)) return null;
+  const port = u.port || '8787';
+  const code = filterCodeChars(u.searchParams.get('sala') ?? '');
+  return { origin: `http://${u.hostname}:${port}`, code: code.length === ROOM_CODE_LENGTH ? code : '' };
+}
+
+/**
+ * The address to type when a device cannot scan ("192.168.1.37:8787"): host and port only, the room code
+ * is on the card above. null when it would only work on this machine (localhost).
+ */
+export function typedAddress(url: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (/^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/.test(u.hostname)) return null;
+  return u.host;
 }
 
 export interface OnlineHome {
@@ -54,6 +111,14 @@ export interface OnlineHome {
   setBusy(which: 'create' | 'join' | null): void;
   /** focus the name field (the first time, when there is no name yet) */
   askName(): void;
+  /** native: the games found nearby (null = still looking) */
+  setNearby(games: NearbyGame[] | null): void;
+  /** native: show / hide "Buscar también por Bluetooth" */
+  offerBluetooth(show: boolean): void;
+  /** native: the search also runs over Bluetooth (the empty list says so) */
+  setSearchingBluetooth(on: boolean): void;
+  /** native: Location is off, Bluetooth cannot find phones (show the note and its button) */
+  needLocation(show: boolean): void;
 }
 
 export function buildOnlineHome(o: OnlineHomeOpts): OnlineHome {
@@ -87,7 +152,8 @@ export function buildOnlineHome(o: OnlineHomeOpts): OnlineHome {
   const who = h('label.oh-who', faceEl, h('span.oh-who-text', h('span.oh-who-k', t('online.playingAs')), nameInput));
   who.classList.toggle('need', !name);
 
-  const create = btn(t('online.create'), () => guard(() => o.onCreate()), 'primary lg oh-create', icon(ONLINE_ICONS.plus));
+  const create = btn(t(o.native ? 'local.host' : 'online.create'), () => guard(() => o.onCreate()), 'primary lg oh-create', icon(ONLINE_ICONS.plus));
+  const resume = o.native?.onResume ? btn(t('local.resume'), () => guard(() => o.native!.onResume!()), 'secondary oh-resume') : null;
   create.dataset.autofocus = '';
 
   const codeInput = h('input.oh-code-input', {
@@ -103,8 +169,38 @@ export function buildOnlineHome(o: OnlineHomeOpts): OnlineHome {
     'aria-label': t('online.codeLabel'),
   }) as HTMLInputElement;
   codeInput.value = filterCodeChars(o.code ?? '');
-  const join = btn(t('online.join'), () => guard(() => o.onJoin(codeInput.value)), 'secondary oh-join');
-  const syncJoin = () => (join.disabled = codeInput.value.length !== ROOM_CODE_LENGTH || busy !== null);
+  // native: the other phone's address ("192.168.1.37:8787", or its whole link)
+  const addrInput = o.native
+    ? (h('input.oh-addr-input', {
+        type: 'text',
+        inputmode: 'url',
+        autocapitalize: 'off',
+        autocomplete: 'off',
+        autocorrect: 'off',
+        spellcheck: 'false',
+        enterkeyhint: 'next',
+        placeholder: '192.168.1.37:8787',
+        'aria-label': t('local.addressLabel'),
+      }) as HTMLInputElement)
+    : null;
+  const join = btn(
+    t('online.join'),
+    () =>
+      guard(() => {
+        const a = addrInput ? parseAddress(addrInput.value) : null;
+        if (addrInput && !a) return setError(t('local.err.address'));
+        o.onJoin(codeInput.value, a?.origin);
+      }),
+    'secondary oh-join',
+  );
+  const syncJoin = () => (join.disabled = codeInput.value.length !== ROOM_CODE_LENGTH || busy !== null || (!!addrInput && !addrInput.value.trim()));
+  addrInput?.addEventListener('input', () => {
+    // a pasted link carries the code too
+    const a = parseAddress(addrInput.value);
+    if (a?.code) codeInput.value = a.code;
+    setError(null);
+    syncJoin();
+  });
   codeInput.addEventListener('input', () => {
     // auto upper-case, alphabet only; a pasted "KUCA-7KQM" or link keeps just the code
     let v = codeInput.value.toUpperCase();
@@ -143,25 +239,93 @@ export function buildOnlineHome(o: OnlineHomeOpts): OnlineHome {
     create.classList.toggle('is-loading', which === 'create');
     join.classList.toggle('is-loading', which === 'join');
     create.disabled = which !== null;
+    if (resume) resume.disabled = which !== null;
+    nearbyList.querySelectorAll('button').forEach((b) => ((b as HTMLButtonElement).disabled = which !== null));
     syncJoin();
   };
+
+  // ── native: games nearby (Wi-Fi and Bluetooth) ──
+  const nearbyList = h('div.oh-nearby-list', { role: 'list' });
+  let searchingBt = false;
+  let lastGames: NearbyGame[] | null = null;
+  const setNearby = (games: NearbyGame[] | null) => {
+    lastGames = games;
+    if (!games) return nearbyList.replaceChildren(h('p.oh-nearby-empty', t(searchingBt ? 'local.searchingBt' : 'local.searching')));
+    if (!games.length) return nearbyList.replaceChildren(h('p.oh-nearby-empty', t(searchingBt ? 'local.noneNearbyBt' : 'local.noneNearby')));
+    nearbyList.replaceChildren(
+      ...games.map((g) => {
+        const b = btn(
+          g.name || displayCode(g.code),
+          () => guard(() => o.native!.onJoinHost(g)),
+          'secondary oh-nearby-game',
+          h('span.oh-nearby-code', g.via === 'bluetooth' ? h('span.oh-nearby-via', t('local.viaBluetooth')) : null, displayCode(g.code)),
+        );
+        b.setAttribute('role', 'listitem');
+        b.disabled = busy !== null;
+        return b;
+      }),
+    );
+  };
+  setNearby(null);
   syncJoin();
+  // Location off: Bluetooth search cannot find phones; a short note and a button to the settings
+  const locBtn = o.native ? btn(t('local.locationOn'), () => o.native!.onLocation(), 'secondary oh-loc-btn') : null;
+  const locNote = o.native ? h('div.oh-loc', h('p.oh-loc-text', t('local.locationNeeded')), locBtn) : null;
+  if (locNote) locNote.hidden = true;
+  const btOffer = o.native ? h('button.link-btn.oh-bt-offer', { type: 'button' }, t('local.searchBluetooth')) : null;
+  btOffer?.addEventListener('click', () => o.native!.onBluetooth());
+  if (btOffer) btOffer.hidden = true;
 
   const el = h(
     'section.screen.panel-screen.online-home',
-    screenHeader(t('online.title'), o.onBack),
+    screenHeader(t(o.local ? 'friends.title' : 'online.title'), o.onBack),
     h(
       'div.scroll.oh-scroll',
-      h('div.oh-body', h('p.oh-intro', t('online.intro')), who, create, h('div.oh-or', h('span', t('online.or'))), h('div.oh-join-row', codeBox, join), err),
+      h(
+        'div.oh-body',
+        h('p.oh-intro', t(o.local ? 'local.intro' : 'online.intro')),
+        o.local ? h('p.oh-intro.oh-note', t('local.sameWifi')) : null,
+        who,
+        create,
+        resume,
+        o.native ? h('div.oh-or', h('span', t('local.nearby'))) : null,
+        o.native ? nearbyList : null,
+        locNote,
+        btOffer,
+        h('div.oh-or', h('span', t(o.native ? 'local.joinAddress' : 'online.or'))),
+        addrInput ? h('label.oh-code.oh-addr', addrInput) : null,
+        h('div.oh-join-row', codeBox, join),
+        err,
+      ),
     ),
   );
-  return { el, setError, setBusy, askName: () => requestAnimationFrame(() => nameInput.focus({ preventScroll: true })) };
+  return {
+    el,
+    setError,
+    setBusy,
+    askName: () => requestAnimationFrame(() => nameInput.focus({ preventScroll: true })),
+    setNearby,
+    offerBluetooth: (show) => {
+      if (btOffer) btOffer.hidden = !show;
+    },
+    needLocation: (show) => {
+      if (locNote) locNote.hidden = !show;
+    },
+    setSearchingBluetooth: (on) => {
+      searchingBt = on;
+      if (!lastGames?.length) setNearby(lastGames);
+    },
+  };
 }
 
 // ───────────────────────── lobby ─────────────────────────
 
 export interface LobbyOpts {
   code: string;
+  /** local play: the link other devices open (as a QR, an SVG string) */
+  join?: { url: string; qr: string } | null;
+  /** show the QR big (a sheet: a tap, Esc or Android back closes it) */
+  onQr?(): void;
   avatars: boolean;
   myId: string;
   presetName(mode: GameMode, rules: RuleSettings): string;
@@ -229,11 +393,31 @@ export function buildLobby(o: LobbyOpts): Lobby {
   ro.observe(feltBox);
 
   const share = btn(t('lobby.share'), o.onShare, 'secondary lobby-share', icon(ONLINE_ICONS.share));
+  share.setAttribute('aria-label', t('lobby.share'));
+  // phones: the join card folds into this icon (the big QR has the address under it)
+  const qrBtn = o.join ? btn(t('local.showQr'), () => o.onQr?.(), 'secondary lobby-qr-btn', icon(ONLINE_ICONS.qr)) : null;
+  qrBtn?.setAttribute('aria-label', t('local.showQr'));
+  // wider screens: the QR and the address in their own card; its QR opens big too
+  const qr = o.join ? (h('button.lobby-join-qr', { type: 'button', 'aria-label': t('local.showQr'), html: o.join.qr }) as HTMLButtonElement) : null;
+  qr?.addEventListener('click', () => o.onQr?.());
+  const joinCard = o.join
+    ? h(
+        'div.lobby-join',
+        qr,
+        h(
+          'div.lobby-join-text',
+          h('span.lobby-code-k', t('local.join')),
+          h('span.lobby-join-main', t('local.scanQr')),
+          typedAddress(o.join.url) ? h('span.lobby-join-hint', t('local.orType'), ' ', h('b.lobby-join-addr', typedAddress(o.join.url)!)) : null,
+        ),
+      )
+    : null;
   const copied = h('span.lobby-copied', { role: 'status', 'aria-live': 'polite' });
   const conn = h('span.lobby-conn', { role: 'status', 'aria-live': 'polite' });
   const codeCard = h(
     'div.lobby-code',
     h('div.lobby-code-text', h('span.lobby-code-k', t('lobby.code')), h('span.lobby-code-v', displayCode(o.code)), h('span.lobby-sub', copied, conn)),
+    qrBtn,
     share,
   );
 
@@ -252,7 +436,7 @@ export function buildLobby(o: LobbyOpts): Lobby {
 
   let lastModeKey = '';
   let lastClockKey = '';
-  const el = h('section.screen.panel-screen.newgame.ng2.lobby', screenHeader(t('lobby.title'), o.onLeave), h('div.ng-body', h('div.ng-left', modeRow, feltBox), h('div.ng-right', codeCard, foot)));
+  const el = h('section.screen.panel-screen.newgame.ng2.lobby', screenHeader(t('lobby.title'), o.onLeave), h('div.ng-body', h('div.ng-left', modeRow, feltBox), h('div.ng-right', codeCard, joinCard, foot)));
 
   const update = (room: PublicRoom, me: { seat: Seat | null; isHost: boolean }) => {
     const act = activeSeatsOf(room);
@@ -471,4 +655,24 @@ export function buildPhraseGrid(onPick: (id: QuickPhraseId) => void): HTMLElemen
       return b;
     }),
   );
+}
+
+/** the join QR, big: scan it, or type the address under it; a tap anywhere closes it */
+export function buildQrCard(o: { qr: string; url: string; onClose(): void }): HTMLElement {
+  // the big view always names the address (even localhost while developing)
+  let addr = typedAddress(o.url);
+  try {
+    addr ??= new URL(o.url).host;
+  } catch {
+    /* keep null */
+  }
+  const card = h(
+    'button.qr-card',
+    { type: 'button', 'aria-label': t('common.close') },
+    h('span.qr-card-code', { html: o.qr }),
+    h('span.qr-card-title', t('local.scanQr')),
+    addr ? h('span.qr-card-addr', t('local.orType'), ' ', h('b', addr)) : null,
+  );
+  card.addEventListener('click', o.onClose);
+  return card;
 }

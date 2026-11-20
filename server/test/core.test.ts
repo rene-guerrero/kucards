@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
 import type { Card, GameEvent, GameMode, Move, RuleSettings, Seat } from '../../src/contracts';
 import { visibleHands } from '../../src/engine/game';
 import { PROTOCOL_VERSION, type ServerMsg } from '../../src/net/protocol';
-import { normalizeRules } from '../src/lobby';
-import { RoomCore, type Attachment, type CoreIO, type Tunables } from '../src/core';
+import { normalizeRules } from '../../src/net/room/lobby';
+import { RoomCore, type Attachment, type CoreIO, type Tunables } from '../../src/net/room/core';
 
 interface Sock {
   id: number;

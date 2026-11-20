@@ -20,7 +20,7 @@ import { h, setReducedMotionPref, setUiQuality } from './ui/dom';
 import { buildHowto } from './ui/howto';
 import { loc, setLang, t } from './ui/i18n';
 import { buildMenu } from './ui/menu';
-import { onlineAvailable } from './net/config';
+import { onlineAvailable, served, localPlayAvailable, type NetMode } from './net/config';
 import { rememberedRoom } from './net/identity';
 import type { OnlineController } from './app/online';
 import { buildNewGame, type NewGameStart } from './ui/newgame';
@@ -139,6 +139,7 @@ function screen(id: ScreenId): HTMLElement {
         },
         onAbout: about,
         onOnline: onlineAvailable() ? () => void openOnline() : undefined,
+        onFriends: localPlayAvailable() ? () => void openOnline(undefined, false, 'local') : undefined,
       });
     case 'newgame':
       return buildNewGame({
@@ -270,7 +271,7 @@ if (!preview) startBackdrop();
 
 // ───────── online play (the controller and its screens load lazily) ─────────
 let online: OnlineController | null = null;
-async function openOnline(code?: string, quiet = false): Promise<void> {
+async function openOnline(code?: string, quiet = false, net: NetMode = served() ? 'local' : 'online'): Promise<void> {
   if (!online) {
     const { OnlineController } = await import('./app/online');
     online = new OnlineController({
@@ -289,11 +290,26 @@ async function openOnline(code?: string, quiet = false): Promise<void> {
     });
   }
   current = 'menu';
-  online.open(code, quiet);
+  online.open(code, quiet, net);
 }
 // a share link (?sala=XXXX) or a reload inside a room joins it
-if (!preview && onlineAvailable()) {
+if (!preview && (onlineAvailable() || served())) {
   const link = new URLSearchParams(location.search).get('sala');
   const sala = link ?? rememberedRoom();
   if (sala) void openOnline(sala, !link).catch((e) => console.error('[online] join failed', e));
+  // Jugar con amigos: the host's address typed without the room (no ?sala=) → its open room
+  else if (served()) void openHostedRoom();
+}
+
+/** a page a local host served, opened at its bare address: one open room → join it, several → choose */
+async function openHostedRoom(): Promise<void> {
+  try {
+    const r = await fetch('./api/rooms', { cache: 'no-store' });
+    const rooms = ((await r.json()) as { rooms?: { code: string; phase?: string }[] }).rooms ?? [];
+    const open = rooms.filter((x) => x.phase !== 'finished');
+    if (open.length === 1) await openOnline(open[0].code, false, 'local');
+    else if (open.length > 1) await openOnline(undefined, false, 'local');
+  } catch (e) {
+    console.warn("[local] could not list the host's rooms", e);
+  }
 }
