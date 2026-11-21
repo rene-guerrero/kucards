@@ -9,6 +9,8 @@ export default defineConfig({
   // the app version shown in Acerca de (src/ui/about.ts)
   define: { __APP_VERSION__: JSON.stringify(pkg.version) },
   server: { port: 5174, host: true },
+  // kunet may be linked from a sibling folder (with its own dev copy of @capacitor/core): use the game's
+  resolve: { dedupe: ['@capacitor/core'] },
   // the room server (server/) has its own vitest run and node_modules
   test: { exclude: ['**/node_modules/**', 'server/**', 'dist/**'] },
   build: {

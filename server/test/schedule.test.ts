@@ -3,8 +3,8 @@ import type { MatchState } from '../../src/contracts';
 import { createMatch, legalMoves, startRound } from '../../src/engine/game';
 import { RULE_PRESETS } from '../../src/engine/rules';
 import { tunables } from '../src/config';
-import { cpuTurnMove, isTurnMove, reactDelay, thinkDelay, validMove } from '../src/game';
-import { clearGameTimer, emptySchedule, nextAlarm, setGameTimer, setTimer, takeDue } from '../src/schedule';
+import { cpuTurnMove, isTurnMove, reactDelay, thinkDelay, validMove } from '../../src/net/room/game';
+import { clearGameTimer, emptySchedule, nextAlarm, setGameTimer, setTimer, takeDue } from '../../src/net/room/schedule';
 
 describe('schedule', () => {
   it('alarm = earliest of game, window, grace and idle', () => {

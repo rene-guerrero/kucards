@@ -3026,6 +3026,244 @@ button.ng-seat:hover {
   width: 100%;
   height: 100%;
 }
+/* ───────────────────────── Jugar con amigos (local play) ───────────────────────── */
+/* [Jugar en línea] [Jugar con amigos] on one row; labels stay on one line (ellipsis as a last resort) */
+.menu-actions .row.menu-net {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.menu-actions .row.menu-net > .btn {
+  flex: 1 1 150px;
+  min-width: 0;
+  font-size: clamp(12.5px, 3.45vw, 16px);
+  padding-left: 10px;
+  padding-right: 10px;
+  gap: 6px;
+}
+.menu-actions .row.menu-net > .btn .btn-label {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.menu-actions .row.menu-net > .btn .btn-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+/* lobby, local rooms: the QR and the address other devices open */
+.lobby-join {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 20px;
+  background: rgba(0, 0, 0, 0.26);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 246, 230, 0.08);
+}
+.lobby-join-qr {
+  flex: 0 0 auto;
+  width: clamp(96px, 22vmin, 136px);
+  aspect-ratio: 1;
+  padding: 6px;
+  border: 0;
+  border-radius: 12px;
+  background: #fff;
+  color: #111;
+  cursor: zoom-in;
+}
+.lobby-join-qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.lobby-join-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.lobby-join-main {
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1.25;
+  color: var(--cream);
+}
+.lobby-join-addr {
+  white-space: nowrap;
+  color: var(--cream);
+  user-select: text;
+}
+.lobby-join-hint {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+/* the QR icon beside Compartir: phones only (wider screens show the join card) */
+.lobby-qr-btn {
+  display: none;
+}
+.lobby-qr-btn .btn-icon,
+.lobby-qr-btn .btn-icon svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+/* the big join QR (a sheet over the lobby) */
+.qr-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(86vw, 420px);
+  padding: 18px 18px 20px;
+  border: 0;
+  border-radius: 24px;
+  background: #fff;
+  color: #13232e;
+  font: inherit;
+  cursor: zoom-out;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.qr-card-code {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+}
+.qr-card-code svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.qr-card-title {
+  font-size: 18px;
+  font-weight: 900;
+}
+.qr-card-addr {
+  font-size: 16px;
+  font-weight: 700;
+  color: #4a5a66;
+}
+.qr-card-addr b {
+  color: #13232e;
+  white-space: nowrap;
+  user-select: text;
+}
+/* phones in portrait: [code | QR | Compartir] on one row, icons only; the join card folds into the QR icon */
+@media (orientation: portrait) and (max-width: 760px) {
+  .lobby .lobby-code {
+    flex-wrap: nowrap;
+    gap: 10px;
+  }
+  .lobby .lobby-code .lobby-code-text {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .lobby .lobby-code .lobby-share,
+  .lobby .lobby-code .lobby-qr-btn {
+    flex: 0 0 auto;
+    margin-left: 0;
+    width: 48px;
+    min-width: 48px;
+    min-height: 48px;
+    padding: 0;
+    justify-content: center;
+  }
+  .lobby .lobby-code .lobby-share .btn-label,
+  .lobby .lobby-code .lobby-qr-btn .btn-label {
+    display: none;
+  }
+  .lobby .lobby-code .lobby-qr-btn {
+    display: inline-flex;
+  }
+  .lobby .lobby-join {
+    display: none;
+  }
+}
+
+/* Jugar con amigos home (app): resume, games nearby, location note, the other phone's address */
+.oh-note {
+  font-weight: 800;
+}
+.oh-resume {
+  width: 100%;
+}
+.oh-nearby-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.oh-nearby-empty {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--muted);
+  text-align: center;
+}
+.btn.oh-nearby-game {
+  width: 100%;
+  justify-content: space-between;
+}
+.oh-nearby-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  opacity: 0.8;
+}
+.oh-nearby-via {
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: rgba(0, 0, 0, 0.22);
+  font-size: 11px;
+  letter-spacing: 0;
+}
+.oh-bt-offer {
+  align-self: center;
+}
+.oh-bt-offer[hidden] {
+  display: none;
+}
+.oh-loc {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 182, 39, 0.12);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 182, 39, 0.35);
+}
+.oh-loc[hidden] {
+  display: none;
+}
+.oh-loc-text {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+.oh-addr {
+  flex: none;
+}
+.oh-addr-input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--cream);
+  font: inherit;
+  font-size: 19px;
+  font-weight: 900;
+  outline: none;
+}
+.oh-addr-input::placeholder {
+  color: rgba(255, 246, 230, 0.35);
+}
 
 /* ───────────────────────── error card (unexpected error during a game) ───────────────────────── */
 .card.crash {

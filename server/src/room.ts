@@ -13,8 +13,8 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import { tunables, type Env } from './config';
-import { RoomCore, type Attachment } from './core';
-import type { RoomData } from './lobby';
+import { RoomCore, type Attachment } from '../../src/net/room/core';
+import type { RoomData } from '../../src/net/room/lobby';
 
 export class Room extends DurableObject<Env> {
   private core: RoomCore<WebSocket>;

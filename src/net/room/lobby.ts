@@ -4,8 +4,8 @@ import { sanitizeFace as cleanFace, type FaceSpec } from 'kuavatars/faces';
  * The room core (core.ts) persists a RoomData and calls these; nothing here touches I/O.
  * Ported from Kudominoes; modes are KuCards' (Clásico / Pura acción / Ciclón: 2–4 players, Parejas: 4).
  */
-import type { GameMode, MatchState, RuleSettings, Seat } from '../../src/contracts';
-import { DEFAULT_RULES, modeRules, RULE_PRESETS, RULE_SETTINGS } from '../../src/engine/rules';
+import type { GameMode, MatchState, RuleSettings, Seat } from '../../contracts';
+import { DEFAULT_RULES, modeRules, RULE_PRESETS, RULE_SETTINGS } from '../../engine/rules';
 import {
   activeSeatsOf,
   MAX_NAME_LENGTH,
@@ -16,10 +16,10 @@ import {
   type PublicRoom,
   type RoomPhase,
   type SeatOccupant,
-} from '../../src/net/protocol';
-import { isCharacter, ROSTER } from '../../src/roster';
+} from '../protocol';
+import { isCharacter, ROSTER } from '../../roster';
 import { emptySchedule, type Schedule } from './schedule';
-import { sanitizeClock, type ClockSettings } from '../../src/engine/clock';
+import { sanitizeClock, type ClockSettings } from '../../engine/clock';
 
 /** what a seat holds (member details live in RoomData.members) */
 export type SeatSlot = { kind: 'empty' } | { kind: 'human'; playerId: string } | { kind: 'cpu'; characterId: string };

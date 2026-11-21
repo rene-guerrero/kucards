@@ -25,13 +25,16 @@ import { voiceForEvent, VOICE_DELAY_MS } from '../audio/voice';
 import { playSfx, powerSfxForEvent, setAudioPrefs, hapticTick, setMusicMode, setMusicScene } from '../audio/sfx';
 import { inFinalMinute, sanitizeClock } from '../engine/clock';
 import { RoomClient, httpBackend, NetError, type Backend, type ConnState } from '../net/client';
-import { useMockServer, shareLink } from '../net/config';
+import { useMockServer, shareLink, served, type NetMode } from '../net/config';
+import { qrSvg } from 'kunet';
+import { isLocationError, locationEnabled, LocalPlay, nativeLocalAvailable, nearbyPermission, onNearbyError, openLocationSettings, savedRoom } from './localPlay';
 import { displayCode, normalizeCode, playerId, rememberRoom, cleanName } from '../net/identity';
 import { Perspective } from '../net/perspective';
 import { applyEvent, applySnapshot, emptyMatch } from '../net/mirror';
 import { isHidden, withPlaceholders } from '../net/redact';
 import { CHAT_GESTURES, sanitizeGestures, TURN_TIMEOUT_MS, NEXT_ROUND_MS, type ChatGesture, type ErrorCode, type PublicRoom, type QuickPhraseId, type SeatView, type ServerMsg, type Snapshot } from '../net/protocol';
-import { activeSeatsOf, buildLobby, buildOnlineHome, buildOnlinePause, buildRulesSheet, buildSeatSheet, occupantName, ONLINE_ICONS, phraseText, type Lobby, type OnlineHome } from '../ui/online';
+import type { NearbyGame } from '../ui/online';
+import { activeSeatsOf, buildLobby, buildQrCard, buildOnlineHome, buildOnlinePause, buildRulesSheet, buildSeatSheet, occupantName, ONLINE_ICONS, phraseText, type Lobby, type OnlineHome } from '../ui/online';
 import { AvatarController, humanFace, type AvatarExpr } from '../ui/avatarAdapter';
 import { Hud, type HudPlayer, type ScoreRow } from '../ui/hud';
 import { bubbleFor, SeatPlates } from '../ui/plates';
@@ -77,6 +80,25 @@ const TURN_KINDS = new Set(['play', 'draw', 'pass', 'acceptPenalty', 'respond', 
 const isTurnMove = (m: Move) => TURN_KINDS.has(m.kind);
 /** events that never change what this player may do: a pending pick survives them */
 const BENIGN = new Set(['ku', 'window', 'stack']);
+
+/** what can go wrong in Jugar con amigos, beyond the online errors */
+type LocalErr = 'noWifi' | 'start';
+
+/** errors in local play: the same codes, worded for devices nearby */
+const localErrorText = (code: string): string | null =>
+  code === 'offline'
+    ? t('local.err.unreachable')
+    : code === 'version_mismatch'
+      ? t('local.err.version')
+      : code === 'noWifi'
+        ? t('local.err.noWifi')
+        : code === 'start' || code === 'start_failed'
+          ? t('local.err.start')
+          : null;
+
+/** the error code of whatever a create / join threw (NetError, kunet's LocalNetError, a plugin error, a code) */
+const codeOf = (e: unknown): string =>
+  typeof e === 'string' ? e : e && typeof e === 'object' && typeof (e as { code?: unknown }).code === 'string' ? (e as { code: string }).code : 'server';
 
 const errorText = (code: ErrorCode | NetError['code'] | 'lost'): string =>
   code === 'room_not_found'
@@ -143,11 +165,53 @@ export class OnlineController {
     if (import.meta.env.DEV) (window as unknown as { __kucaNet: unknown }).__kucaNet = { ctl: this, drop: () => this.client?.resync() };
   }
 
-  /** the mock backend is loaded lazily (dev only) */
+  /** online or local play (Jugar con amigos): picks the backend and the screens' wording */
+  private net: NetMode = 'online';
+  private httpBe: Backend | null = null;
+  private mockBe: Backend | null = null;
+  /** app only: this phone hosts the room ('host') or joins another phone ('join', at joinAt / joinTarget) */
+  private local = new LocalPlay();
+  private role: 'host' | 'join' | null = null;
+  private joinAt: string | null = null;
+  private joinTarget: NearbyGame | null = null;
+  private hostBe: Backend | null = null;
+  private stopDiscover: (() => void) | null = null;
+  /** the Bluetooth explanation was shown this session (asked once; Android remembers the answer) */
+  private btAsked = false;
+  private offBtErrors: (() => void) | null = null;
+
+  /** Jugar con amigos inside the Android app (host on this phone / join another phone) */
+  private get nativeLocal(): boolean {
+    return this.net === 'local' && nativeLocalAvailable();
+  }
+
+  private errText(e: unknown): string {
+    const code = codeOf(e);
+    return (this.net === 'local' && localErrorText(code)) || errorText(code as ErrorCode);
+  }
+
+  /** a Bluetooth (Nearby) failure: on the home screen as its error line, in the lobby under the code */
+  private showBtError = (where: string, message: string): void => {
+    if (isLocationError(message)) {
+      this.home?.needLocation(true);
+      if (!this.home) this.lobby?.setConn(t('local.locationNeeded'));
+      return;
+    }
+    const text = t('local.err.bluetooth', { msg: message || where });
+    if (this.home) this.home.setError(text);
+    else this.lobby?.setConn(text);
+  };
+
+  /** the mock backend is loaded lazily (dev only); a locally served page talks to its own origin */
   private async ensureBackend(): Promise<Backend> {
+    if (this.nativeLocal && this.role === 'join' && (this.joinTarget || this.joinAt)) {
+      const name = this.settings.playerName || t('seat.player');
+      return (this.backend = this.local.joinBackend(this.joinTarget ?? { origin: this.joinAt! }, name));
+    }
     // (dev only: the branch is dead code in production builds, so the mock never ships)
-    if (import.meta.env.DEV && !this.backend && useMockServer()) this.backend = (await import('../net/mock/backend')).mockBackend();
-    this.backend ??= httpBackend();
+    if (import.meta.env.DEV && (useMockServer() || (this.net === 'local' && !served()))) {
+      this.backend = this.mockBe ??= (await import('../net/mock/backend')).mockBackend();
+    } else this.backend = this.httpBe ??= httpBackend();
     return this.backend;
   }
 
@@ -162,20 +226,34 @@ export class OnlineController {
   // ───────────────────────── screens ─────────────────────────
 
   /** open the "Jugar en línea" screen; with a code (share link / reload) join it right away */
-  open(code?: string, quiet = false): void {
+  open(code?: string, quiet = false, net: NetMode = served() ? 'local' : 'online'): void {
     this.mode = 'home';
+    this.net = net;
     const s = this.settings;
     const home = buildOnlineHome({
+      local: net === 'local',
+      native:
+        net === 'local' && nativeLocalAvailable()
+          ? {
+              onResume: savedRoom() ? () => void this.createHosted(true) : null,
+              onJoinHost: (g) => void this.joinNearby(g),
+              onBluetooth: () => void this.enableBluetooth(),
+              onLocation: () => void openLocationSettings(),
+            }
+          : undefined,
       name: s.playerName,
       face: s.avatarFace ?? 0,
       avatars: s.avatars !== false,
       code,
       onName: (n) => this.deps.setSetting('playerName', cleanName(n)),
       onCreate: () => void this.create(),
-      onJoin: (c) => void this.join(c),
+      onJoin: (c, origin) => void (origin ? this.joinOther(origin, c) : this.join(c)),
       onBack: () => this.exit(),
     });
     this.home = home;
+    this.stopDiscover?.();
+    this.stopDiscover = null;
+    if (this.nativeLocal) void this.startDiscovery();
     this.deps.overlay.showScreen(home.el);
     if (!s.playerName) home.askName();
     if (code && s.playerName) void this.join(code, quiet);
@@ -183,6 +261,7 @@ export class OnlineController {
   }
 
   private async create(): Promise<void> {
+    if (this.nativeLocal) return this.createHosted(false);
     const home = this.home;
     home?.setBusy('create');
     home?.setError(null);
@@ -193,7 +272,96 @@ export class OnlineController {
     } catch (e) {
       if (this.home !== home) return;
       home?.setBusy(null);
-      home?.setError(errorText(e instanceof NetError ? e.code : typeof e === 'string' ? (e as ErrorCode) : 'server'));
+      home?.setError(this.errText(e));
+    }
+  }
+
+  /** app: look for games nearby (Bluetooth too when allowed; otherwise offer it) */
+  private async startDiscovery(): Promise<void> {
+    const home = this.home;
+    const bt = await nearbyPermission(false);
+    if (this.home !== home || !home) return;
+    this.stopDiscover?.();
+    this.stopDiscover = this.local.discover(bt, (games) => this.home === home && home.setNearby(games));
+    home.offerBluetooth(!bt);
+    home.setSearchingBluetooth(bt);
+    home.needLocation(bt && !(await locationEnabled()));
+    this.offBtErrors ??= onNearbyError(this.showBtError);
+  }
+
+  /** the explanation, then Android's prompt (once per session unless asked for); true = allowed */
+  private async askBluetooth(force: boolean): Promise<boolean> {
+    if (await nearbyPermission(false)) return true;
+    if (this.btAsked && !force) return false;
+    this.btAsked = true;
+    const ok = await confirmDialog(this.deps.overlay, { title: t('local.btTitle'), body: t('local.btBody'), ok: t('local.btOk'), cancel: t('local.btNo') });
+    return ok ? nearbyPermission(true) : false;
+  }
+
+  private async enableBluetooth(): Promise<void> {
+    if (await this.askBluetooth(true)) void this.startDiscovery();
+  }
+
+  /** app: join a game from "Partidas cercanas" (Wi-Fi or Bluetooth) */
+  private async joinNearby(g: NearbyGame): Promise<void> {
+    if (g.via !== 'bluetooth') return this.joinOther(g.origin, g.code);
+    this.role = 'join';
+    this.joinAt = null;
+    this.joinTarget = g;
+    await this.join(g.code);
+    if (!this.client) {
+      this.role = null;
+      this.joinTarget = null;
+      this.local.leaveJoined();
+    }
+  }
+
+  /** app: host the room on this phone (resume = bring back the saved one) */
+  private async createHosted(resume: boolean): Promise<void> {
+    const home = this.home;
+    home?.setBusy('create');
+    home?.setError(null);
+    try {
+      this.role = 'host';
+      this.joinAt = null;
+      this.joinTarget = null;
+      const bt = await this.askBluetooth(false);
+      if (bt) this.offBtErrors ??= onNearbyError(this.showBtError);
+      if (bt && !(await locationEnabled())) {
+        const open = await confirmDialog(this.deps.overlay, { title: t('local.locationTitle'), body: t('local.locationBody'), ok: t('local.locationOpen'), cancel: t('local.btNo') });
+        if (open) void openLocationSettings();
+      }
+      try {
+        this.hostBe = await this.local.startHosting(this.settings.playerName || t('seat.player'), bt);
+      } catch {
+        throw 'start' satisfies LocalErr;
+      }
+      // nobody could reach this phone: no Wi-Fi / hotspot address and no Bluetooth
+      if (!this.local.origins.length && !this.local.bluetooth) throw 'noWifi' satisfies LocalErr;
+      this.backend = this.hostBe;
+      const code = resume ? this.local.resumeSaved() : await this.hostBe.createRoom(this.pid);
+      if (!code) throw 'room_not_found';
+      await this.connect(code);
+      this.local.announce(code);
+    } catch (e) {
+      this.role = null;
+      this.hostBe = null;
+      await this.local.stopHosting();
+      if (this.home !== home) return;
+      home?.setBusy(null);
+      home?.setError(this.errText(e));
+    }
+  }
+
+  /** app: join a game another phone hosts at `origin` */
+  private async joinOther(origin: string, code: string): Promise<void> {
+    this.role = 'join';
+    this.joinAt = origin;
+    this.joinTarget = null;
+    await this.join(code);
+    if (!this.client) {
+      this.role = null;
+      this.joinAt = null;
     }
   }
 
@@ -214,7 +382,7 @@ export class OnlineController {
       rememberRoom(null);
       if (quiet) return this.exit();
       home?.setBusy(null);
-      home?.setError(errorText(e instanceof NetError ? e.code : typeof e === 'string' ? (e as ErrorCode) : 'server'));
+      home?.setError(this.errText(e));
     }
   }
 
@@ -265,7 +433,7 @@ export class OnlineController {
     this.teardownRoom();
     rememberRoom(null);
     this.open();
-    this.home?.setError(errorText(code));
+    this.home?.setError(this.errText(code));
   }
 
   private onConnState(st: ConnState): void {
@@ -284,8 +452,12 @@ export class OnlineController {
     this.home = null;
     if (!this.lobby || !this.lobby.el.isConnected) {
       const s = this.settings;
+      this.stopDiscover?.();
+      this.stopDiscover = null;
       this.lobby = buildLobby({
         code: this.room.code,
+        join: this.net === 'local' ? this.joinCard(this.room.code) : null,
+        onQr: () => this.showQr(),
         avatars: s.avatars !== false,
         myId: this.pid,
         presetName: (mode, rules) => presetName(allPresets(), RULE_SETTINGS, rules, mode),
@@ -379,6 +551,28 @@ export class OnlineController {
     this.closeSheet = this.deps.overlay.openModal(card);
   }
 
+  /** host: its own address; Wi-Fi joiner: the host's; Bluetooth joiner: none (no address to share) */
+  private joinCard(code: string): { url: string; qr: string } | null {
+    const url = this.role === 'host' ? this.local.joinUrl(code) : this.role === 'join' ? (this.joinAt ? `${this.joinAt}/?sala=${code}` : null) : shareLink(code);
+    return url ? { url, qr: qrSvg(url, { label: t('local.scanQr') }) } : null;
+  }
+
+  /** the join QR, big (a sheet: a tap, Esc or Android back closes it) */
+  private showQr(): void {
+    const code = this.room?.code;
+    const join = code ? this.joinCard(code) : null;
+    if (!join) return;
+    this.closeSheet?.();
+    const done = () => {
+      close();
+      if (this.closeSheet === done) this.closeSheet = null;
+    };
+    const card = buildQrCard({ ...join, onClose: done });
+    const close = this.deps.overlay.openModal(card);
+    card.parentElement?.addEventListener('click', (e) => e.target === card.parentElement && done());
+    this.closeSheet = done;
+  }
+
   private async share(): Promise<void> {
     const code = this.room?.code;
     if (!code) return;
@@ -409,7 +603,7 @@ export class OnlineController {
   private async confirmLeave(): Promise<void> {
     const ok = await confirmDialog(this.deps.overlay, {
       title: t('lobby.leaveTitle'),
-      body: this.mode === 'game' && !this.mirror?.over ? t('lobby.leaveBodyGame') : t('lobby.leaveBody'),
+      body: this.role === 'host' ? t('local.leaveHost') : this.mode === 'game' && !this.mirror?.over ? t('lobby.leaveBodyGame') : t('lobby.leaveBody'),
       ok: t('lobby.leaveOk'),
       cancel: t('common.cancel'),
       danger: true,
@@ -433,6 +627,14 @@ export class OnlineController {
   private teardownRoom(): void {
     this.client?.stop();
     this.client = null;
+    this.stopDiscover?.();
+    this.stopDiscover = null;
+    if (this.role === 'host') void this.local.stopHosting();
+    if (this.role === 'join') this.local.leaveJoined();
+    this.role = null;
+    this.joinAt = null;
+    this.joinTarget = null;
+    this.hostBe = null;
     if (this.mode === 'game') this.leaveGameUi();
     this.closeSheet?.();
     this.closeSheet = null;
@@ -1373,6 +1575,12 @@ export class OnlineController {
   // ───────────────────────── app lifecycle ─────────────────────────
 
   private onVisibility = (): void => {
+    if (!document.hidden) {
+      this.local.wake();
+      // back from Android's settings (Location / Bluetooth): look again, announce again
+      if (this.nativeLocal && this.mode === 'home') void this.startDiscovery();
+      if (this.role === 'host' && this.room?.code) this.local.announce(this.room.code);
+    }
     if (!this.client) return;
     if (document.hidden) {
       this.hiddenAt = Date.now();
