@@ -96,6 +96,18 @@ export function modeView(def: ModeDef, descriptors: SettingDescriptor[]): HTMLEl
 /** the read-only view in a sheet (pause menu, Sala): title, the view, a close button */
 export function rulesSheet(def: ModeDef, title: string, descriptors: SettingDescriptor[], onClose: () => void): HTMLElement {
   const close = h('button.btn.primary.mv-close', { type: 'button' }, t('modes.close'));
-  close.addEventListener('click', onClose);
-  return h('div.card.sheet.mv-sheet', h('h2.card-title', title), h('div.mv-scroll', modeView(def, descriptors)), close);
+  // Esc / Android back close this sheet first (not the pause menu under it)
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' && e.key !== 'GoBack' && e.key !== 'BrowserBack') return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    done();
+  };
+  const done = () => {
+    window.removeEventListener('keydown', onKey, true);
+    onClose();
+  };
+  window.addEventListener('keydown', onKey, true);
+  close.addEventListener('click', done);
+  return h('div.mv-sheet-wrap', h('div.mv-sheet', h('h2.mv-sheet-title', title), h('div.mv-scroll', modeView(def, descriptors)), close));
 }

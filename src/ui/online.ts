@@ -453,6 +453,10 @@ export function buildLobby(o: LobbyOpts): Lobby {
       // team-0 is always MY team (as on the offline screen), team-1 the rivals
       const rel = team === null ? null : team === (myTeam ?? 0) ? 0 : 1;
       el.b.className = `ng-seat pos-${POS[pos as 0 | 1 | 2 | 3]} ${side} occ-${occ.kind}${mine ? ' me' : ''}${rel !== null ? ` team-${rel}` : ''}`;
+      // one order for every device: by server seat; with teams, team A's seats then team B's (each by seat).
+      // The halves' colours follow (my team teal) without moving anybody.
+      const tms = teamsFor(room);
+      el.b.style.order = String(tms ? (tms[0].includes(s) ? 0 : 10) + (tms[0].includes(s) ? tms[0] : tms[1]).indexOf(s) : s);
       if (occ.kind === 'human') {
         el.face.replaceChildren(o.avatars ? staticFace(occ.face, 'idle') : h('span.ng-letter', occupantName(occ).slice(0, 1).toUpperCase()));
         el.name.textContent = occupantName(occ);
@@ -533,6 +537,9 @@ export function buildLobby(o: LobbyOpts): Lobby {
       modeRow.replaceChildren(rulesLine, ...(copyBtn ? [copyBtn] : []), h('div.ng-lines', h('div.ng-line', players), h('div.ng-line.ng-seating', teamsSeg)));
     }
     felt.classList.toggle('partners', !!teamsFor(room));
+    // my team is team B: its half (the second one) is the teal one
+    const tmsNow = teamsFor(room);
+    felt.classList.toggle('mine-second', !!tmsNow && me.seat !== null && tmsNow[1].includes(me.seat));
     const clock = sanitizeClock(room.clock);
     clockHost.el.hidden = !me.isHost;
     clockGuest.el.hidden = me.isHost;
