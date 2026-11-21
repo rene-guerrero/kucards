@@ -4,12 +4,16 @@
  */
 import type { AppSettings, Lineup, MatchState, Seat, SeatPlate } from '../contracts';
 import { playSfx, setAudioPrefs, setMusicMode } from '../audio/sfx';
-import { engine, giveOptions } from '../engine';
+import { engine, giveOptions, multiPlayOptions } from '../engine';
 import { character, DEFAULT_LINEUP } from '../roster';
 import { AvatarController, humanFace } from '../ui/avatarAdapter';
 import { ChatButton, sanitizeGestures } from '../ui/chat';
 import { Hud, type HudPlayer } from '../ui/hud';
-import { t } from '../ui/i18n';
+import { loc, t } from '../ui/i18n';
+import { rulesSheet } from '../ui/modeView';
+import { matchModeDef } from './customModes';
+import { RULE_PRESETS, RULE_SETTINGS } from '../engine/rules';
+import { descriptorsForMode } from '../ui/settings';
 import { phraseText } from '../ui/online';
 import type { Overlay } from '../ui/overlay';
 import { bubbleFor, SeatPlates } from '../ui/plates';
@@ -79,9 +83,11 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
           closePause();
           deps.openScreen('settings');
         },
-        onHowto: () => {
-          closePause();
-          deps.openScreen('howto');
+        onRules: () => {
+          // the mode's rules, read-only, over the pause menu
+          const label = loc(RULE_PRESETS.find((p) => p.id === match.mode)?.label ?? { es: '', en: '' });
+          const def = matchModeDef(match, label);
+          const close = overlay.openModal(rulesSheet(def, match.custom?.name ?? label, descriptorsForMode(RULE_SETTINGS, def.base), () => close()));
         },
         onQuit: () => {
           closePause();
@@ -115,6 +121,7 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
     seats: match.seats,
     onSfx: playSfx,
     onSeatMark: (s, img, tint) => plates.mark(s, img, tint),
+    onChallenge: (st) => plates.challenge(st),
     onPlates: (list: readonly SeatPlate[]) => {
       plates.update(list.map((p) => ({ ...p, team: teamOf(p.seat) })));
       hud.placeKu(list.find((p) => p.seat === 0), innerWidth, innerHeight);
@@ -158,6 +165,7 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
     pace: fast ? 0.6 : 1,
     save: saveGame,
     giveOptions,
+    multiPlayOptions,
     clearSave,
     onExit: () => {
       session.dispose();

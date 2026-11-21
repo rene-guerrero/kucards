@@ -7,7 +7,7 @@ import type { FaceSpec } from 'kuavatars/faces';
  */
 import type { GameMode, RuleSettings, Seat } from '../contracts';
 import type { PublicRoom, QuickPhraseId, SeatOccupant } from '../net/protocol';
-import { activeSeatsOf, MAX_NAME_LENGTH, QUICK_PHRASES, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '../net/protocol';
+import { activeSeatsOf, teamsFor, MAX_NAME_LENGTH, QUICK_PHRASES, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '../net/protocol';
 import { Perspective } from '../net/perspective';
 import { displayCode, filterCodeChars } from '../net/identity';
 import { character, ROSTER } from '../roster';
@@ -16,7 +16,11 @@ import { loc, t, type Key } from './i18n';
 import { btn, ICONS, segmented } from './overlay';
 import { screenHeader } from './howto';
 import { staticFace } from './avatarAdapter';
-import { clockPicker, levelBadge } from './newgame';
+import { clockPicker, levelBadge, seatMeta } from './newgame';
+import { ruleSelect } from './settings';
+import { modeChoices, modeSelect } from './modeSelect';
+import { customMode } from '../app/customModes';
+import type { ModeDef } from '../engine/modes';
 import { sanitizeClock, type ClockSettings } from '../engine/clock';
 import { audioToggle, type AudioKey } from './summary';
 
@@ -283,8 +287,8 @@ export function buildOnlineHome(o: OnlineHomeOpts): OnlineHome {
       'div.scroll.oh-scroll',
       h(
         'div.oh-body',
-        h('p.oh-intro', t(o.local ? 'local.intro' : 'online.intro')),
-        o.local ? h('p.oh-intro.oh-note', t('local.sameWifi')) : null,
+        o.local ? h('p.oh-intro', t('local.intro')) : null,
+        // (the intro says it all: no extra Wi-Fi note)
         who,
         create,
         resume,
@@ -322,6 +326,12 @@ export function buildOnlineHome(o: OnlineHomeOpts): OnlineHome {
 
 export interface LobbyOpts {
   code: string;
+  /** host: play one of their player-made modes */
+  onCustom?(def: ModeDef): void;
+  /** guest: save the room's player-made mode to their own modes */
+  onCopyMode?(def: ModeDef): void;
+  /** anyone: the room mode's rules, read-only */
+  onShowRules?(): void;
   /** local play: the link other devices open (as a QR, an SVG string) */
   join?: { url: string; qr: string } | null;
   /** show the QR big (a sheet: a tap, Esc or Android back closes it) */
@@ -369,28 +379,8 @@ export function buildLobby(o: LobbyOpts): Lobby {
     return { b, face, name, meta, serverSeat: 0 as Seat };
   });
   seatEls.forEach((s) => s.b.addEventListener('click', () => o.onSeat(s.serverSeat)));
-  const fitFelt = () => {
-    const box = felt.parentElement;
-    if (!box) return;
-    const W = box.clientWidth;
-    const H = box.clientHeight;
-    if (W < 20 || H < 20) return;
-    const aspect = Math.max(0.72, Math.min(1.35, W / H));
-    let w = Math.min(W, 560);
-    let hh = w / aspect;
-    if (hh > H) {
-      hh = H;
-      w = hh * aspect;
-    }
-    felt.style.width = `${Math.round(w)}px`;
-    felt.style.height = `${Math.round(hh)}px`;
-  };
+  // the seats are a lineup sized by CSS (the same as the offline new-game screen)
   const feltBox = h('div.ng-felt-box.lobby-felt-box', felt);
-  const ro = new ResizeObserver(() => {
-    if (!felt.isConnected) return void ro.disconnect();
-    fitFelt();
-  });
-  ro.observe(feltBox);
 
   const share = btn(t('lobby.share'), o.onShare, 'secondary lobby-share', icon(ONLINE_ICONS.share));
   share.setAttribute('aria-label', t('lobby.share'));
@@ -423,20 +413,22 @@ export function buildLobby(o: LobbyOpts): Lobby {
 
   const modeRow = h('div.ng-mode.lobby-mode');
   const status = h('p.lobby-status');
-  const rulesValue = h('span.preset-v');
-  const rulesLink = h('button.link-btn', { type: 'button' }, t('newgame.changeRules'));
-  rulesLink.addEventListener('click', o.onRules);
-  const rulesDot = h('span.ng-dot', '·');
-  const rulesLine = h('div.ng-rules', h('span.preset-k', `${t('newgame.rules')}:`), rulesValue, rulesDot, rulesLink);
   const start = btn(t('lobby.start'), o.onStart, 'primary lobby-start', icon(ICONS.play));
   const wait = h('p.lobby-wait', h('span.lobby-wait-dot'), t('lobby.waitHost'));
   const clockHost = clockPicker(o.onClock);
   const clockGuest = clockPicker(null);
-  const foot = h('div.ng-foot.lobby-foot', rulesLine, clockHost.el, clockGuest.el, status, start, wait);
+  // the footer sits outside the scroll area: always at the bottom of the screen
+  const foot = h('div.lb-foot', h('div.lb-foot-inner', clockHost.el, clockGuest.el, status, start, wait));
 
   let lastModeKey = '';
   let lastClockKey = '';
-  const el = h('section.screen.panel-screen.newgame.ng2.lobby', screenHeader(t('lobby.title'), o.onLeave), h('div.ng-body', h('div.ng-left', modeRow, feltBox), h('div.ng-right', codeCard, joinCard, foot)));
+  // one column on phones (code, controls, seats); two on wide screens (controls + seats | code + QR)
+  const el = h(
+    'section.screen.panel-screen.newgame.lobby.lb',
+    screenHeader(t('lobby.title'), o.onLeave),
+    h('div.lb-scroll', h('div.lb-grid', h('div.lb-top', codeCard, joinCard), h('div.lb-main', modeRow, feltBox))),
+    foot,
+  );
 
   const update = (room: PublicRoom, me: { seat: Seat | null; isHost: boolean }) => {
     const act = activeSeatsOf(room);
@@ -454,7 +446,9 @@ export function buildLobby(o: LobbyOpts): Lobby {
       const mine = occ.kind === 'human' && occ.playerId === o.myId;
       const team = teamOfSeat(room, s);
       const side = team === null ? (mine ? 'us' : 'them') : team === (myTeam ?? 0) ? 'us' : 'them';
-      el.b.className = `ng-seat pos-${POS[pos as 0 | 1 | 2 | 3]} ${side} occ-${occ.kind}${mine ? ' me' : ''}${team !== null ? ` team-${team}` : ''}`;
+      // team-0 is always MY team (as on the offline screen), team-1 the rivals
+      const rel = team === null ? null : team === (myTeam ?? 0) ? 0 : 1;
+      el.b.className = `ng-seat pos-${POS[pos as 0 | 1 | 2 | 3]} ${side} occ-${occ.kind}${mine ? ' me' : ''}${rel !== null ? ` team-${rel}` : ''}`;
       if (occ.kind === 'human') {
         el.face.replaceChildren(o.avatars ? staticFace(occ.face, 'idle') : h('span.ng-letter', occupantName(occ).slice(0, 1).toUpperCase()));
         el.name.textContent = occupantName(occ);
@@ -470,7 +464,8 @@ export function buildLobby(o: LobbyOpts): Lobby {
         const c = character(occ.characterId);
         el.face.replaceChildren(o.avatars ? staticFace(c.face, 'idle') : h('span.ng-letter', c.name.slice(0, 1)));
         el.name.textContent = c.name;
-        el.meta.replaceChildren(levelBadge(c));
+        const role = team === null ? null : team === (myTeam ?? 0) ? t(c.fem ? 'role.partnerF' : 'role.partner') : t('role.rival');
+        el.meta.replaceChildren(seatMeta(c, role));
         el.b.setAttribute('aria-label', `${c.name}, ${t(`level.${c.level}` as Key)}`);
         el.b.disabled = false;
       } else {
@@ -481,51 +476,59 @@ export function buildLobby(o: LobbyOpts): Lobby {
         el.b.disabled = false;
       }
     }
-    const tp = !!room.teamPlay && room.playerCount === 4 && room.mode !== 'sideBySide';
-    const modeKey = `${me.isHost}|${room.mode}|${room.playerCount}|${tp}`;
+    const tp = !!room.teamPlay && room.playerCount === 4 && (room.custom ? room.custom.teams === 'optional' : room.mode !== 'sideBySide');
+    const modeKey = `${me.isHost}|${room.mode}|${room.playerCount}|${tp}|${o.presetName(room.mode, room.rules)}|${room.custom?.id ?? ''}|${room.custom && customMode(room.custom.id) ? 1 : 0}`;
     if (modeKey !== lastModeKey) {
       lastModeKey = modeKey;
-      if (me.isHost) {
-        const modeSeg = segmented<GameMode>(
-          MODES.map((m) => ({ value: m, label: t(`mode.${m}` as Key) })),
-          room.mode,
-          (v) => o.onMode(v, v === 'sideBySide' || room.mode === 'sideBySide' ? 4 : room.playerCount, tp),
-          t('newgame.mode'),
-        );
-        modeSeg.classList.add('seg-mode');
-        const extra =
-          room.mode === 'sideBySide'
-            ? h('div.ng-opp', h('span.ng-opp-label', t('newgame.fixed4')))
-            : h(
-                'div.ng-opp',
-                h('span.ng-opp-label', t('newgame.players')),
-                segmented<number>([2, 3, 4].map((n) => ({ value: n, label: String(n) })), room.playerCount, (v) => o.onMode(room.mode, v, tp), t('newgame.players')),
-              );
-        const teamsRow =
-          room.mode !== 'sideBySide' && room.playerCount === 4
-            ? h(
-                'div.ng-opp',
-                h('span.ng-opp-label', t('newgame.teams')),
-                segmented<string>(
-                  [
-                    { value: 'ffa', label: t('newgame.ffa') },
-                    { value: 'teams', label: t('newgame.teams2v2') },
-                  ],
-                  tp ? 'teams' : 'ffa',
-                  (v) => o.onMode(room.mode, 4, v === 'teams'),
-                  t('newgame.teams'),
-                ),
-              )
-            : null;
-        modeRow.replaceChildren(modeSeg, extra, ...(teamsRow ? [teamsRow] : []));
-      } else {
-        const label = `${t(`mode.${room.mode}` as Key)} · ${room.mode === 'sideBySide' ? '2 vs 2' : tp ? t('newgame.teams2v2') : room.playerCount}`;
-        modeRow.replaceChildren(h('span.lobby-mode-label', label));
-      }
+      // the same controls as the offline new-game screen (guests see them disabled)
+      const host = me.isHost;
+      const side = room.custom ? room.custom.teams === 'always' : room.mode === 'sideBySide';
+      // the shared game-mode dropdown; a room's player-made mode is listed even if this player lacks it
+      const choices = modeChoices();
+      if (room.custom && !choices.some((c) => c.id === room.custom!.id)) choices.push({ id: room.custom.id, label: room.custom.name, icon: room.custom.icon, custom: true });
+      const rules = modeSelect({
+        current: room.custom?.id ?? room.mode,
+        currentLabel: room.custom ? room.custom.name : o.presetName(room.mode, room.rules),
+        choices,
+        onPick: (id) => {
+          const own = customMode(id);
+          if (own) o.onCustom?.(own);
+          else if (id === room.custom?.id) return;
+          else o.onMode(id as GameMode, id === 'sideBySide' || side ? 4 : room.playerCount, tp);
+        },
+      });
+      const gear = h('button.icon-btn.rsel-act', { type: 'button', 'aria-label': t('newgame.changeRules'), title: t('newgame.changeRules'), html: ICONS.gear });
+      gear.addEventListener('click', o.onRules);
+      const word = t('newgame.players').toLocaleLowerCase();
+      const players = h(
+        'div.ng-players',
+        ruleSelect([2, 3, 4].map((n) => ({ label: `${n} ${word}`, on: n === (side ? 4 : room.playerCount), pick: () => o.onMode(room.mode, n, tp) })), t('newgame.players'), 'soft'),
+      );
+      const teamsSeg = segmented<string>(
+        [
+          { value: 'ffa', label: t('newgame.ffa') },
+          { value: 'teams', label: t('newgame.teams2v2') },
+        ],
+        side || tp ? 'teams' : 'ffa',
+        (v) => o.onMode(room.mode, 4, v === 'teams'),
+        t('newgame.teams'),
+      );
+      const teamsLocked = !host || side || room.playerCount !== 4;
+      teamsSeg.classList.toggle('is-disabled', teamsLocked);
+      teamsSeg.querySelectorAll<HTMLButtonElement>('.seg-opt').forEach((b) => (b.disabled = teamsLocked));
+      players.classList.toggle('is-disabled', !host || side);
+      players.querySelector<HTMLButtonElement>('.rsel-btn')?.toggleAttribute('disabled', !host || side);
+      // everyone can read the mode's rules (read-only sheet)
+      const view = h('button.icon-btn.rsel-act', { type: 'button', 'aria-label': t('modes.rules'), title: t('modes.rules'), html: ICONS.book });
+      view.addEventListener('click', () => o.onShowRules?.());
+      const rulesLine = h('div.rsel-line.ng-rsel', h('div.rsel-slot', rules), view, host ? gear : null);
+      rulesLine.classList.toggle('is-disabled', !host);
+      rules.querySelector<HTMLButtonElement>('.rsel-btn')?.toggleAttribute('disabled', !host);
+      // a player-made mode this player doesn't have: save a copy
+      const copyBtn = room.custom && !customMode(room.custom.id) ? btn(t('modes.copy'), () => o.onCopyMode?.(room.custom!), 'secondary lb-copy', icon(ONLINE_ICONS.plus)) : null;
+      modeRow.replaceChildren(rulesLine, ...(copyBtn ? [copyBtn] : []), h('div.ng-lines', h('div.ng-line', players), h('div.ng-line.ng-seating', teamsSeg)));
     }
-    rulesValue.textContent = o.presetName(room.mode, room.rules);
-    rulesLink.hidden = !me.isHost;
-    rulesDot.hidden = !me.isHost;
+    felt.classList.toggle('partners', !!teamsFor(room));
     const clock = sanitizeClock(room.clock);
     clockHost.el.hidden = !me.isHost;
     clockGuest.el.hidden = me.isHost;
@@ -533,7 +536,7 @@ export function buildLobby(o: LobbyOpts): Lobby {
     if (clockKey !== lastClockKey) (me.isHost ? clockHost : clockGuest).render(clock);
     lastClockKey = clockKey;
     const humans = act.filter((s) => room.seats[s]?.kind === 'human').length;
-    status.textContent = `${humans === 1 ? t('lobby.players1') : t('lobby.players', { n: humans, total: act.length })} · ${t('lobby.cpuNote')}`;
+    status.hidden = true; // no explanation line (the seats show who's there)
     start.hidden = !me.isHost;
     start.disabled = humans === 0;
     wait.hidden = me.isHost;
@@ -624,7 +627,7 @@ export function buildRulesSheet(o: { options: { label: string; selected: boolean
 
 // ───────────────────────── in-game menu ─────────────────────────
 
-export function buildOnlinePause(o: { audio: Record<AudioKey, boolean>; onAudio(key: AudioKey, on: boolean): void; onResume(): void; onLeave(): void }): HTMLElement {
+export function buildOnlinePause(o: { audio: Record<AudioKey, boolean>; onAudio(key: AudioKey, on: boolean): void; onResume(): void; onLeave(): void; onRules?(): void }): HTMLElement {
   const resume = btn(t('online.backToGame'), o.onResume, 'primary lg', icon(ICONS.play));
   resume.dataset.autofocus = '';
   const canVibrate = typeof navigator.vibrate === 'function';
@@ -636,6 +639,7 @@ export function buildOnlinePause(o: { audio: Record<AudioKey, boolean>; onAudio(
       'div.stack',
       resume,
       h('div.pause-row', audioToggle('sound', o.audio.sound, o.onAudio), audioToggle('voice', o.audio.voice, o.onAudio), audioToggle('music', o.audio.music, o.onAudio), canVibrate ? audioToggle('vibration', o.audio.vibration, o.onAudio) : null),
+      o.onRules ? btn(t('modes.rules'), o.onRules, 'secondary', icon(ICONS.book)) : null,
       btn(t('online.leave'), o.onLeave, 'ghost', icon(ONLINE_ICONS.exit)),
     ),
   );

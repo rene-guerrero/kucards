@@ -101,7 +101,7 @@ const DEFAULT_DRAW: Record<string, number | undefined> = { draw1: 1, draw2: 2, w
 export type AtlasFace = Omit<CardFace, 'color'> & { color: AnyColor | null; tint?: AnyColor; night?: boolean };
 
 /** wild-type kinds whose player picks a colour (the played card takes it as its field) */
-export const TINTABLE: readonly CardKind[] = ['wild', 'wild4', 'swap', 'draw10', 'wildColor'];
+export const TINTABLE: readonly CardKind[] = ['wild', 'wild4', 'swap', 'draw10', 'wildColor', 'wildFlip', 'sweepWild'];
 
 /** the face to show for a card on the pile: wild-type cards take the chosen colour, others stay as they are */
 export function playedFace(f: AtlasFace, chosen: AnyColor | null | undefined): AtlasFace {
@@ -140,6 +140,7 @@ export function baseFaces(): AtlasFace[] {
   const nightWilds: AtlasFace[] = [{ kind: 'wild', color: null, night: true }, { kind: 'wild4', color: null, draw: 6, night: true }];
   out.push(...nightWilds, { kind: 'flip', color: null, night: true });
   for (const f of nightWilds) for (const c of NIGHT_COLORS) out.push({ ...f, tint: c });
+  // player-made decks' extra cards (the wild Eclipse, the wild sweep, night shields …) get a cell on first use
   return out;
 }
 
@@ -184,8 +185,20 @@ export class FaceMap {
     const k = this.keys.get(faceKey(f));
     if (k !== undefined) return { i: k, added: false };
     if (this.faces.length < ATLAS_CELLS) return { i: this.add(f), added: true };
-    const base = this.keys.get(faceKey({ kind: f.kind, color: f.color, value: f.value, tint: f.tint, night: f.night })) ?? 0;
-    return { i: base, added: false };
+    // atlas full (a player-made deck with many odd faces): the nearest face that has a cell
+    const nightCol = isNightColor(f.color) ? f.color : null;
+    const dayCol = nightCol ? COLORS[NIGHT_COLORS.indexOf(nightCol)] : f.color;
+    const near: AtlasFace[] = [
+      { kind: f.kind, color: f.color, value: f.value, tint: f.tint, night: f.night },
+      { kind: f.kind, color: f.color, value: f.value, night: f.night },
+      { kind: f.kind, color: dayCol, value: f.value },
+      f.color === null ? { kind: 'wild', color: null, tint: f.tint, night: f.night } : { kind: 'number', color: f.color, value: 0 },
+    ];
+    for (const g of near) {
+      const k2 = this.keys.get(faceKey(g));
+      if (k2 !== undefined) return { i: k2, added: false };
+    }
+    return { i: 0, added: false };
   }
 }
 
@@ -296,6 +309,12 @@ function drawSymbol(g: G, c: AnyColor, fill: string, vein = CREAM): void {
   }
 }
 
+/** mirror glyph: a path comes in from the top left, hits the bar (the mirror) and bounces back; `MIRROR_HEAD` is the arrowhead of the leg going out. The same paths as in src/ui/cardArt.ts */
+const MIRROR_BOUNCE = 'M4.8 4.8 16.8 12 8 17.4';
+const MIRROR_HEAD = 'M4.4 19.6 9.55 19.98 6.43 14.86Z';
+const MIRROR_BAR = 'M20 3.6v16.8';
+/** skipAll glyph: four arcs of a ring (top, right, bottom, left); the same path as in src/ui/cardArt.ts */
+const SKIP_ALL_RING = 'M7.31 3.17A10 10 0 0 1 16.69 3.17M20.83 7.31A10 10 0 0 1 20.83 16.69M16.69 20.83A10 10 0 0 1 7.31 20.83M3.17 16.69A10 10 0 0 1 3.17 7.31';
 /** action glyphs, 24×24 box (stroke `col`); returns false when the kind has no glyph */
 function drawGlyph(g: G, kind: CardKind, col: string, isIndex = col === CREAM): boolean {
   g.strokeStyle = col;
@@ -325,9 +344,17 @@ function drawGlyph(g: G, kind: CardKind, col: string, isIndex = col === CREAM): 
       g.stroke(P('M8.6 12l2.4 2.4 4.4-4.6'));
       return true;
     case 'mirror':
-      g.stroke(P('M12 3v18M8 7 4 12l4 5M16 7l4 5-4 5'));
+      // reflect: a thick bar (the mirror) and an arrow that comes in at an angle and bounces back off it
+      g.lineWidth = 3.4;
+      g.stroke(P(MIRROR_BAR));
+      g.lineWidth = 2.6;
+      g.stroke(P(MIRROR_BOUNCE));
+      g.lineWidth = 1.2;
+      g.fill(P(MIRROR_HEAD));
+      g.stroke(P(MIRROR_HEAD));
       return true;
-    case 'sweep': {
+    case 'sweep':
+    case 'sweepWild': {
       // the hand, fanned out, goes down onto the pile. On the capsule (deep colour): four cards, a curved
       // arrow and a short stack (top card and two edges); as the ivory corner index: three cards over a plain down arrow.
       const small = isIndex;
@@ -364,21 +391,20 @@ function drawGlyph(g: G, kind: CardKind, col: string, isIndex = col === CREAM): 
       g.fill();
       return true;
     case 'flip':
+    case 'wildFlip':
       g.beginPath();
       g.arc(12, 12, 8, 0, Math.PI * 2);
       g.stroke();
       g.fill(P('M12 4a8 8 0 0 1 0 16z'));
       return true;
     case 'skipAll':
-      // a ring of four short bars around a centre dot: everybody stops
+      // a small "no" sign inside a broken ring of four arcs: the stop goes out to every side
       g.beginPath();
-      g.arc(12, 12, 8.4, 0, Math.PI * 2);
+      g.arc(12, 12, 5.4, 0, Math.PI * 2);
       g.stroke();
+      g.stroke(P('M8.2 15.8 15.8 8.2'));
       g.lineWidth = 2.2;
-      g.stroke(P('M12 5.6v3M12 15.4v3M5.6 12h3M15.4 12h3'));
-      g.beginPath();
-      g.arc(12, 12, 1.8, 0, Math.PI * 2);
-      g.fill();
+      g.stroke(P(SKIP_ALL_RING));
       return true;
     case 'wildColor':
       // a drop falling into a cup of stacked lines: draw until the colour comes

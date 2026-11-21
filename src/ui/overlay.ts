@@ -41,7 +41,19 @@ export class Overlay {
     }
     if (el) {
       el.classList.add('entering');
-      el.addEventListener('animationend', () => el.classList.remove('entering'), { once: true });
+      // only the screen's own fade-in ends it (a child's animation bubbles up too); a timer backs it up, so
+      // a paused animation (hidden tab, power saving) never leaves the screen half transparent
+      const entered = () => el.classList.remove('entering');
+      const onEnd = (e: AnimationEvent) => {
+        if (e.target !== el) return;
+        el.removeEventListener('animationend', onEnd);
+        entered();
+      };
+      el.addEventListener('animationend', onEnd);
+      setTimeout(() => {
+        el.removeEventListener('animationend', onEnd);
+        entered();
+      }, 500);
       this.screenLayer.append(el);
       focusFirst(el);
     }
@@ -92,7 +104,50 @@ function focusFirst(el: HTMLElement) {
 export function btn(label: string, onClick: () => void, cls = '', extra?: Node): HTMLButtonElement {
   const b = h('button.btn', { type: 'button', class: cls }, h('span.btn-label', label), extra ?? null);
   b.addEventListener('click', onClick);
+  fitButton(b);
   return b;
+}
+
+/**
+ * Responsive button (any button with a `.btn-label`, optionally a `.btn-icon`): a label that doesn't fit is
+ * cut with an ellipsis (CSS); when even that would leave only a few letters and there is an icon, the button
+ * shows just the icon (`.icon-only`) and the label moves to aria-label / title. One shared ResizeObserver.
+ */
+export function fitButton(b: HTMLElement): void {
+  const label = b.querySelector<HTMLElement>('.btn-label');
+  if (!label) return;
+  if (!b.getAttribute('aria-label')) b.setAttribute('aria-label', label.textContent ?? '');
+  if (typeof ResizeObserver === 'undefined') return; // node tests / very old WebViews: ellipsis only
+  fitObserver().observe(b);
+}
+
+let fitRO: ResizeObserver | null = null;
+const MIN_LABEL_PX = 46;
+function fitObserver(): ResizeObserver {
+  if (fitRO) return fitRO;
+  const check = (b: HTMLElement) => {
+    const label = b.querySelector<HTMLElement>('.btn-label');
+    // an icon a narrow-screen rule hides doesn't count (icon-only would leave the button blank)
+    const ic = b.querySelector<HTMLElement>('.btn-icon');
+    const icon = ic && (b.classList.contains('icon-only') || getComputedStyle(ic).display !== 'none') ? ic : null;
+    if (!label) return;
+    const cs = getComputedStyle(b);
+    const inner = b.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const gap = parseFloat(cs.columnGap) || 0;
+    // the label's natural width, measured while it is shown (kept for when it is hidden)
+    if (!b.classList.contains('icon-only')) b.dataset.labelW = String(label.scrollWidth);
+    const need = Number(b.dataset.labelW || label.scrollWidth);
+    const room = inner - (icon ? icon.offsetWidth + gap : 0);
+    // a margin before switching back, so the padding change can't make it flip back and forth
+    const was = b.classList.contains('icon-only');
+    const iconOnly = !!icon && need > room && room < MIN_LABEL_PX + (was ? 20 : 0);
+    b.classList.toggle('icon-only', iconOnly);
+    b.title = iconOnly || need > room ? label.textContent ?? '' : '';
+  };
+  fitRO = new ResizeObserver((entries) => {
+    for (const e of entries) check(e.target as HTMLElement);
+  });
+  return fitRO;
 }
 
 export function iconBtn(icon: string, label: string, onClick: () => void, cls = ''): HTMLButtonElement {

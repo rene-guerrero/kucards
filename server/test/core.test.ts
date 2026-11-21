@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Card, GameEvent, GameMode, Move, RuleSettings, Seat } from '../../src/contracts';
-import { visibleHands } from '../../src/engine/game';
+import { multiPlayOptions, visibleHands } from '../../src/engine/game';
 import { PROTOCOL_VERSION, type ServerMsg } from '../../src/net/protocol';
 import { normalizeRules } from '../../src/net/room/lobby';
 import { RoomCore, type Attachment, type CoreIO, type Tunables } from '../../src/net/room/core';
@@ -89,7 +89,7 @@ function checkNoLeak(msg: ServerMsg, seat: Seat, seen: Seat[], roundOverHands: b
 }
 
 /** play a whole match: humans answer from their latest 'turn' (random legal move), or idle */
-function playMatch(mode: GameMode, rules: Partial<RuleSettings>, humans: number, opts: { idle?: boolean; seed?: number; count?: number } = {}) {
+function playMatch(mode: GameMode, rules: Partial<RuleSettings>, humans: number, opts: { idle?: boolean; seed?: number; count?: number; multi?: boolean } = {}) {
   const t = rig(opts.seed ?? 7);
   const pids = Array.from({ length: humans }, (_, i) => `pid-${i + 1}`);
   const socks = pids.map((p) => t.join(p));
@@ -123,7 +123,12 @@ function playMatch(mode: GameMode, rules: Partial<RuleSettings>, humans: number,
       read[i] = msgs.length;
       const last = [...msgs].reverse().find((m) => m.t === 'turn') as Extract<ServerMsg, { t: 'turn' }> | undefined;
       if (last && last.legal.length && rnd() < 0.7) {
-        const mv: Move = last.legal[Math.floor(rnd() * last.legal.length)];
+        let mv: Move = last.legal[Math.floor(rnd() * last.legal.length)];
+        // multiPlay: add every card that may join (checked against the room's match, as the server does)
+        if (opts.multi && mv.kind === 'play') {
+          const extra = multiPlayOptions(core.data!.match!, mv);
+          if (extra.length) mv = { ...mv, extra };
+        }
         t.send(socks[i], { t: 'move', move: mv });
         moves++;
       }
@@ -152,6 +157,27 @@ describe('room core: whole matches', () => {
     // the matches went through response windows and out-of-turn play
     console.log('event kinds seen:', [...kinds].sort().join(' '));
     expect(kinds.has('window:penalty') || kinds.has('window:ku')).toBe(true);
+  });
+
+  it('multiPlay and numberFinish: humans play same numbers together, CPUs too', () => {
+    let multis = 0;
+    for (const seed of [2, 13, 29]) {
+      const r = playMatch('classic', { target: 0, multiPlay: true, numberFinish: true, kuCall: true }, 2, { seed, multi: true });
+      expect(r.core.data!.phase).toBe('finished');
+      expect(r.core.data!.match!.rules.multiPlay).toBe(true);
+      multis += r.socks[0].inbox.filter((m) => m.t === 'events' && m.events.some((e) => e.type === 'play' && e.more)).length;
+    }
+    expect(multis).toBeGreaterThan(0);
+  });
+
+  it('multiDraw2 / multiReverse / multiSkip: humans and CPUs play several action cards of one kind', () => {
+    let multis = 0;
+    for (const seed of [4, 17, 31]) {
+      const r = playMatch('action', { target: 0, multiDraw2: true, multiReverse: true, multiSkip: true, numberFinish: seed === 17, kuCall: true, stacking: 'any' }, 2, { seed, multi: true });
+      expect(r.core.data!.phase).toBe('finished');
+      multis += r.socks[0].inbox.filter((m) => m.t === 'events' && m.events.some((e) => e.type === 'play' && e.more && e.card.face.kind !== 'number')).length;
+    }
+    expect(multis).toBeGreaterThan(0);
   });
 
   it('cyclone (stacking, eliminations) with 3 players', () => {

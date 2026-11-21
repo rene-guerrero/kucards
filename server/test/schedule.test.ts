@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { MatchState } from '../../src/contracts';
 import { createMatch, legalMoves, startRound } from '../../src/engine/game';
 import { RULE_PRESETS } from '../../src/engine/rules';
+import { card, num, scenario } from '../../src/engine/testutil';
 import { tunables } from '../src/config';
 import { cpuTurnMove, isTurnMove, reactDelay, thinkDelay, validMove } from '../../src/net/room/game';
 import { clearGameTimer, emptySchedule, nextAlarm, setGameTimer, setTimer, takeDue } from '../../src/net/room/schedule';
@@ -84,6 +85,43 @@ describe('cpu and validation', () => {
       expect((v as { give?: number }).give).toBeUndefined();
       expect((v as { extra?: string }).extra).toBeUndefined();
     }
+  });
+
+  it('validMove checks multiPlay extras like the engine (rule, same number, in hand, no repeats)', () => {
+    const a = num('sol', 7);
+    const b = num('mar', 7);
+    const c = num('palma', 7);
+    const n8 = num('mar', 8);
+    const m = scenario({ rules: { multiPlay: true }, hands: { 0: [a, b, c, n8], 1: [num('mar', 1)] }, top: num('coral', 7) });
+    expect(validMove(m, 0, { kind: 'play', seat: 0, cardId: a.id, extra: [c.id, b.id], ku: true })).toEqual({ kind: 'play', seat: 0, cardId: a.id, extra: [c.id, b.id], ku: true });
+    expect(validMove(m, 0, { kind: 'play', seat: 0, cardId: a.id, extra: [n8.id] })).toBeNull();
+    expect(validMove(m, 0, { kind: 'play', seat: 0, cardId: a.id, extra: [b.id, b.id] })).toBeNull();
+    expect(validMove(m, 0, { kind: 'play', seat: 0, cardId: a.id, extra: [9999] })).toBeNull();
+    expect(validMove(m, 0, { kind: 'play', seat: 0, cardId: a.id, extra: [1.5] })).toBeNull();
+    expect(validMove(m, 0, { kind: 'play', seat: 0, cardId: a.id, extra: [] })).toEqual({ kind: 'play', seat: 0, cardId: a.id });
+    const off = scenario({ hands: { 0: [a, b], 1: [num('mar', 1)] }, top: num('coral', 7) });
+    expect(validMove(off, 0, { kind: 'play', seat: 0, cardId: a.id, extra: [b.id] })).toBeNull();
+    // numberFinish: a last special card is not a legal move for the room either
+    const nf = scenario({ rules: { numberFinish: true }, hands: { 0: [card('skip', 'coral')], 1: [num('mar', 1)] }, top: num('coral', 7) });
+    expect(validMove(nf, 0, { kind: 'play', seat: 0, cardId: nf.round!.hands[0][0].id })).toBeNull();
+  });
+
+  it('validMove checks multiDraw2 / multiSkip extras like the engine (one kind, rule on, numberFinish)', () => {
+    const d1 = card('draw2', 'coral');
+    const d2 = card('draw2', 'mar');
+    const s1 = card('skip', 'sol');
+    const s2 = card('skip', 'palma');
+    const m = scenario({ rules: { multiDraw2: true, multiSkip: true }, hands: { 0: [d1, d2, s1, s2, num('mar', 3)], 1: [num('mar', 1)] }, top: card('draw2', 'sol') });
+    expect(validMove(m, 0, { kind: 'play', seat: 0, cardId: d1.id, extra: [d2.id] })).toEqual({ kind: 'play', seat: 0, cardId: d1.id, extra: [d2.id] });
+    expect(validMove(m, 0, { kind: 'play', seat: 0, cardId: d1.id, extra: [s1.id] })).toBeNull(); // mixed kinds
+    const sk = scenario({ rules: { multiSkip: true }, hands: { 0: [s1, s2, num('mar', 3)], 1: [num('mar', 1)] }, top: num('sol', 4) });
+    expect(validMove(sk, 0, { kind: 'play', seat: 0, cardId: s1.id, extra: [s2.id] })).toEqual({ kind: 'play', seat: 0, cardId: s1.id, extra: [s2.id] });
+    const off = scenario({ rules: { multiPlay: true }, hands: { 0: [s1, s2, num('mar', 3)], 1: [num('mar', 1)] }, top: num('sol', 4) });
+    expect(validMove(off, 0, { kind: 'play', seat: 0, cardId: s1.id, extra: [s2.id] })).toBeNull();
+    // numberFinish: two skips may not be the last cards out
+    const nf = scenario({ rules: { multiSkip: true, numberFinish: true }, hands: { 0: [s1, s2], 1: [num('mar', 1)] }, top: num('sol', 4) });
+    expect(validMove(nf, 0, { kind: 'play', seat: 0, cardId: s1.id, extra: [s2.id] })).toBeNull();
+    expect(validMove(nf, 0, { kind: 'play', seat: 0, cardId: s1.id })).toEqual({ kind: 'play', seat: 0, cardId: s1.id });
   });
 
   it('cpuTurnMove always returns a legal turn move', () => {

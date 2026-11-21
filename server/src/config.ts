@@ -7,6 +7,8 @@ import { DISCONNECT_GRACE_MS, NEXT_ROUND_MS, ROOM_IDLE_TTL_MS, TURN_TIMEOUT_MS, 
 
 export interface Env {
   ROOMS: DurableObjectNamespace;
+  /** the online mode catalog (one object, name 'catalog') */
+  MODES: DurableObjectNamespace;
   KUCA_TURN_TIMEOUT_MS?: string;
   KUCA_WINDOW_MS?: string;
   KUCA_GRACE_MS?: string;

@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Difficulty, GameMode, MatchSetup, MatchState, Move, RuleSettings, Seat } from '../contracts';
-import { applyMove, buildDeck, cardCount, chooseMove, closeWindow, createMatch, giveOptions, isLegal, legalMoves, RULE_PRESETS, startRound } from '.';
+import { applyMove, buildDeck, cardCount, chooseMove, closeWindow, createMatch, giveOptions, isLegal, legalMoves, multiPlayOptions, RULE_PRESETS, startRound } from '.';
 import { Rng } from './rng';
 import { setupOf } from './testutil';
 
@@ -36,6 +36,11 @@ function variedRules(base: RuleSettings, rng: Rng, all: boolean): RuleSettings {
     wild4Challenge: all || rng.next() < 0.3,
     partnerShield: all || rng.next() < 0.3,
     partnerPass: all || rng.next() < 0.3,
+    multiPlay: rng.next() < 0.45,
+    multiDraw2: rng.next() < 0.4,
+    multiReverse: rng.next() < 0.4,
+    multiSkip: rng.next() < 0.4,
+    numberFinish: rng.next() < 0.35,
   };
   // Día y Noche: the night side's stacked +5s and Comodín +6 can, with random CPUs and 2 players,
   // pull the whole deck into the hands (deck and pile empty, penalties drawing nothing): elimination keeps
@@ -58,6 +63,7 @@ interface Stats {
   responds: number;
   challenges: number;
   gives: number;
+  multis: number;
 }
 
 /** the CPU's move, with the random extras described at the top */
@@ -68,6 +74,11 @@ function driverMove(m: MatchState, seat: Seat, level: Difficulty, rng: Rng, onTu
   if (extras.length && rng.next() < 0.35) return extras[rng.int(extras.length)];
   let mv = chooseMove(m, seat, level);
   if (!mv && onTurn) mv = legal[rng.int(legal.length)];
+  // multiPlay: now and then a random set of the cards that may join, in a random order
+  if (mv?.kind === 'play' && !mv.extra?.length && rng.next() < 0.3) {
+    const opts = multiPlayOptions(m, mv).filter(() => rng.next() < 0.6);
+    if (opts.length) mv = { ...mv, extra: opts.sort(() => rng.next() - 0.5) };
+  }
   if (mv?.kind === 'play' && mv.give === undefined && rng.next() < 0.5) {
     const gifts = giveOptions(m, mv);
     if (gifts.length) mv = { ...mv, give: gifts[rng.int(gifts.length)] };
@@ -89,8 +100,14 @@ function playMatch(rules: RuleSettings, setup: MatchSetup, seed: number, stats: 
     if (mv.kind === 'respond') stats.responds++;
     if (mv.kind === 'challenge') stats.challenges++;
     if (mv.kind === 'play' && mv.give !== undefined) stats.gives++;
+    if (mv.kind === 'play' && mv.extra?.length) stats.multis++;
+    const before = m.round!.hands[mv.seat].slice();
     m = applyMove(m, mv).match;
     const rr = m.round!;
+    // numberFinish: whoever empties their hand with a play put down only number cards
+    if (rules.numberFinish && (mv.kind === 'play' || mv.kind === 'jumpIn' || mv.kind === 'respond') && !rr.eliminated[mv.seat] && rr.hands[mv.seat].length === 0 && before.some((c) => c.face.kind !== 'number')) {
+      throw new Error(`went out on a special card ${JSON.stringify(mv)} (seed ${seed})`);
+    }
     if (cardCount(rr) !== deckSize) throw new Error(`card count ${cardCount(rr)} != ${deckSize} (seed ${seed})`);
     const ids = new Set([...rr.hands.flat(), ...rr.deck, ...rr.discard].map((c) => c.id));
     if (ids.size !== deckSize) throw new Error(`duplicate cards (seed ${seed})`);
@@ -158,7 +175,7 @@ describe(`fuzz: ${MATCHES} CPU matches per configuration`, () => {
   for (const cfg of configs) {
     it(cfg.name, () => {
       const base = RULE_PRESETS.find((p) => p.id === cfg.mode)!.rules;
-      const stats: Stats = { rounds: 0, moves: 0, offTurn: 0, responds: 0, challenges: 0, gives: 0 };
+      const stats: Stats = { rounds: 0, moves: 0, offTurn: 0, responds: 0, challenges: 0, gives: 0, multis: 0 };
       for (let seed = 1; seed <= MATCHES; seed++) {
         const rng = new Rng(seed * 7919);
         const rules = variedRules(base, rng, !!cfg.all);
@@ -179,6 +196,7 @@ describe(`fuzz: ${MATCHES} CPU matches per configuration`, () => {
         expect(stats.challenges).toBeGreaterThan(0);
       }
       if (cfg.all && cfg.seating) expect(stats.gives).toBeGreaterThan(0);
+      expect(stats.multis).toBeGreaterThan(0);
     }, 60_000);
   }
 });

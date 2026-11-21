@@ -417,6 +417,49 @@ export class Hud {
     });
   }
 
+  /**
+   * a question with buttons in the response bar's place (like the +4 challenge): it can't be dismissed;
+   * when its ring runs out it resolves with `onTimeout`
+   */
+  askChoice<T extends string>(o: { title: string; options: { id: T; label: string; cls?: string }[]; ms: number; onTimeout: T }): Promise<T> {
+    return new Promise((resolve) => {
+      const ms = Math.max(500, o.ms);
+      let done = false;
+      let timer = 0;
+      const finish = (c: T) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        close();
+        resolve(c);
+      };
+      const ring = svgEl('<svg class="resp-ring" viewBox="0 0 44 44" aria-hidden="true"><circle class="rr-track" cx="22" cy="22" r="19"/><circle class="rr-run" cx="22" cy="22" r="19" pathLength="100"/></svg>');
+      const bar = h(
+        'div.resp-bar.ask-bar',
+        { role: 'alertdialog', 'aria-label': o.title },
+        h('div.resp-head', h('span.resp-ring-wrap', ring), h('span.resp-title', o.title)),
+        h(
+          'div.resp-row',
+          ...o.options.map((op) => {
+            const b = h('button.btn.resp-opt', { type: 'button', class: op.cls ?? 'secondary' }, h('span.btn-label', op.label));
+            b.addEventListener('click', () => finish(op.id));
+            return b;
+          }),
+        ),
+      );
+      this.respLayer.append(bar);
+      const run = ring.querySelector('.rr-run') as SVGCircleElement;
+      run.animate([{ strokeDashoffset: '0' }, { strokeDashoffset: '100' }], { duration: ms, easing: 'linear', fill: 'forwards' });
+      timer = window.setTimeout(() => finish(o.onTimeout), ms);
+      const close = this.track(() => {
+        done = true;
+        clearTimeout(timer);
+        bar.classList.add('leaving');
+        setTimeout(() => bar.remove(), 220);
+      });
+    });
+  }
+
   /** the big ¡KU! lettering (with a name under it when someone else called it) */
   kuPop(name?: string): Promise<void> {
     return new Promise((resolve) => {

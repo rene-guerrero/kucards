@@ -7,10 +7,19 @@ compatibility_date = "2026-11-01"
 name = "ROOMS"
 class_name = "Room"
 
+# the online catalog of player-made game modes (one object)
+[[durable_objects.bindings]]
+name = "MODES"
+class_name = "ModeStore"
+
 # Free plan: Durable Objects must use the SQLite storage backend.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Room"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ModeStore"]
 
 [observability]
 enabled = true

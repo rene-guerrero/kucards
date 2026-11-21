@@ -84,6 +84,8 @@ export function buildRoundSummary(ctx: RoundSummaryCtx, onNext: () => void, onMe
     : ctx.winner === 0
       ? t('summary.pointsYou', { n: ctx.points, u })
       : t('summary.pointsBy', { name: w?.name ?? '', n: ctx.points, u });
+  // "Andrés suma 57 puntos de 500" (the match target replaces the old "a 500" line)
+  const subLine = ctx.target ? t('summary.ofTarget', { text: sub, t: String(ctx.target) }) : sub;
 
   const rows = ctx.players.map((p, i) => {
     const num = h('span.sum-total', String(p.prev));
@@ -100,7 +102,8 @@ export function buildRoundSummary(ctx: RoundSummaryCtx, onNext: () => void, onMe
     );
     return { p, el, num };
   });
-  const head = h('div.sum-row.sum-cols', h('span'), h('span.sum-name', t('summary.player')), h('span.sum-left', t('summary.left')), h('span.sum-hand', t('summary.pts')), h('span.sum-total', t('summary.total')));
+  // only the number columns are labelled (the rows say who and how many cards)
+  const head = h('div.sum-row.sum-cols', h('span'), h('span.sum-name'), h('span.sum-left'), h('span.sum-hand', t('summary.pts')), h('span.sum-total', t('summary.total')));
 
   const teamEls = ctx.teams?.map((tm, i) => {
     const num = h('span.big-num', String(tm.prev));
@@ -113,12 +116,11 @@ export function buildRoundSummary(ctx: RoundSummaryCtx, onNext: () => void, onMe
     'div.sum-body',
     h('div.sum-table', { role: 'table', 'aria-label': t('summary.title') }, head, ...rows.map((r) => r.el)),
     teamEls ? h('div.score-block.teams', ...teamEls.map((x) => x.el)) : null,
-    ctx.target ? h('div.score-target', t('hud.target', { n: ctx.target })) : null,
   );
   const card = h(
     'div.card.sheet.summary',
     { class: won ? 'tone-win' : 'tone-lose' },
-    h('header.sum-head', h('div.kicker', t('summary.round', { n: ctx.roundNo })), h('h2.summary-title', title), h('p.summary-sub', sub)),
+    h('header.sum-head', h('div.kicker', t('summary.round', { n: ctx.roundNo })), h('h2.summary-title', title), h('p.summary-sub', subLine)),
     body,
     h('footer.sum-foot', btn(t('match.menu'), onMenu, 'ghost lg', h('span.btn-icon', { html: ICONS.home })), next),
   );
@@ -214,7 +216,8 @@ export function buildPause(o: {
   onAudio(key: AudioKey, on: boolean): void;
   onResume(): void;
   onSettings(): void;
-  onHowto(): void;
+  /** the mode's rules, read-only (replaces Cómo jugar: that lives in the main menu) */
+  onRules(): void;
   onQuit(): void;
 }): HTMLElement {
   const resume = btn(t('pause.resume'), o.onResume, 'primary lg', h('span.btn-icon', { html: ICONS.play }));
@@ -225,11 +228,11 @@ export function buildPause(o: {
     h(
       'div.stack',
       resume,
-      // two equal halves: settings, how to play
+      // two equal halves: settings, the mode's rules
       h(
         'div.pause-grid',
         btn(t('menu.settings'), o.onSettings, 'secondary', h('span.btn-icon', { html: ICONS.gear })),
-        btn(t('menu.howto'), o.onHowto, 'secondary', h('span.btn-icon', { html: ICONS.book })),
+        btn(t('modes.rules'), o.onRules, 'secondary', h('span.btn-icon', { html: ICONS.book })),
       ),
       // equal icon toggles across the whole row: sound, music, vibration, fullscreen
       h(

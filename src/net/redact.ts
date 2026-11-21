@@ -15,6 +15,7 @@
  *    mirror: each seat only learns whether it may act itself).
  *  - events: 'draw' carries `cards` only for a seat the receiver may see; 'deal' carries the receiver's
  *    own `hand`; 'swapHands' / 'rotateHands' carry `cards` only when the receiver's own hand changed.
+ *    'challenge' keeps `hand` / `proof` for everyone: challenging a +4 shows its player's hand to the table.
  * Client side: withPlaceholders turns a SeatView back into a full-shaped MatchState whose unknown cards
  * are placeholders (what the renderer's restore and the HUD expect).
  */
@@ -68,6 +69,9 @@ export function redactEvents(events: readonly GameEvent[], seat: Seat | null, af
         const { cards: _c, ...rest } = ev;
         return seat !== null && !after.round?.eliminated[seat] ? { ...rest, cards: hand() } : rest;
       }
+      case 'challenge':
+        // the challenged player's hand is shown to the whole table (the rule makes it public): kept for every seat
+        return ev.hand ? { ...ev, hand: copyCards(ev.hand), ...(ev.proof ? { proof: copyCards(ev.proof) } : {}) } : ev;
       case 'window':
         return { type: 'window', window: redactWindow(ev.window, seat) };
       default:

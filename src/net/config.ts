@@ -2,8 +2,8 @@
  * Online play: where the room server lives, and the share link.
  *
  * Order: a page served by a local host (Jugar con amigos: the PC dev host or a phone) talks to its own
- * origin → `VITE_MP_URL` (build-time env) → dev: the same host on port 8787 (`npx wrangler dev`) →
- * production: MP_SERVER_URL below.
+ * origin → `VITE_MP_URL` (build-time env, e.g. http://localhost:8787 for `npx wrangler dev`) →
+ * MP_SERVER_URL below (dev builds too).
  */
 import { joinOrigin, localServed, type LocalServed } from 'kunet';
 import { nativeLocalAvailable } from 'kunet/native';
@@ -26,7 +26,8 @@ export function serverUrl(): string {
   if (served()) return location.origin;
   const env = (import.meta.env.VITE_MP_URL as string | undefined)?.trim();
   if (env) return env.replace(/\/+$/, '');
-  if (import.meta.env.DEV) return `http://${location.hostname || 'localhost'}:8787`;
+  // dev uses the deployed room server too (port 8787 is often taken by a game's LAN host, e.g. the
+  // dominoes `npm run lan`); point VITE_MP_URL at http://localhost:8787 to use `npx wrangler dev`
   return MP_SERVER_URL;
 }
 

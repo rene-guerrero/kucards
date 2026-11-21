@@ -4,7 +4,8 @@
  * badge, an active glow on the seat to move and a team badge in partners mode. Speech bubbles grow from
  * the plate toward the table centre. Ported from Kudominoes; updates only write what actually changed.
  */
-import type { Color, GameEvent, Seat, SeatPlate } from '../contracts';
+import type { ChallengeStep, Color, GameEvent, Seat, SeatPlate } from '../contracts';
+import { ChallengeFx } from './challengeFx';
 import type { AvatarController } from './avatarAdapter';
 import { h, prefersReducedMotion, svgEl } from './dom';
 import { t, type Key } from './i18n';
@@ -71,6 +72,24 @@ export class SeatPlates {
     this.catchSeat = seat;
     this.catchFn = seat !== null ? onCatch ?? null : null;
     if (seat !== null) this.p[seat]?.root.classList.add('catchable');
+  }
+
+  private chalFx: ChallengeFx | null = null;
+
+  /** the +4 challenge sequence over the plates (the renderer times the steps, see ChallengeFx) */
+  challenge(step: ChallengeStep): void {
+    this.chalFx ??= new ChallengeFx({
+      layer: this.el,
+      avBox: (s) => {
+        const p = this.p[s];
+        return p && p.last.visible ? (p.root.querySelector('.plate-av') as HTMLElement | null)?.getBoundingClientRect() ?? null : null;
+      },
+      name: (s) => this.p[s]?.name.textContent ?? '',
+      hurt: (s) => this.hurt(s),
+      react: (s, e, sec) => this.avatars.react(s, e, sec),
+      gesture: (s, g, delay) => this.avatars.gesture(s, g, delay),
+    });
+    this.chalFx.handle(step);
   }
 
   /** a quick hurt shake of a seat's avatar (caught missing ¡Ku!) */
@@ -381,8 +400,8 @@ function bubbleText(ev: GameEvent): { seat: Seat; text: string; strong: boolean 
       if (k === 'skip') return say(ev.seat, 'say.skip');
       if (k === 'reverse') return say(ev.seat, 'say.reverse');
       if (k === 'swap') return say(ev.seat, 'say.swap');
-      if (k === 'sweep') return say(ev.seat, 'say.sweep');
-      if (k === 'wild' && ev.color) return say(ev.seat, 'say.color', false, { color: t(`color.${ev.color as Color}` as Key) });
+      if (k === 'sweep' || k === 'sweepWild') return say(ev.seat, 'say.sweep');
+      if ((k === 'wild' || k === 'wildFlip') && ev.color) return say(ev.seat, 'say.color', false, { color: t(`color.${ev.color as Color}` as Key) });
       if (ev.card.face.draw && ev.card.face.draw > 4) return say(ev.seat, 'say.drawN', true, { n: String(ev.card.face.draw) });
       return null;
     }

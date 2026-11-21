@@ -83,6 +83,7 @@ function mount() {
     },
     onPlates: drawPlates,
     onSeatMark: (s, img, tint) => realPlates.mark(s, img, tint),
+    onChallenge: (st) => realPlates.challenge(st),
     onError: (e) => console.error('[harness] fatal', e),
   });
   hud.colorAnchor = () => view.pileScreenPoint();
@@ -757,7 +758,153 @@ on('bPickKind', () => {
   $('bPickKind').textContent = `Card kind: ${WILD_KINDS[wildIdx]}`;
 });
 
+// ───────── multi-play (rule multiPlay) ─────────
+/** a multi-play: one 'play' event per card, `more` on all but the last (as the engine sends them) */
+async function playGroup(seat: Seat, ids: number[]) {
+  const r = round!;
+  // the whole group leaves the hand at once (as in the engine's state: an open hand is told the final cards)
+  const group = ids.map((id) => r.hands[seat].find((c) => c.id === id) ?? synth({ kind: 'number', color: 'sol', value: 0 }));
+  r.hands[seat] = r.hands[seat].filter((c) => !ids.includes(c.id));
+  for (let i = 0; i < ids.length; i++) {
+    const card = group[i];
+    r.discard.push(card);
+    r.activeColor = card.face.color ?? r.activeColor;
+    await send(i < ids.length - 1 ? { type: 'play', seat, card, more: true } : { type: 'play', seat, card });
+  }
+  if (r.hands[seat].length === 1) await send({ type: 'ku', seat });
+}
+
+/** your multi-play pick: tap a 7 (badge 1), tap more 7s (2, 3), drag any selected one to the pile */
+async function multiPick() {
+  if (!need()) return;
+  const my = ++run;
+  view.setTurn(0);
+  const hand = round!.hands[0];
+  const ok = playable(0).map((c) => c.id);
+  const joinable: Record<number, number[]> = {};
+  for (const id of ok) {
+    const c = hand.find((x) => x.id === id)!;
+    if (c.face.kind !== 'number') continue;
+    const same = hand.filter((x) => x !== c && x.face.kind === 'number' && x.face.value === c.face.value).map((x) => x.id);
+    if (same.length) joinable[id] = same;
+  }
+  log('multi-play: tap a 7, tap the other 7s, drag one to the pile');
+  const v = await view.requestHumanMultiPick(ok, true, joinable);
+  if (my !== run) return;
+  if (v === 'draw') {
+    const c = popDeck();
+    round!.hands[0].push(c);
+    await send({ type: 'draw', seat: 0, count: 1, cards: [c], reason: 'turn' });
+  } else if (typeof v === 'number') await play(0, hand.find((c) => c.id === v)!);
+  else {
+    const order = [v.cardId, ...v.extra];
+    await playGroup(0, order);
+    const last = round!.discard[round!.discard.length - 1];
+    log(`group played: ${order.map((id) => { const f = round!.discard.find((c) => c.id === id)!.face; return `${f.color} ${f.value}`; }).join(' → ')} · colour now ${round!.activeColor} (top ${last.face.color})`);
+  }
+}
+
+/** three 7s of different colours in your hand, a 7 on the pile, then your pick */
+async function multiSevens() {
+  if (!round) await deal();
+  view.cancelHumanPick();
+  const r = round!;
+  const num = (color: Color, value: number): CardFace => ({ kind: 'number', color, value });
+  const faces: CardFace[] = [num('sol', 7), num('mar', 7), num('palma', 7), num('sol', 3), { kind: 'skip', color: 'palma' }, num('coral', 9), { kind: 'wild', color: null }];
+  r.hands[0] = faces.map(synth);
+  r.discard.push(synth(num('coral', 7)));
+  r.activeColor = 'coral';
+  await view.restore({ round: structuredClone(r), seats });
+  await multiPick();
+}
+
+/** an opponent holds three 5s and plays them together onto a 5 */
+async function oppMulti() {
+  if (!round) await deal();
+  view.cancelHumanPick();
+  const r = round!;
+  const s = opps()[0];
+  if (s === undefined) return;
+  const fives = (['mar', 'sol', 'palma'] as Color[]).map((color) => synth({ kind: 'number', color, value: 5 }));
+  r.hands[s].push(...fives);
+  r.discard.push(synth({ kind: 'number', color: 'coral', value: 5 }));
+  r.activeColor = 'coral';
+  await view.restore({ round: structuredClone(r), seats });
+  view.setTurn(s);
+  await sleep(300);
+  await playGroup(s, fives.map((c) => c.id));
+  log(`seat ${s} played three 5s · colour now ${r.activeColor}`);
+}
+
+/**
+ * rules multiDraw2 / multiSkip / multiReverse: the open partner (else the first opponent) plays `n` action
+ * cards of one kind together onto a matching card, then their effect events follow as the engine sends them
+ */
+async function oppMultiKind(kind: 'draw2' | 'skip' | 'reverse', n: number) {
+  if (!round) await deal();
+  view.cancelHumanPick();
+  const r = round!;
+  const s = openSeat ?? opps()[0];
+  if (s === undefined) return;
+  const cards = (['mar', 'sol', 'palma', 'coral'] as Color[]).slice(0, n).map((color) => synth({ kind, color }));
+  r.hands[s].push(...cards);
+  r.discard.push(synth({ kind, color: 'coral' }));
+  r.activeColor = 'coral';
+  await view.restore({ round: structuredClone(r), seats });
+  if (openSeat !== null) view.setOpenHand(openSeat, r.hands[openSeat].slice());
+  view.setTurn(s);
+  await sleep(300);
+  await playGroup(s, cards.map((c) => c.id));
+  let at = s;
+  if (kind === 'draw2') {
+    const total = 2 * n;
+    await send({ type: 'stack', total });
+    const victim = nextSeat(s);
+    const cs = Array.from({ length: total }, () => popDeck());
+    r.hands[victim].push(...cs);
+    await send({ type: 'draw', seat: victim, count: total, ...(victim === 0 ? { cards: cs } : {}), reason: 'penalty' });
+    at = victim;
+  } else if (kind === 'skip' || seats.length === 2) {
+    for (let i = 0; i < n; i++) {
+      at = nextSeat(at);
+      await send({ type: 'skip', seat: at });
+    }
+  } else {
+    for (let i = 0; i < n; i++) {
+      r.direction = r.direction === 1 ? -1 : 1;
+      await send({ type: 'reverse', direction: r.direction });
+    }
+  }
+  cur = nextSeat(at);
+  view.setTurn(cur);
+  await send({ type: 'turn', seat: cur });
+  log(`seat ${s} played ${n} × ${kind} · next: seat ${cur}`);
+}
+
+/** an opponent puts a +2 on whatever lies on the pile (it must end up on top) */
+async function oppPower() {
+  if (!need()) return;
+  view.cancelHumanPick();
+  const s = opps().find((x) => x !== openSeat) ?? opps()[0];
+  if (s === undefined) return;
+  const card = synth({ kind: 'draw2', color: round!.activeColor });
+  round!.hands[s].push(card);
+  view.setTurn(s);
+  await play(s, card);
+  log(`seat ${s} played a +2 on top`);
+}
+
+/** debug: the pile meshes bottom to top (height and kind) */
+const pileDebug = () => (view as unknown as { pile: { pos: { y: number }; card: Card | null }[] }).pile.map((o) => `${o.card?.face.kind}:${o.pos.y.toFixed(4)}`);
+(window as unknown as { harness: unknown }).harness = { multiSevens, multiPick, oppMulti, oppMultiKind, oppPower, pileDebug, view: () => view, openSeat: () => openSeat };
+on('bOppMultiD2', () => oppMultiKind('draw2', 3));
+on('bOppMultiSkip', () => oppMultiKind('skip', 3));
+on('bOppMultiRev', () => oppMultiKind('reverse', 2));
+on('bOppPower', oppPower);
+
 on('bDeal', deal);
+on('bMulti', multiSevens);
+on('bOppMulti', oppMulti);
 on('bPickColor', pickColorPlay);
 on('bOppWild', oppWild);
 on('bOppDraw', oppDraw);
@@ -790,6 +937,52 @@ on('bRot', rotate);
 on('bSweep', sweep);
 on('bKu', kuMoment);
 on('bCaught', caught);
+// the +4 challenge, both outcomes, between any two seats: the +4 is played, challenged, and the loser draws
+function chalSeats() {
+  const by = $<HTMLSelectElement>('cBy');
+  const tg = $<HTMLSelectElement>('cTarget');
+  const list = seats.map((s) => `<option>${s}</option>`).join('');
+  if (by.dataset.k === list) return;
+  by.dataset.k = list;
+  by.innerHTML = tg.innerHTML = list;
+  by.value = String(seats[0]);
+  tg.value = String(seats[seats.length - 1]);
+}
+$('panel').addEventListener('mouseenter', chalSeats);
+chalSeats();
+async function challengeDemo(isCaught: boolean) {
+  if (!need()) return;
+  chalSeats();
+  const by = Number($<HTMLSelectElement>('cBy').value) as Seat;
+  const target = Number($<HTMLSelectElement>('cTarget').value) as Seat;
+  if (by === target) return log('challenge: pick two different seats');
+  view.cancelHumanPick();
+  const r = round!;
+  const prev = r.activeColor;
+  // caught needs proof in the hand: a card of the colour in play
+  if (isCaught && !r.hands[target].some((c) => c.face.color === prev)) {
+    const c = synth({ kind: 'number', color: prev, value: 7 });
+    r.hands[target].push(c);
+    await send({ type: 'draw', seat: target, count: 1, cards: target === 0 ? [c] : undefined, reason: 'turn' });
+  }
+  const w4 = synth({ kind: 'wild4', color: null, draw: 4 });
+  r.hands[target].push(w4);
+  if (target === 0) await send({ type: 'draw', seat: 0, count: 1, cards: [w4], reason: 'turn' });
+  await play(target, w4);
+  await sleep(500);
+  // a fair play holds nothing of that colour: such cards are left out of the hand shown
+  const hand = r.hands[target].filter((c) => isCaught || c.face.color !== prev);
+  const proof = isCaught ? hand.filter((c) => c.face.color === prev) : [];
+  const n = isCaught ? 4 : 6;
+  const loser = isCaught ? target : by;
+  await send({ type: 'challenge', by, target, caught: isCaught, hand, proof, draw: n });
+  const cards = Array.from({ length: n }, popDeck);
+  r.hands[loser].push(...cards);
+  await send({ type: 'draw', seat: loser, count: n, cards: loser === 0 ? cards : undefined, reason: 'penalty' });
+  log(`challenge: seat ${by} challenged seat ${target}: ${isCaught ? 'caught' : 'missed'}, seat ${loser} draws ${n}`);
+}
+on('bChalCaught', () => challengeDemo(true));
+on('bChalMiss', () => challengeDemo(false));
 on('bCatchWin', catchWindow);
 // the game's final-minute "hurry" effect (same CSS as the HUD's), toggled over the table
 const hurryEl = document.createElement('div');

@@ -41,7 +41,7 @@ export function startHudPreview(overlay: Overlay, s: AppSettings): void {
         onAudio: () => {},
         onResume: () => close(),
         onSettings: () => close(),
-        onHowto: () => close(),
+        onRules: () => close(),
         onQuit: () => close(),
       }),
     );

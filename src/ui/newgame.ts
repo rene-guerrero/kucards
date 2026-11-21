@@ -14,6 +14,9 @@ import { screenHeader } from './howto';
 import { loc, t, type Key } from './i18n';
 import { btn, ICONS, segmented } from './overlay';
 import { ruleSelect, type RuleSelectItem } from './settings';
+import { modeSelect } from './modeSelect';
+import { customMode } from '../app/customModes';
+import { isBuiltInMode, modeDef, type ModeDef } from '../engine/modes';
 
 type Slot = 1 | 2 | 3;
 /** CPU seats in play by player count (same seats as the engine: 2 → across, 3 → the sides) */
@@ -33,6 +36,11 @@ export function levelBadge(c: Character): HTMLElement {
   return h('span.lvl', { 'aria-label': aria, title: aria }, ...[1, 2, 3].map((i) => h('span.star', { class: i <= n ? 'on' : '', 'aria-hidden': 'true' }, '★')));
 }
 
+/** a CPU seat's second line, the same on every screen: "Rival · Normal" (the master gets its badge) */
+export function seatMeta(c: Character, role: string | null): HTMLElement {
+  return c.level === 'master' ? levelBadge(c) : h('span', role ? `${role} · ${levelLabel(c)}` : levelLabel(c));
+}
+
 /** a mini card fan per mode on its card */
 const MODE_ART: Record<GameMode, string> = {
   classic: cardSvg({ kind: 'number', color: 'mar', value: 7 }, { width: 26 }) + cardSvg({ kind: 'number', color: 'sol', value: 4 }, { width: 26 }),
@@ -44,6 +52,8 @@ const MODE_ART: Record<GameMode, string> = {
 
 export interface NewGameStart {
   mode: GameMode;
+  /** a player-made mode's id (then `mode` is its base) */
+  custom?: string;
   players: 2 | 3 | 4;
   /** 2 vs 2 partners across (4 players, not Codo a codo) */
   teams?: boolean;
@@ -83,6 +93,9 @@ export interface NewGameOpts {
   /** rule sets to pick from (built-in preset + saved profiles of the mode); picking one applies it */
   ruleChoices?(mode: GameMode): RuleSelectItem[];
   onStart(o: NewGameStart): void;
+  /** the player-made mode picked (null = a built-in) */
+  customMode?: string;
+  onCustom?(id: string | null): void;
   onBack(): void;
 }
 
@@ -90,8 +103,10 @@ export interface NewGameOpts {
  * The "Tiempo" row: round limit · per move · final minute as soft dropdowns (the last only with a round
  * limit). onChange null = read only (online, not the host): the values as text.
  */
+const CLOCK_SVG = '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4.2l2.6 1.6M9.5 2.5h5"/></svg>';
+
 export function clockPicker(onChange: ((c: ClockSettings) => void) | null): { el: HTMLElement; render(c: ClockSettings): void } {
-  const el = h('div.rsel-line.ng-clock');
+  const el = h('div.ng-clock');
   const sec = (n: number) => t('clock.sec', { n });
   const min = (n: number) => (n ? t('clock.min', { n }) : t('clock.off'));
   const render = (raw: ClockSettings): void => {
@@ -102,12 +117,16 @@ export function clockPicker(onChange: ((c: ClockSettings) => void) | null): { el
       render(next);
     };
     const sel = (k: keyof ClockSettings, opts: readonly number[], label: string, fmt: (n: number) => string) =>
-      h('span.ng-clock-item', h('span', label), onChange ? ruleSelect(opts.map((n) => ({ label: fmt(n), on: clock[k] === n, pick: () => set(k, n) })), label, 'soft') : h('b', fmt(clock[k])));
+      h('div.field', h('span.field-label', { title: label }, label), onChange ? ruleSelect(opts.map((n) => ({ label: fmt(n), on: clock[k] === n, pick: () => set(k, n) })), label, 'soft') : h('b', fmt(clock[k])));
     el.replaceChildren(
-      h('span.rsel-label', t('clock.label')),
-      sel('roundMin', ROUND_MIN_OPTIONS, t('clock.round'), min),
-      sel('moveSec', MOVE_SEC.options, t('clock.move'), sec),
-      ...(clock.roundMin ? [sel('finalSec', FINAL_SEC.options, t('clock.final'), sec)] : []),
+      h('div.ng-clock-head', h('span.ng-clock-icon', { 'aria-hidden': 'true', html: CLOCK_SVG }), h('span.rsel-label', t('clock.label'))),
+      h(
+        'div.field-row',
+        sel('roundMin', ROUND_MIN_OPTIONS, t('clock.round'), min),
+        sel('moveSec', MOVE_SEC.options, t('clock.move'), sec),
+        // no round limit: the final-minute slot stays, empty, so the other two keep their width
+        clock.roundMin ? sel('finalSec', FINAL_SEC.options, t('clock.final'), sec) : h('span.field'),
+      ),
     );
   };
   return { el, render };
@@ -127,13 +146,19 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
   const l3 = fix(o.lineup[3]);
   let lu: Required<Lineup> = { 1: l1, 2: l2, 3: l3 };
   let mode: GameMode = o.mode;
+  let customId: string | null = o.customMode && customMode(o.customMode) ? o.customMode : null;
   let players: 2 | 3 | 4 = o.players;
   let teams2v2 = !!o.teams;
   let partnerLeft = o.partnerSide === 'before';
-  const side = () => mode === 'sideBySide';
-  const count = () => (side() ? 4 : players);
-  /** team play: Codo a codo always, other modes when 2 vs 2 is on with 4 players */
-  const isTeams = () => side() || (teams2v2 && players === 4);
+  /** the mode being set up (a player-made one, or the built-in) */
+  const def = (): ModeDef => (customId ? (customMode(customId) ?? modeDef(mode)) : modeDef(mode));
+  /** side by side (Codo a codo seating): always 4 players, 2 vs 2 */
+  const side = () => def().teams === 'always' && def().seating === 'side';
+  /** 2 vs 2 forced (any seating) */
+  const forcedTeams = () => def().teams === 'always';
+  const count = () => (forcedTeams() ? 4 : players);
+  /** team play: forced by the mode, or chosen (4 players) when the mode allows it */
+  const isTeams = () => forcedTeams() || (def().teams === 'optional' && teams2v2 && players === 4);
   const slots = () => CPU_SEATS[count()];
   let active: Slot = slots()[0];
   let shown = lu[active];
@@ -151,8 +176,8 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
     b.addEventListener('click', () => setMode(p.id));
     return b;
   });
-  function setMode(id: GameMode): void {
-    if (mode === id) return;
+  function setMode(id: GameMode, force = false): void {
+    if (mode === id && !force) return;
     mode = id;
     modeCards.forEach((c, i) => c.setAttribute('aria-checked', String(o.presets[i].id === mode)));
     o.onMode(mode);
@@ -163,21 +188,32 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
   const modeGrid = h('div.mode-grid', { role: 'radiogroup', 'aria-label': t('newgame.mode') }, ...modeCards);
 
   // ── players / seating ──
-  const playersSeg = segmented<number>(
-    [2, 3, 4].map((n) => ({ value: n, label: String(n) })),
-    players,
-    (v) => {
-      players = v as 2 | 3 | 4;
-      o.onPlayers(players);
-      if (!slots().includes(active)) active = slots()[0];
-      shown = lu[active];
-      applyMode();
-    },
-    t('newgame.players'),
-  );
-  playersSeg.classList.add('seg-players');
+  // players: a small dropdown ("4 jugadores")
+  const playersSeg = h('div.ng-players');
+  const renderPlayers = (): void => {
+    const word = t('newgame.players').toLocaleLowerCase();
+    playersSeg.replaceChildren(
+      ruleSelect(
+        [2, 3, 4].map((n) => ({
+          label: `${n} ${word}`,
+          on: n === players,
+          pick: () => {
+            players = n as 2 | 3 | 4;
+            o.onPlayers(players);
+            if (!slots().includes(active)) active = slots()[0];
+            shown = lu[active];
+            applyMode();
+            renderPlayers();
+          },
+        })),
+        t('newgame.players'),
+        'soft',
+      ),
+    );
+  };
+  renderPlayers();
   const fixedNote = h('span.ng-fixed', t('newgame.fixed4'));
-  const playersRow = h('div.ng-line', h('span.ng-line-label', t('newgame.players')), playersSeg, fixedNote);
+  const playersRow = h('div.ng-line', playersSeg, fixedNote);
 
   const teamsSeg = segmented<string>(
     [
@@ -193,7 +229,8 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
     },
     t('newgame.teams'),
   );
-  const seatingRow = h('div.ng-line.ng-seating', h('span.ng-line-label', t('newgame.teams')), teamsSeg);
+  // the switch explains itself (Individual / 2 vs 2): no label
+  const seatingRow = h('div.ng-line.ng-seating', teamsSeg);
 
   // ── table with seats ──
   const felt = h('div.ng-table', { role: 'group', 'aria-label': t('newgame.seats') });
@@ -208,6 +245,7 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
       active = s;
       shown = lu[s];
       refresh();
+      if (sheetMq.matches) openSheet();
       grid.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     });
     seatEls.set(s, { btn: b, face, name, meta });
@@ -248,7 +286,7 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
     el.btn.classList.toggle('team-0', team === 0);
     el.btn.classList.toggle('team-1', team === 1);
     const role = partners ? (team === teamOf(0) ? t(c.fem ? 'role.partnerF' : 'role.partner') : t('role.rival')) : null;
-    el.meta.replaceChildren(c.level === 'master' ? levelBadge(c) : h('span', role ? `${role} · ${levelLabel(c)}` : levelLabel(c)));
+    el.meta.replaceChildren(seatMeta(c, role));
     el.btn.setAttribute('aria-label', `${t('newgame.seatAria')}: ${c.name}, ${levelLabel(c)}`);
   };
   const renderSeats = () => {
@@ -262,9 +300,28 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
   };
 
   // ── roster grid ──
+  // screens up to 769 px: the character grid is a bottom sheet (like the dominoes game), the table full width
+  const sheetMq = matchMedia('(max-width: 769px)');
+  const handle = h('div.ng-handle', { 'aria-hidden': 'true' });
+  const scrim = h('div.ng-scrim');
+  let sheetOpen = false;
+  const openSheet = (): void => {
+    sheetOpen = true;
+    pickPanel.classList.add('open');
+    scrim.classList.add('open');
+  };
+  const closeSheet = (): void => {
+    if (!sheetOpen) return;
+    sheetOpen = false;
+    pickPanel.classList.remove('open');
+    scrim.classList.remove('open');
+    pickPanel.style.transform = '';
+  };
+  scrim.addEventListener('click', closeSheet);
   const pickTitle = h('h3.ng-pick-title');
   const grid = h('div.ng-grid', { role: 'listbox', 'aria-label': t('newgame.characters') });
   const desc = h('p.ng-desc', { 'aria-live': 'polite' });
+  const pickPanel = h('section.ng-pick', handle, pickTitle, grid, desc);
   const describe = (id: string) => {
     shown = id;
     const c = character(id);
@@ -280,7 +337,10 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
       levelBadge(c),
       tag,
     );
-    b.addEventListener('click', () => pick(c.id));
+    b.addEventListener('click', () => {
+      pick(c.id);
+      if (sheetMq.matches) closeSheet();
+    });
     b.addEventListener('pointerenter', (e) => e.pointerType === 'mouse' && describe(c.id));
     b.addEventListener('pointerleave', (e) => e.pointerType === 'mouse' && describe(lu[active]));
     b.addEventListener('focus', () => describe(c.id));
@@ -355,20 +415,22 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
   function renderRuleSelect(): void {
     // rule sets are picked here (Ajustes › Reglas only edits them): the dropdown always shows, even with
     // only the built-in rules; the plain line is a fallback for when no choices are provided at all
-    // every mode's rule sets in one list: picking one of another mode switches to that mode first
-    const items: RuleSelectItem[] = [];
-    for (const p of o.presets) {
-      const list = o.ruleChoices?.(p.id) ?? [];
-      for (const i of list) {
-        if (p.id !== mode && (i.custom || !i.pick)) continue;
-        items.push({ ...i, on: p.id === mode && i.on, pick: () => (setMode(p.id), i.pick?.(), updateRules(), renderRuleSelect()) });
-      }
-    }
-    const pickable = items.length > 0;
-    rulesPick.hidden = !pickable;
-    plainLine.hidden = pickable;
-    if (!pickable) return;
-    rulesSlot.replaceChildren(ruleSelect(items, t('newgame.rules')));
+    // the shared game-mode dropdown (built-ins + the player's own modes, with icons)
+    rulesPick.hidden = false;
+    plainLine.hidden = true;
+    rulesSlot.replaceChildren(
+      modeSelect({
+        current: customId ?? mode,
+        onPick: (id) => {
+          const c = isBuiltInMode(id) ? null : customMode(id);
+          customId = c ? c.id : null;
+          o.onCustom?.(customId);
+          setMode(c ? c.base : (id as GameMode), true);
+          updateRules();
+          renderRuleSelect();
+        },
+      }),
+    );
   }
 
   const surprise = btn(
@@ -388,16 +450,24 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
   );
   const start = btn(
     t('newgame.start'),
-    () => o.onStart({ mode, players: count(), teams: !side() && isTeams(), lineup: { ...lu }, clock: { ...clock }, partnerSide: side() ? (partnerLeft ? 'before' : 'after') : undefined }),
+    () => o.onStart({ mode, ...(customId ? { custom: customId } : {}), players: count(), teams: !side() && isTeams(), lineup: { ...lu }, clock: { ...clock }, partnerSide: side() ? (partnerLeft ? 'before' : 'after') : undefined }),
     'primary ng-start',
     h('span.btn-icon', { html: ICONS.play }),
   );
   start.dataset.autofocus = '';
 
   const applyMode = () => {
-    playersSeg.hidden = side();
-    fixedNote.hidden = !side();
-    seatingRow.hidden = side() || players !== 4;
+    // never hidden, only disabled: Codo a codo is always 4 players, 2 vs 2; teams need 4 players
+    fixedNote.hidden = true;
+    playersSeg.querySelector<HTMLButtonElement>('.rsel-btn')?.toggleAttribute('disabled', forcedTeams());
+    playersSeg.classList.toggle('is-disabled', forcedTeams());
+    const teamsLocked = def().teams !== 'optional' || players !== 4;
+    const shownTeams = forcedTeams() ? 'teams' : def().teams === 'off' || players !== 4 ? 'ffa' : teams2v2 ? 'teams' : 'ffa';
+    teamsSeg.classList.toggle('is-disabled', teamsLocked);
+    teamsSeg.querySelectorAll<HTMLButtonElement>('.seg-opt').forEach((b, i) => {
+      b.disabled = teamsLocked;
+      b.setAttribute('aria-checked', String((i === 0 ? 'ffa' : 'teams') === shownTeams));
+    });
     renderSeats();
     refresh();
     updateRules();
@@ -414,11 +484,55 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
       h(
         'div.ng-body',
         h('div.ng-left', rulesPick, h('div.ng-lines', playersRow, seatingRow), h('div.ng-felt-box', felt, swapSide)),
-        h('div.ng-right', h('section.ng-pick', pickTitle, grid, desc), sideFoot),
+        h('div.ng-right', pickPanel, sideFoot),
       ),
     ),
     foot,
   );
+  // sheet mode: the panel lives at the screen root (over the footer), with its scrim
+  const right = root.querySelector('.ng-right')!;
+  const placeSheet = (): void => {
+    closeSheet();
+    if (sheetMq.matches) {
+      root.append(scrim, pickPanel);
+    } else {
+      scrim.remove();
+      right.prepend(pickPanel);
+    }
+  };
+  placeSheet();
+  sheetMq.addEventListener('change', placeSheet);
+  // swipe the sheet down (from its handle / title) to close it
+  let drag: { y: number; id: number } | null = null;
+  pickPanel.addEventListener('pointerdown', (e) => {
+    if (!sheetOpen || !(e.target === handle || e.target === pickTitle || e.target === pickPanel)) return;
+    drag = { y: e.clientY, id: e.pointerId };
+    pickPanel.setPointerCapture(e.pointerId);
+    pickPanel.style.transition = 'none';
+  });
+  pickPanel.addEventListener('pointermove', (e) => {
+    if (drag && e.pointerId === drag.id) pickPanel.style.transform = `translateY(${Math.max(0, e.clientY - drag.y)}px)`;
+  });
+  const endDrag = (e: PointerEvent): void => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dy = e.clientY - drag.y;
+    drag = null;
+    pickPanel.style.transition = '';
+    pickPanel.style.transform = '';
+    if (dy > 60) closeSheet();
+  };
+  pickPanel.addEventListener('pointerup', endDrag);
+  pickPanel.addEventListener('pointercancel', endDrag);
+  // Escape / Android back close the sheet first
+  const onKey = (e: KeyboardEvent): void => {
+    if (!root.isConnected) return void window.removeEventListener('keydown', onKey, true);
+    if (sheetOpen && (e.key === 'Escape' || e.key === 'GoBack' || e.key === 'BrowserBack')) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      closeSheet();
+    }
+  };
+  window.addEventListener('keydown', onKey, true);
   // wide screens: the rules line and the two buttons sit under the character picker; phones keep the footer
   const wideMq = matchMedia('(min-width: 701px) and (orientation: landscape)');
   const placeFoot = () => {

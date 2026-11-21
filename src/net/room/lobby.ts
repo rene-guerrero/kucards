@@ -20,6 +20,8 @@ import {
 import { isCharacter, ROSTER } from '../../roster';
 import { emptySchedule, type Schedule } from './schedule';
 import { sanitizeClock, type ClockSettings } from '../../engine/clock';
+import { sanitizeModeDef, type ModeDef } from '../../engine/modes';
+import { isCustomId } from '../../modes/core';
 
 /** what a seat holds (member details live in RoomData.members) */
 export type SeatSlot = { kind: 'empty' } | { kind: 'human'; playerId: string } | { kind: 'cpu'; characterId: string };
@@ -36,6 +38,8 @@ export interface Member {
 
 export interface RoomData {
   v: 1;
+  /** a player-made mode being played (sanitized); `mode` is its base */
+  custom?: ModeDef;
   code: string;
   createdAt: number;
   phase: RoomPhase;
@@ -229,7 +233,8 @@ export function setMode(r: RoomData, playerId: string, mode: GameMode, playerCou
   if (!MODES.includes(mode)) throw new LobbyError('bad_request', 'bad mode');
   const count = mode === 'sideBySide' ? 4 : playerCount;
   if (count !== 2 && count !== 3 && count !== 4) throw new LobbyError('bad_request', 'bad player count');
-  if (mode !== r.mode) r.rules = normalizeRules({}, mode);
+  if (mode !== r.mode || r.custom) r.rules = normalizeRules({}, mode);
+  delete r.custom;
   r.mode = mode;
   r.playerCount = count;
   r.teamPlay = mode !== 'sideBySide' && count === 4 && teamPlay === true;
@@ -245,6 +250,26 @@ export function setMode(r: RoomData, playerId: string, mode: GameMode, playerCou
     const free = act.find((s) => r.seats[s].kind === 'empty') ?? act.find((s) => r.seats[s].kind === 'cpu');
     if (free !== undefined) r.seats[free] = { kind: 'human', playerId: pid };
   }
+}
+
+/** lobby, host only: play a player-made mode (null = back to the built-in mode) */
+export function setCustom(r: RoomData, playerId: string, raw: unknown, playerCount?: number, teamPlay = false): void {
+  requireHost(r, playerId);
+  if (!isLobbyLike(r)) throw new LobbyError('bad_request', 'not in the lobby');
+  if (raw === null) {
+    delete r.custom;
+    r.rules = normalizeRules({}, r.mode);
+    return;
+  }
+  if (!raw || typeof raw !== 'object' || JSON.stringify(raw).length > 8000) throw new LobbyError('bad_request', 'bad mode');
+  const def = sanitizeModeDef(raw);
+  if (!isCustomId(def.id)) throw new LobbyError('bad_request', 'bad mode');
+  const count = def.teams === 'always' ? 4 : playerCount === 2 || playerCount === 3 || playerCount === 4 ? playerCount : r.playerCount;
+  // reseat like a mode change, then adopt the definition
+  setMode(r, playerId, def.base === 'sideBySide' && def.teams !== 'always' ? 'classic' : def.base, count === 2 || count === 3 || count === 4 ? count : 4, false);
+  r.custom = def;
+  r.rules = { ...def.rules };
+  r.teamPlay = count === 4 && def.teams !== 'off' && (def.teams === 'always' || teamPlay === true);
 }
 
 export function setRules(r: RoomData, playerId: string, rules: unknown): void {
@@ -356,6 +381,7 @@ export function publicRoom(r: RoomData): PublicRoom {
     mode: r.mode,
     playerCount: r.playerCount,
     teamPlay: !!r.teamPlay,
+    ...(r.custom ? { custom: r.custom } : {}),
     seats,
     rules: { ...r.rules },
     scores: roomScores(r),

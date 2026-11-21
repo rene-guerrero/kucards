@@ -1,6 +1,7 @@
-import type { Card, CardFace, CardKind, Color, RuleSettings } from '../contracts';
+import type { Card, CardFace, CardKind, Color, MatchState, RuleSettings } from '../contracts';
 import { COLORS, isNightColor, NIGHT_COLORS } from '../contracts';
 import { Rng } from './rng';
+import { DAY_SIDE_DECK, deckSpecForRules, NIGHT_SIDE_DECK, TWO_SIDED_KINDS, type DeckEntry, type DeckSpec } from './modes';
 
 /** Points a card is worth in the hand of a player who did not win the round. */
 export function cardPoints(face: CardFace): number {
@@ -34,40 +35,39 @@ export const PENALTY_DRAW: Partial<Record<CardKind, number>> = { draw2: 2, wild4
  * (120 before power cards). The wild "draw until the colour" (wildColor) is dealt in no deck any more
  * (the engine still plays it).
  * `deck: 'sideBySide'` is the classic deck plus one +6 per colour. Per-mode totals: see rules.ts.
- * skipAll (salto a todos) is in no deck any more, day or night (the engine still plays it).
+ * skipAll (salto a todos) is in no built-in deck any more, day or night (the engine still plays it).
+ * `deck: 'dayNight'` is two-sided: `spec` is the day side and `night` the night side (each defaults to
+ * the Día y Noche list: modes.ts DAY_SIDE_DECK / NIGHT_SIDE_DECK).
+ * Player-made decks pass their list as `spec` (and `night`).
  */
-export function buildDeck(rules: RuleSettings): Card[] {
-  if (rules.deck === 'dayNight') return buildDayNightDeck();
+export function buildDeck(rules: RuleSettings, spec?: DeckSpec, night?: DeckSpec): Card[] {
+  if (rules.deck === 'dayNight') return buildTwoSidedDeck(spec ?? DAY_SIDE_DECK, night ?? NIGHT_SIDE_DECK);
+  return buildDeckFromSpec(spec ?? deckSpecForRules(rules));
+}
+
+/** the deck a match plays with (its rules plus a player-made mode's lists) */
+export const matchDeck = (m: Pick<MatchState, 'rules' | 'deckSpec' | 'nightSpec'>): Card[] => buildDeck(m.rules, m.deckSpec, m.nightSpec);
+
+/** a one-sided deck from its card list (modes.ts: DeckSpec), in the list's order; Eclipses are left out (they need a second side) */
+export function buildDeckFromSpec(spec: DeckSpec): Card[] {
   const faces: CardFace[] = [];
-  const action = rules.deck === 'action';
-  const cyclone = rules.deck === 'cyclone';
   const add = (kind: CardKind, color: Color | null, n: number, extra: Partial<CardFace> = {}) => {
+    if (TWO_SIDED_KINDS.includes(kind)) return;
     const draw = PENALTY_DRAW[kind];
     for (let i = 0; i < n; i++) faces.push({ kind, color, ...(draw ? { draw } : {}), ...extra });
   };
   for (const c of COLORS) {
-    add('number', c, 1, { value: 0 });
-    for (let v = 1; v <= 9; v++) if (!action || v >= 5) add('number', c, 2, { value: v });
-    add('skip', c, action ? 4 : 2);
-    add('reverse', c, action ? 4 : 2);
-    add('draw2', c, action ? 4 : 2);
-    if (cyclone || rules.deck === 'sideBySide') add('draw6', c, 1);
-    if (rules['power.shield']) add('shield', c, 1);
-    if (rules['power.sweep']) add('sweep', c, cyclone || rules.deck === 'sideBySide' ? 2 : 1);
-    if (rules['power.mirror']) add('mirror', c, 1);
+    add('number', c, spec.numbers.zero, { value: 0 });
+    for (let v = Math.max(1, spec.numbers.minValue); v <= 9; v++) add('number', c, spec.numbers.each, { value: v });
+    for (const x of spec.perColor) add(x.kind, c, x.n);
   }
-  add('wild', null, 4);
-  add('wild4', null, 4);
-  if (cyclone) {
-    add('draw10', null, 6);
-    add('wild4', null, 2);
-  }
-  if (rules['power.swap']) add('swap', null, 2);
+  for (const x of spec.wild) add(x.kind, null, x.n);
   return faces.map((face, id) => ({ id, face }));
 }
 
 /** cards without a colour of their own: the player picks the active colour */
-export const isWildKind = (k: CardKind): boolean => k === 'wild' || k === 'wild4' || k === 'swap' || k === 'draw10' || k === 'wildColor';
+export const isWildKind = (k: CardKind): boolean =>
+  k === 'wild' || k === 'wild4' || k === 'swap' || k === 'draw10' || k === 'wildColor' || k === 'wildFlip' || k === 'sweepWild';
 /** penalty cards (stackable draw penalties) */
 export const isPenaltyKind = (k: CardKind): boolean => (PENALTY_DRAW[k] ?? 0) > 0;
 
@@ -75,47 +75,60 @@ export const isPenaltyKind = (k: CardKind): boolean => (PENALTY_DRAW[k] ?? 0) > 
 export const NIGHT_DRAW = 5;
 /** Día y Noche: the night Comodín +6 (a 'wild4' kind card that makes the victim draw 6) */
 export const NIGHT_WILD_DRAW = 6;
+/** night-side penalties that differ from the day ones (the rest draw what PENALTY_DRAW says) */
+const NIGHT_PENALTY: Partial<Record<CardKind, number>> = { draw6: NIGHT_DRAW, wild4: NIGHT_WILD_DRAW };
 
-/** Día y Noche, day side (112): per colour one 0, two of 1–9, two Salto / Vuelta / +2, one Eclipse; 4 Comodín, 4 +4 */
-export function dayFaces(): CardFace[] {
-  const out: CardFace[] = [];
-  for (const c of COLORS) {
-    out.push({ kind: 'number', color: c, value: 0 });
-    for (let v = 1; v <= 9; v++) out.push({ kind: 'number', color: c, value: v }, { kind: 'number', color: c, value: v });
-    for (let i = 0; i < 2; i++) out.push({ kind: 'skip', color: c }, { kind: 'reverse', color: c }, { kind: 'draw2', color: c, draw: 2 });
-    out.push({ kind: 'flip', color: c });
-  }
-  for (let i = 0; i < 4; i++) out.push({ kind: 'wild', color: null }, { kind: 'wild4', color: null, draw: 4 });
+/**
+ * a list's entries dealt round-robin, the entries lined up at the end: an entry of n cards takes part in
+ * the last n rounds. [skip 2, reverse 2, draw2 2, flip 1] → skip reverse draw2 skip reverse draw2 flip.
+ */
+function roundRobin(entries: readonly DeckEntry[]): CardKind[] {
+  const max = entries.reduce((m, x) => Math.max(m, x.n), 0);
+  const out: CardKind[] = [];
+  for (let k = 0; k < max; k++) for (const x of entries) if (k >= max - x.n) out.push(x.kind);
   return out;
 }
 
 /**
- * Día y Noche, night side (112): per colour one 0, two of 1–9, two +5, two Vuelta, two Salto total
- * (everyone else loses a turn), one Eclipse; 4 Comodín, 4 Comodín +6 (a 'wild4' kind card with draw 6).
+ * the faces of one side of a two-sided deck: per colour (day or night colours) the numbers, then the
+ * coloured entries round-robin; then the colourless ones round-robin. Night side: +5 / Comodín +6 for
+ * draw6 / wild4, and colourless faces carry `night`.
  */
-export function nightFaces(): CardFace[] {
+export function sideFaces(spec: DeckSpec, night: boolean): CardFace[] {
   const out: CardFace[] = [];
-  for (const c of NIGHT_COLORS) {
-    out.push({ kind: 'number', color: c, value: 0 });
-    for (let v = 1; v <= 9; v++) out.push({ kind: 'number', color: c, value: v }, { kind: 'number', color: c, value: v });
-    for (let i = 0; i < 2; i++) out.push({ kind: 'draw6', color: c, draw: NIGHT_DRAW }, { kind: 'reverse', color: c }, { kind: 'skip', color: c });
-    out.push({ kind: 'flip', color: c });
+  const face = (kind: CardKind, color: Color | null, extra: Partial<CardFace> = {}): CardFace => {
+    const draw = kind === 'number' ? 0 : ((night ? NIGHT_PENALTY[kind] : undefined) ?? PENALTY_DRAW[kind] ?? 0);
+    return { kind, color, ...extra, ...(draw ? { draw } : {}), ...(night && color === null ? { night: true } : {}) };
+  };
+  const perColor = roundRobin(spec.perColor);
+  for (const c of night ? NIGHT_COLORS : COLORS) {
+    for (let i = 0; i < spec.numbers.zero; i++) out.push(face('number', c, { value: 0 }));
+    for (let v = Math.max(1, spec.numbers.minValue); v <= 9; v++) for (let i = 0; i < spec.numbers.each; i++) out.push(face('number', c, { value: v }));
+    for (const k of perColor) out.push(face(k, c));
   }
-  for (let i = 0; i < 4; i++) out.push({ kind: 'wild', color: null, night: true }, { kind: 'wild4', color: null, draw: NIGHT_WILD_DRAW, night: true });
+  for (const k of roundRobin(spec.wild)) out.push(face(k, null));
   return out;
 }
+
+/** Día y Noche, day side (112): per colour one 0, two of 1–9, two Salto / Vuelta / +2, one Eclipse; 4 Comodín, 4 +4 */
+export const dayFaces = (): CardFace[] => sideFaces(DAY_SIDE_DECK, false);
+
+/**
+ * Día y Noche, night side (112): per colour one 0, two of 1–9, two +5, two Vuelta, two Salto, one
+ * Eclipse; 4 Comodín, 4 Comodín +6 (a 'wild4' kind card with draw 6).
+ */
+export const nightFaces = (): CardFace[] => sideFaces(NIGHT_SIDE_DECK, true);
 
 const special = (f: CardFace): boolean => f.color === null || f.kind === 'flip';
 
 /**
- * Día y Noche: day face i is paired with night face pairing[i]. A fixed shuffle (so ids stay a pure
- * function of the rules, like every deck) that is then repaired so no card is special on both sides
- * (a wild or Eclipse behind a wild or Eclipse): a card's back says nothing about its front beyond the
- * plain odds (every day colour spreads over every night colour).
+ * Two-sided decks: day face i is paired with night face pairing[i]. A fixed shuffle (so ids stay a pure
+ * function of the deck lists, like every deck) that is then repaired so no card is special on both sides
+ * (a wild or Eclipse behind a wild or Eclipse) where a plain pair can take its place: a card's back says
+ * nothing about its front beyond the plain odds (every day colour spreads over every night colour).
+ * Both lists must be the same length.
  */
-export function dayNightPairing(): number[] {
-  const day = dayFaces();
-  const night = nightFaces();
+export function dayNightPairing(day: readonly CardFace[] = dayFaces(), night: readonly CardFace[] = nightFaces()): number[] {
   const rng = new Rng(0x6e0c7e);
   const p = night.map((_, i) => i);
   for (let i = p.length - 1; i > 0; i--) {
@@ -136,15 +149,36 @@ export function dayNightPairing(): number[] {
   return p;
 }
 
-let dayNightCache: Card[] | null = null;
-function buildDayNightDeck(): Card[] {
-  if (!dayNightCache) {
-    const day = dayFaces();
-    const night = nightFaces();
-    const p = dayNightPairing();
-    dayNightCache = day.map((face, id) => ({ id, face, other: night[p[id]] }));
+/** `faces` spread evenly over `size` slots (a shorter side repeats some of its faces, in order) */
+function stretch(faces: CardFace[], size: number): CardFace[] {
+  if (faces.length === size) return faces;
+  return Array.from({ length: size }, (_, i) => faces[Math.floor((i * faces.length) / size)]);
+}
+
+const twoSidedCache = new Map<string, Card[]>();
+/**
+ * a two-sided deck from its day and night lists. The two sides hold the same number of cards: when the
+ * lists differ, the shorter side repeats some of its faces, spread evenly (an empty side takes its
+ * Día y Noche default).
+ */
+export function buildTwoSidedDeck(daySpec: DeckSpec, nightSpec: DeckSpec): Card[] {
+  const key = JSON.stringify([daySpec, nightSpec]);
+  let deck = twoSidedCache.get(key);
+  if (!deck) {
+    let day = sideFaces(daySpec, false);
+    let night = sideFaces(nightSpec, true);
+    if (!day.length) day = dayFaces();
+    if (!night.length) night = nightFaces();
+    const size = Math.max(day.length, night.length);
+    day = stretch(day, size);
+    night = stretch(night, size);
+    const p = dayNightPairing(day, night);
+    const nf = night;
+    deck = day.map((face, id) => ({ id, face, other: nf[p[id]] }));
+    if (twoSidedCache.size > 16) twoSidedCache.clear();
+    twoSidedCache.set(key, deck);
   }
-  return dayNightCache.map((c) => ({ id: c.id, face: { ...c.face }, other: { ...c.other! } }));
+  return deck.map((c) => ({ id: c.id, face: { ...c.face }, other: { ...c.other! } }));
 }
 
 /** Día y Noche: the card turned over (face and other swapped); cards without another side stay */

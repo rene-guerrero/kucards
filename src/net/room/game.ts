@@ -4,7 +4,7 @@
  */
 import type { Difficulty, MatchState, Move, PlayStyle, Seat } from '../../contracts';
 import { chooseMove } from '../../engine/ai';
-import { giveOptions, legalMoves, sameMove } from '../../engine/game';
+import { giveOptions, isLegal, legalMoves, sameMove } from '../../engine/game';
 
 const TURN_KINDS = new Set<Move['kind']>(['play', 'draw', 'pass', 'acceptPenalty', 'respond', 'challenge']);
 export const isTurnMove = (m: Move): boolean => TURN_KINDS.has(m.kind);
@@ -50,7 +50,9 @@ export function cpuTurnMove(match: MatchState, seat: Seat, level: Difficulty, st
 
 /**
  * Shape check of an untrusted move for `seat`: returns the matching legal move (with the optional
- * `ku` and a valid `give`), or null.
+ * `ku`, a valid `give` and, multiPlay, a valid `extra` list), or null. An `extra` list that is not
+ * legal (engine isLegal: rule on, same number, in the hand, no repeats, a plain turn) rejects the whole
+ * move: it would be another move than the player meant. A non-list `extra` is dropped like any junk field.
  */
 export function validMove(match: MatchState, seat: Seat, raw: unknown): Move | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -61,6 +63,13 @@ export function validMove(match: MatchState, seat: Seat, raw: unknown): Move | n
   if (found.kind !== 'play') return { ...found };
   const out: Move = { ...found };
   if (m.ku === true) out.ku = true;
-  if (typeof m.give === 'number' && giveOptions(match, found).includes(m.give)) out.give = m.give;
+  if (Array.isArray(m.extra)) {
+    if (m.extra.length > 108 || !m.extra.every((id) => Number.isInteger(id))) return null;
+    if (m.extra.length) {
+      out.extra = (m.extra as number[]).slice();
+      if (!isLegal(match, out)) return null;
+    }
+  }
+  if (typeof m.give === 'number' && giveOptions(match, out).includes(m.give)) out.give = m.give;
   return out;
 }

@@ -5865,11 +5865,13 @@ button.ng-seat:hover {
   flex: 1 1 0;
 }
 
-/* new game rules dropdown: always opens upward, above the buttons */
-.ng-rsel .rsel-list {
-  top: auto;
-  bottom: calc(100% + 8px);
+/* new game rules dropdown: at the top of the screen now, so it opens downward over the table preview */
+.ng-rsel .rsel-list,
+.ng-rsel .rsel.up .rsel-list {
+  top: calc(100% + 8px);
+  bottom: auto;
 }
+.newgame .ng-left > .ng-rsel { position: relative; z-index: 12; }
 /* raised only while its list is open (a permanent z-index drew it over the phone's character sheet) */
 .ng-rules-wrap:has(.rsel.open) {
   position: relative;
@@ -6190,11 +6192,375 @@ button.ng-seat:hover {
 .resp-host { z-index: 8; }
 /* new game: the rule set on top; Jugadores and Equipos always on one row */
 .newgame .ng-left > .ng-rsel { margin-bottom: 12px; }
-.newgame .ng-lines { flex-wrap: nowrap; column-gap: 12px; }
-.newgame .ng-lines > .ng-line { flex-wrap: nowrap; gap: 8px; min-width: 0; }
-@media (max-width: 480px) {
-  .newgame .ng-lines .ng-line-label { font-size: 13px; }
-  .newgame .ng-lines .seg button { padding-left: 9px; padding-right: 9px; }
-}
+.newgame .ng-lines { flex-wrap: wrap; column-gap: 10px; row-gap: 8px; }
+.newgame .ng-lines > .ng-line { flex-wrap: nowrap; gap: 6px; min-width: 0; }
 .newgame .ng-lines .seg { flex-wrap: nowrap; flex: 0 0 auto; }
 .newgame .ng-lines .seg > * { white-space: nowrap; }
+/* phones: compact so both fit on one row; when the text is bigger (system font size) it wraps, never overlaps */
+@media (max-width: 520px) {
+  .newgame .ng-lines .ng-line-label { font-size: 13px; }
+  .newgame .ng-lines .seg { padding: 3px; gap: 2px; }
+  .newgame .ng-lines .seg-opt { padding: 6px 8px; min-width: 0; font-size: 14px; }
+}
+/* Tiempo: a clock + title line, then one row per setting, labels and dropdowns in even columns */
+.ng-clock { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: .4em; }
+.ng-clock-head { display: flex; align-items: center; gap: .4em; }
+.ng-clock-icon { display: inline-flex; font-size: 1.05em; opacity: .9; }
+.ng-clock-item { display: grid; grid-template-columns: 8.5em 7.5em; align-items: center; gap: 8px; font-size: .9em; }
+.ng-clock-item > .rsel { width: 100%; }
+.ng-clock-item > .rsel .rsel-btn { width: 100%; justify-content: space-between; }
+/* responsive buttons (fitButton): never overflow; the label ellipsizes, then the icon alone */
+.btn { min-width: 0; max-width: 100%; }
+.btn .btn-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn .btn-icon { flex: none; }
+.btn.icon-only .btn-label { display: none; }
+.btn.icon-only { padding-left: 12px; padding-right: 12px; }
+.ng-handle, .ng-scrim { display: none; }
+/* up to 769 px: the characters come up in a bottom sheet (tap a seat); under 450 px the table spans the screen */
+@media (max-width: 449px) {
+  .newgame .ng-felt-box { width: 100vw; max-width: none; margin-left: calc(50% - 50vw); border-radius: 0; }
+  .newgame .ng-felt-box .ng-table { border-radius: 0; }
+}
+@media (max-width: 769px) {
+  .newgame > .ng-pick {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 30;
+    display: flex; flex-direction: column; gap: 8px;
+    max-height: 72%; overflow-y: auto;
+    padding: 8px calc(var(--sar) + 14px) calc(var(--sab) + 16px) calc(var(--sal) + 14px);
+    border-radius: 22px 22px 0 0;
+    background: linear-gradient(180deg, var(--wood-600), var(--wood-700));
+    box-shadow: inset 0 1px 0 rgba(255, 246, 230, .12), 0 -10px 30px rgba(0, 0, 0, .5);
+    transform: translateY(105%); visibility: hidden;
+    transition: transform .32s var(--ease-out), visibility 0s .32s;
+  }
+  .newgame > .ng-pick.open { transform: none; visibility: visible; transition: transform .32s var(--ease-out); }
+  .newgame > .ng-pick .ng-handle { display: block; align-self: center; width: 44px; height: 5px; margin: 0 0 4px; border-radius: 3px; background: rgba(255, 246, 230, .3); touch-action: none; }
+  .newgame > .ng-pick .ng-pick-title { text-align: center; touch-action: none; }
+  .newgame > .ng-scrim { display: block; position: absolute; inset: 0; z-index: 29; background: rgba(0, 0, 0, .5); opacity: 0; pointer-events: none; transition: opacity .25s; }
+  .newgame > .ng-scrim.open { opacity: 1; pointer-events: auto; }
+}
+.newgame .is-disabled { opacity: .5; }
+.newgame .is-disabled .seg-opt, .newgame .is-disabled .rsel-btn { cursor: default; pointer-events: none; }
+/* Tiempo: Ronda and Por jugada share a row, Último minuto below; even label / dropdown columns */
+.ng-clock { grid-template-columns: 1fr 1fr; column-gap: 14px; }
+.ng-clock-head { grid-column: 1 / -1; }
+.ng-clock-item { grid-template-columns: 5.9em minmax(0, 1fr); }
+/* players dropdown and the Individual / 2 vs 2 switch: equal halves of the full row */
+.newgame .ng-lines { display: grid; grid-template-columns: 1fr 1fr; column-gap: 10px; }
+.newgame .ng-lines > .ng-line, .newgame .ng-lines > .ng-line > * { width: 100%; min-width: 0; }
+.newgame .ng-lines .ng-players .rsel, .newgame .ng-lines .ng-players .rsel-btn { width: 100%; justify-content: space-between; }
+.newgame .ng-lines .seg { display: flex; width: 100%; }
+.newgame .ng-lines .seg-opt { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* new-game seats: no box, the selected player's avatar ring lights up; name · level on one line */
+.newgame .ng-seat, .newgame .ng-seat.active, .newgame .ng-seat.team-0, .newgame .ng-seat.team-1,
+.newgame .ng-seat.active.team-0, .newgame .ng-seat.active.team-1 { background: none; box-shadow: none; }
+.newgame .ng-seat.active .ng-seat-face { box-shadow: 0 0 0 3px var(--mango), 0 0 16px rgba(255, 182, 39, .55); }
+.ng-seat-line { display: flex; align-items: baseline; justify-content: center; gap: 5px; max-width: 100%; min-width: 0; margin-top: 3px; }
+.ng-seat-line .ng-seat-name { margin: 0; min-width: 0; }
+.ng-seat-line .ng-seat-meta { min-height: 0; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ng-seat-line .ng-seat-meta:not(:empty)::before { content: '·'; margin-right: 5px; opacity: .7; }
+.ng-seat.me .ng-seat-line { margin: 0; }
+/* sheet screens: the table area doesn't scroll (the characters are in the sheet) */
+@media (max-width: 769px) {
+  .newgame .ng-scroll { overflow: hidden; }
+}
+.ng-clock-item { grid-template-columns: auto minmax(5.4em, 1fr); }
+.ng-clock-item > span:first-child { white-space: nowrap; }
+.ng-clock-item .rsel-v { overflow: visible; text-overflow: clip; }
+/* stacked field ("label over control"): a one-line label (ellipsis) above a full-width control; a row of
+   them shares equal columns, so every control has the same width at any screen size */
+.field-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 10px; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field > .field-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: .85em; opacity: .85; }
+.field > .rsel, .field > .rsel .rsel-btn { width: 100%; justify-content: space-between; }
+/* Tiempo uses it */
+.ng-clock { display: flex; flex-direction: column; gap: 8px; }
+/* new-game players: a lineup, not table positions. One row when it fits, else 2 x 2; 2 vs 2 is always the
+   2 x 2 square split in two halves in the team colours (my team on top). Every avatar the same size. */
+.newgame .ng-felt-box { container-type: inline-size; }
+.newgame .ng-table {
+  position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px;
+  height: auto; min-height: 0; aspect-ratio: auto; padding: 10px 8px; overflow: hidden;
+}
+.newgame .ng-table .ng-seat {
+  position: static; inset: auto; transform: none; width: auto; max-width: none; margin: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 2px;
+  padding: 6px 2px; border-radius: 14px; order: 1;
+}
+.newgame .ng-table .ng-seat.me { order: 0; }
+.newgame .ng-table .ng-seat.me .ng-seat-face { width: var(--sf); height: var(--sf); padding: 3px 4px 5px; }
+.newgame .ng-table .ng-seat-name, .newgame .ng-table .ng-seat-meta { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container (max-width: 400px) {
+  .newgame .ng-table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.newgame .ng-table.partners { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; padding: 8px; }
+.newgame .ng-table.partners .ng-seat.me, .newgame .ng-table.partners .ng-seat.team-0 { border-radius: 0; }
+.newgame .ng-table.partners > .ng-seat:nth-child(n) { border-radius: 0; }
+.newgame .ng-table.partners .ng-seat { border-radius: 0; padding: 10px 4px; }
+.newgame .ng-table.partners .ng-seat.team-0 { order: 1; background: color-mix(in srgb, var(--us) 22%, transparent); }
+.newgame .ng-table.partners .ng-seat.me.team-0 { order: 0; }
+.newgame .ng-table.partners .ng-seat.team-1 { order: 2; background: color-mix(in srgb, var(--them) 22%, transparent); }
+.newgame .ng-table .ng-seat[hidden] { display: none; }
+/* icon-only always shows its icon, even where a narrow-screen rule hides button icons */
+.btn.icon-only .btn-icon { display: inline-flex !important; }
+/* players: 2 x 2 under 460 px too; bigger avatars and a taller table in the square */
+@media (max-width: 459px) {
+  .newgame .ng-table { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.newgame .ng-table { --sf: clamp(52px, 15vw, 72px); row-gap: 10px; padding: 14px 10px; }
+.newgame .ng-table .ng-seat { padding: 10px 4px; }
+/* no team letter under my name */
+.newgame .ng-table .ng-team { display: none; }
+/* 2 vs 2: my team in the left column, the rivals on the right; solid team colours */
+.newgame .ng-table.partners { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto; grid-auto-flow: column; padding: 8px; row-gap: 0; }
+.newgame .ng-table.partners .ng-seat.team-0 { background: color-mix(in srgb, var(--us) 38%, #0b2129); }
+.newgame .ng-table.partners .ng-seat.team-1 { background: color-mix(in srgb, var(--them) 38%, #0b2129); }
+.newgame .ng-table.partners .ng-seat { padding: 14px 4px; }
+/* Tiempo: the three dropdowns fill their equal columns */
+.ng-clock .field-row { width: 100%; }
+.ng-clock .field > .rsel { display: block; width: 100%; }
+.ng-clock .field > .rsel > .rsel-btn { display: flex; width: 100%; justify-content: space-between; }
+.ng-clock .field > .field-label { text-align: left; }
+.ng-clock-head { justify-content: flex-start; }
+.ng-clock { align-items: stretch; } .ng-clock > .ng-clock-head { align-self: flex-start; }
+/* ── players lineup, offline new game AND the online Sala: one layout for Individual and 2 vs 2 ──
+   4 in a row when the box is wide, else 2 x 2 (me + partner in the left column). 2 vs 2 changes only the
+   backgrounds (the players' ring colours), never sizes or places. */
+.newgame .ng-table.ng-table {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-template-rows: auto; grid-auto-flow: row;
+  gap: 0; padding: 8px; width: 100%; height: auto; aspect-ratio: auto; --sf: clamp(52px, 15vw, 72px);
+}
+@container (max-width: 400px) {
+  .newgame .ng-table.ng-table { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto; grid-auto-flow: column; }
+}
+@media (max-width: 459px) {
+  .newgame .ng-table.ng-table { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto; grid-auto-flow: column; }
+}
+.newgame .ng-table .ng-seat.ng-seat {
+  position: static; width: auto; max-width: none; margin: 0; padding: 14px 4px; border-radius: 0;
+  background: none; box-shadow: none; order: 1; transform: none;
+}
+.newgame .ng-table .ng-seat.ng-seat.me { order: 0; }
+.newgame .ng-table .ng-seat.ng-seat.team-1 { order: 2; }
+.newgame .ng-table.partners .ng-seat.ng-seat.team-0 { background: var(--us); }
+.newgame .ng-table.partners .ng-seat.ng-seat.team-1 { background: var(--them); }
+.newgame .ng-table.partners .ng-seat-name, .newgame .ng-table.partners .ng-seat-meta { color: #0b1a20; text-shadow: none; }
+.newgame .ng-table .ng-seat.me .ng-seat-face { width: var(--sf); height: var(--sf); padding: 3px 4px 5px; }
+.newgame .ng-table .ng-seat.me .ng-seat-name { font-size: 15px; margin-top: 3px; }
+/* face editor: the name field heads the button column; dice / reset icons on Aleatorio / Restablecer */
+.face-editor .kua-actions > .text-input { width: 100%; box-sizing: border-box; }
+.face-editor .kua-actions .kua-btn { display: inline-flex; align-items: center; justify-content: center; gap: .45em; }
+.face-editor .kua-actions .kua-btn::before {
+  content: ''; flex: none; width: 1.15em; height: 1.15em; background: currentColor;
+  -webkit-mask: var(--kbi) center / contain no-repeat; mask: var(--kbi) center / contain no-repeat;
+}
+.face-editor .kua-actions .kua-btn-accent {
+  --kbi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath fill-rule='evenodd' d='M16 7h16a9 9 0 0 1 9 9v16a9 9 0 0 1-9 9H16a9 9 0 0 1-9-9V16a9 9 0 0 1 9-9Zm.5 6.1a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Zm15 0a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8ZM24 20.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Zm-7.5 7.5a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Zm15 0a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Z'/%3E%3C/svg%3E");
+}
+.face-editor .kua-actions .kua-btn:not(.kua-btn-accent) {
+  --kbi: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round' d='M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 3.8v3.9h3.9'/%3E%3C/svg%3E");
+}
+/* the same order in Individual and 2 vs 2 (nobody moves when the switch flips): me, across, right, left —
+   2 vs 2 across = my partner, so my team fills the left column */
+.newgame .ng-table .ng-seat.ng-seat.pos-top { order: 1; }
+.newgame .ng-table .ng-seat.ng-seat.pos-right { order: 2; }
+.newgame .ng-table .ng-seat.ng-seat.pos-left { order: 3; }
+.newgame .ng-table .ng-seat.ng-seat.me, .newgame .ng-table .ng-seat.ng-seat.pos-bottom { order: 0; }
+/* 2 vs 2 halves: the rules dropdown's teal and a matching coral, white text, clipped by the table's
+   rounded corners (no inner padding) */
+.newgame .ng-table.partners .ng-seat.ng-seat.team-0 { background: linear-gradient(#2ccdbf, #14a3a0); }
+.newgame .ng-table.partners .ng-seat.ng-seat.team-1 { background: linear-gradient(#f2766a, #cf4b40); }
+.newgame .ng-table.partners .ng-seat-name, .newgame .ng-table.partners .ng-seat-meta { color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.newgame .ng-table.partners .ng-seat-meta { opacity: .92; }
+/* Sala: equal gaps code → rules → players; no scroll; the footer stays at the bottom */
+.lobby .ng-mode { display: flex; flex-direction: column; gap: 8px; }
+.lobby .ng-body { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.lobby .ng-body > .ng-foot, .lobby .ng-right > .ng-foot { margin-top: auto; }
+/* summary: a little room between the PUNTOS and TOTAL headers */
+.sum-row.sum-cols .sum-hand { padding-right: 10px; }
+/* 2 vs 2 is the very same table (frame, padding, no extra rounding): only the cells' colours change,
+   plus a VS badge where the two halves meet */
+.newgame .ng-table.ng-table, .newgame .ng-table.ng-table.partners { position: relative; padding: 8px; }
+.newgame .ng-table.partners::after {
+  content: 'VS'; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(-8deg); z-index: 2;
+  display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffe08a, #ffb627 60%, #e08d00);
+  color: #2a1600; font-weight: 900; font-size: 17px; letter-spacing: -.02em; font-style: italic;
+  box-shadow: 0 0 0 3px #0b1a20, 0 4px 12px rgba(0, 0, 0, .5);
+  pointer-events: none;
+}
+/* the halves are painted on the table itself (where the green was): seats keep no background, so nothing moves */
+.newgame .ng-table.partners .ng-seat.ng-seat.team-0, .newgame .ng-table.partners .ng-seat.ng-seat.team-1 { background: none; }
+.newgame .ng-table.ng-table.partners {
+  background:
+    linear-gradient(#2ccdbf, #14a3a0) left / 50% 100% no-repeat,
+    linear-gradient(#f2766a, #cf4b40) right / 50% 100% no-repeat;
+}
+/* ── Sala (online / friends lobby), rebuilt: scroll area + pinned footer ── */
+.lobby.lb { display: flex; flex-direction: column; }
+.lb-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px calc(var(--sar) + 16px) 12px calc(var(--sal) + 16px); }
+.lb-grid { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 640px; margin: 0 auto; }
+.lb-top, .lb-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.lobby.lb .ng-mode { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.lobby.lb .ng-felt-box { flex: none; width: 100%; height: auto; max-width: none; margin: 0; }
+.lobby.lb .lobby-code { margin: 0; }
+.lb-foot {
+  flex: none; padding: 10px calc(var(--sar) + 16px) calc(var(--sab) + 12px) calc(var(--sal) + 16px);
+  background: linear-gradient(to top, rgba(10, 21, 28, .97), rgba(10, 21, 28, .8));
+}
+.lb-foot-inner { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 640px; margin: 0 auto; }
+.lb-foot-inner > .btn { width: 100%; }
+.lb-foot-inner > [hidden] { display: none; }
+/* wide: controls + seats on the left, the code (+ QR) on the right; the footer under both */
+@media (min-width: 900px) {
+  .lb-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; max-width: 1100px; align-items: start; }
+  .lb-main { grid-column: 1; grid-row: 1; }
+  .lb-top { grid-column: 2; grid-row: 1; }
+  .lb-foot-inner { max-width: 1100px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 320px); align-items: end; column-gap: 16px; }
+  .lb-foot-inner > .ng-clock { grid-column: 1; }
+  .lb-foot-inner > .btn, .lb-foot-inner > .lobby-wait { grid-column: 2; grid-row: 1; }
+}
+/* game-mode icons in dropdowns (modeSelect) */
+.rsel-ico { display: inline-flex; flex: none; width: 1.7em; height: 1.7em; margin: -.25em .45em -.25em 0; }
+.rsel-ico svg { width: 100%; height: 100%; }
+.rsel-btn .rsel-ico { margin-right: .5em; }
+.rsel-btn { align-items: center; }
+.rsel-opt { align-items: center; }
+/* ── game-mode editor ── */
+.mode-editor { display: flex; flex-direction: column; }
+.me-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px calc(var(--sar) + 16px) 16px calc(var(--sal) + 16px); }
+.me-body { display: flex; flex-direction: column; gap: 10px; max-width: 640px; margin: 0 auto; }
+.me-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.me-h { margin: 0 0 2px; font-size: 15px; font-weight: 900; }
+.me-sub { margin: 6px 0 0; font-size: 12px; font-weight: 900; text-transform: uppercase; opacity: .7; }
+.me-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 40px; }
+.me-label { min-width: 0; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.me-ctl { flex: none; display: flex; justify-content: flex-end; }
+.me-name-row { display: flex; align-items: center; gap: 10px; }
+.me-current-icon { flex: none; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: rgba(0, 0, 0, .28); }
+.me-current-icon svg { width: 44px; height: 44px; }
+.me-name { flex: 1 1 auto; min-width: 0; }
+.me-err { margin: 0; min-height: 1.1em; font-size: 13px; font-weight: 800; color: #ff9b8f; }
+.me-icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(46px, 1fr)); gap: 6px; }
+.me-icon { display: grid; place-items: center; aspect-ratio: 1; border: 0; border-radius: 12px; background: rgba(0, 0, 0, .28); color: var(--cream); cursor: pointer; }
+.me-icon svg { width: 38px; height: 38px; }
+.me-icon[aria-checked='true'] { background: rgba(255, 182, 39, .3); box-shadow: inset 0 0 0 2.5px var(--mango); }
+.me-deck { display: flex; flex-direction: column; gap: 4px; }
+.me-deck[hidden] { display: none; }
+.me-deck-info { margin: 4px 0 0; font-size: 13px; }
+.me-warn { color: #ffb627; font-weight: 800; }
+.stp { display: inline-flex; align-items: center; gap: 4px; padding: 3px; border-radius: 14px; background: rgba(0, 0, 0, .32); }
+.stp-b { width: 34px; height: 34px; border: 0; border-radius: 11px; background: rgba(255, 246, 230, .12); color: var(--cream); font-size: 20px; font-weight: 900; cursor: pointer; }
+.stp-v { min-width: 2ch; text-align: center; font-weight: 900; font-variant-numeric: tabular-nums; }
+.me-foot { flex: none; padding: 10px calc(var(--sar) + 16px) calc(var(--sab) + 12px) calc(var(--sal) + 16px); background: linear-gradient(to top, rgba(10, 21, 28, .97), rgba(10, 21, 28, .8)); }
+.me-foot > .btn { display: flex; width: 100%; max-width: 640px; margin: 0 auto; }
+.me-del-row { display: flex; justify-content: center; padding: 6px 0 4px; }
+.me-row[hidden] { display: none; }
+.rule-ro { font-weight: 800; opacity: .85; white-space: nowrap; }
+.mode-row > .rsel-slot { flex: 1 1 auto; min-width: 0; }
+.mode-row > .rsel-slot > .rsel, .mode-row > .rsel-slot > .rsel > .rsel-btn { width: 100%; }
+.mode-select .rsel-btn { justify-content: flex-start; }
+.mode-select .rsel-btn .rsel-chev { margin-left: auto; }
+/* ── online mode catalog ── */
+.mode-catalog { display: flex; flex-direction: column; }
+.mc-code-row { display: flex; gap: 8px; }
+.mc-code-row .mc-code { flex: 1 1 auto; min-width: 0; text-transform: uppercase; letter-spacing: .12em; font-weight: 900; }
+.mc-msg { margin: 0; min-height: 1.2em; font-size: 13px; font-weight: 800; opacity: .85; }
+.mc-list { display: flex; flex-direction: column; gap: 8px; }
+.mc-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 16px; background: rgba(10, 21, 28, .6); }
+.mc-ico { flex: none; display: grid; place-items: center; width: 40px; height: 40px; }
+.mc-ico svg { width: 100%; height: 100%; }
+.mc-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.mc-name { font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc-meta { font-size: 12px; opacity: .75; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc-get { flex: none; }
+.mode-actions { display: flex; gap: 8px; margin-top: 8px; }
+.mode-actions > .btn { flex: 1 1 0; }
+.mode-share-msg { margin: 6px 0 0; font-size: 13px; font-weight: 800; }
+/* editor deck: two equal columns of stacked fields */
+.me-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.me-field > .seg, .me-field > .stp { width: 100%; box-sizing: border-box; }
+.me-field > .seg { display: flex; }
+.me-field > .seg > .seg-opt { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 6px; padding-right: 6px; }
+.me-field > .stp { display: flex; justify-content: space-between; }
+.me-field > .field-label { font-weight: 800; opacity: .9; font-size: .9em; }
+.me-label-line { display: flex; align-items: center; gap: 6px; min-width: 0; } .me-label-line .info-btn { flex: none; }
+/* stacked field head: one-line label + ⓘ */
+.me-field-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.me-field-head > .field-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 800; font-size: .9em; }
+.me-field-head > .info-btn { flex: none; }
+.me-field > .rsel, .me-field > .rsel > .rsel-btn { width: 100%; justify-content: space-between; }
+.me-field > .toggle, .me-field > button[role='switch'] { align-self: flex-start; }
+/* every control in an editor grid has the same height */
+.me-field > .seg, .me-field > .stp, .me-field > .rsel > .rsel-btn { min-height: 46px; height: 46px; box-sizing: border-box; }
+.me-field > .seg { padding: 4px; }
+.me-field > .seg > .seg-opt { min-height: 0; padding-top: 0; padding-bottom: 0; }
+.me-field > .stp { padding: 4px; }
+.me-field > .stp > .stp-b { height: 38px; }
+/* catalog: one search field with the glass inside, as tall as Abrir */
+.mc-code-row { align-items: stretch; }
+.mc-search { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
+.mc-search > .mc-q { flex: 1 1 auto; min-width: 0; width: 100%; height: 100%; min-height: 48px; box-sizing: border-box; padding-left: 42px; }
+.mc-search-ico { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; opacity: .6; pointer-events: none; color: var(--cream); }
+.mc-search-ico svg { width: 100%; height: 100%; }
+.mc-code-row > .mc-open { flex: none; min-height: 48px; }
+.me-card-thumb { flex: none; display: inline-flex; width: 18px; }
+.me-card-thumb svg { width: 100%; height: auto; display: block; }
+/* option A: compact pill counters (− value +), the + in teal */
+.stp, .me-field > .stp { display: inline-flex; width: auto; justify-content: flex-start; align-items: center; gap: 10px; height: 40px; min-height: 40px; padding: 4px; border-radius: 999px; background: rgba(0, 0, 0, .34); box-sizing: border-box; }
+.stp .stp-b, .me-field > .stp > .stp-b { width: 32px; height: 32px; border-radius: 50%; font-size: 18px; line-height: 1; padding: 0; background: rgba(255, 246, 230, .14); }
+.stp .stp-b.stp-plus { background: linear-gradient(#2ccdbf, #14a3a0); color: #fff; }
+.stp .stp-v { min-width: 1.6ch; }
+.me-field > .seg, .me-field > .rsel > .rsel-btn { height: 40px; min-height: 40px; }
+.me-field { align-self: start; }
+/* card field: thumbnail square on the left spanning label + counter */
+.me-card-field { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: stretch; min-width: 0; }
+.me-card-field > .me-card-thumb { width: auto; height: 100%; aspect-ratio: 2 / 3; display: flex; align-items: center; justify-content: center; }
+.me-card-field > .me-card-thumb svg { height: 100%; width: auto; max-height: 72px; display: block; }
+.me-card-field > .me-field { justify-content: space-between; }
+.me-field > .stp { align-self: flex-start; }
+.me-side { margin: 10px 0 2px; font-size: 14px; font-weight: 900; color: var(--mango); }
+.me-nums-thumb svg { max-height: 72px; }
+/* read-only mode details (Ajustes › Reglas): the editor's sections, controls locked (ⓘ still opens) */
+.me-ro { max-width: none; margin: 0; }
+.me-ro .stp-b, .me-ro .seg-opt, .me-ro .rsel-btn, .me-ro button[role='switch'], .me-ro .toggle { pointer-events: none; }
+.me-ro .stp-b { display: none; }
+.me-ro .stp { padding: 4px 14px; }
+.me-ro .me-card { background: rgba(10, 21, 28, .45); }
+.me-field[hidden] { visibility: hidden; display: flex; }
+/* Día y Noche: sun / moon switch beside the toggle (which side's cards are shown) */
+.me-dn-ctl { display: flex; align-items: center; gap: 10px; }
+.me-daynight { display: inline-flex; padding: 3px; }
+.me-daynight > .seg-opt { display: grid; place-items: center; width: 40px; height: 32px; padding: 0; }
+.me-daynight.is-disabled { opacity: .4; }
+.me-daynight > .seg-opt:disabled { cursor: default; }
+.me-ro .me-daynight > .seg-opt { pointer-events: auto; }
+.me-card-field > .me-nums-thumb { aspect-ratio: 8 / 9; }
+/* ── read-only mode view (no form controls) ── */
+.mode-view { display: flex; flex-direction: column; gap: 10px; }
+.mv-card { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.mv-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.mv-item { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 8px; border-radius: 12px; background: rgba(0, 0, 0, .18); }
+.mv-thumb { flex: none; display: flex; align-items: center; justify-content: center; width: 34px; height: 50px; }
+.mv-thumb svg { width: 100%; height: 100%; display: block; }
+.mv-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.mv-name-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mv-name { min-width: 0; font-weight: 800; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mv-name-line .info-btn { flex: none; }
+.mv-value { font-size: 13px; font-weight: 900; color: var(--mango); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mv-rule { padding: 8px 10px; }
+.mv-sides { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.mv-badge { font-size: 13px; font-weight: 900; }
+.mv-side-pick { display: inline-flex; gap: 4px; padding: 3px; border-radius: 12px; background: rgba(0, 0, 0, .32); }
+.mv-side { display: grid; place-items: center; width: 40px; height: 32px; border: 0; border-radius: 9px; background: transparent; cursor: pointer; }
+.mv-side[aria-pressed='true'] { background: var(--cream); }
+.mv-sheet { display: flex; flex-direction: column; gap: 10px; width: min(100%, 640px); max-height: min(88vh, 900px); }
+.mv-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.mv-close { flex: none; }
+/* under 500 px: one item per row (read-only view, editor grids); the mode row's buttons go under the dropdown */
+@media (max-width: 499px) {
+  .mv-grid, .me-grid { grid-template-columns: minmax(0, 1fr); }
+  .mode-row { flex-wrap: wrap; }
+  .mode-row > .rsel-slot { flex: 1 1 100%; }
+  .mode-row > .rsel-act { flex: 1 1 0; width: auto; }
+}

@@ -24,6 +24,7 @@ import type { FaceSpec } from 'kuavatars/faces';
  */
 import type { Card, Difficulty, GameEvent, GameMode, Move, RuleSettings, Seat } from '../contracts';
 import type { ClockSettings } from '../engine/clock';
+import type { ModeDef } from '../engine/modes';
 
 /** KuCards speaks its own protocol (Kudominoes is v1) */
 export const PROTOCOL_VERSION = 2;
@@ -74,6 +75,8 @@ export interface PublicRoom {
   playerCount: number;
   /** 2 vs 2 Enfrente (4 players, Clásico / Pura acción / Ciclón; absent from older servers = off) */
   teamPlay?: boolean;
+  /** a player-made mode the host picked (its whole definition, so guests can play and copy it); `mode` is its base */
+  custom?: ModeDef;
   /** index = Seat (0..3). Seats in play: SEATS_FOR[playerCount] ({2: [0,2], 3: [0,1,3], 4: [0,1,2,3]}). */
   seats: SeatOccupant[];
   rules: RuleSettings;
@@ -136,6 +139,8 @@ export type ClientMsg =
   /** lobby, host only (Parejas is always 4 players) */
   | { t: 'setMode'; mode: GameMode; playerCount: number; teamPlay?: boolean }
   | { t: 'setRules'; rules: RuleSettings }
+  /** host: play a player-made mode (null = back to the built-in `mode`) */
+  | { t: 'setCustom'; def: ModeDef | null; playerCount?: number; teamPlay?: boolean }
   /** lobby, host only: round limit / move times (clamped by the server) */
   | { t: 'setClock'; clock: ClockSettings }
   /** lobby/finished, host only: start (empty seats are auto-filled with roster CPUs) */
@@ -224,7 +229,12 @@ export function activeSeatsOf(room: { mode: GameMode; playerCount: number }): Se
 }
 
 /** teams of a room (Codo a codo always pairs 0+1 and 2+3 online; 2 vs 2 across pairs 0+2 and 1+3) */
-export function teamsFor(room: { mode: GameMode; playerCount: number; teamPlay?: boolean }): [Seat[], Seat[]] | null {
+export function teamsFor(room: { mode: GameMode; playerCount: number; teamPlay?: boolean; custom?: ModeDef }): [Seat[], Seat[]] | null {
+  const c = room.custom;
+  if (c) {
+    const on = room.playerCount === 4 && (c.teams === 'always' || (c.teams === 'optional' && !!room.teamPlay));
+    return !on ? null : c.seating === 'side' ? [[0, 1], [2, 3]] : [[0, 2], [1, 3]];
+  }
   if (room.mode === 'sideBySide') return [[0, 1], [2, 3]];
   return room.teamPlay && room.playerCount === 4 ? [[0, 2], [1, 3]] : null;
 }

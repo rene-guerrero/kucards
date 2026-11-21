@@ -14,7 +14,7 @@
  */
 import * as THREE from 'three';
 import type {
-  Card, CardBack, CardFace, Color, Direction, FrameStats, GameEvent, Quality, RestoreState, Seat, SeatPlate, SfxName,
+  Card, CardBack, CardFace, Color, Direction, FrameStats, GameEvent, MultiPick, Quality, RestoreState, Seat, SeatPlate, SfxName,
   TableStyle, TableView, TableViewOptions,
 } from '../contracts';
 import * as A from './cardAtlas';
@@ -246,6 +246,7 @@ uniform sampler2D uAtlas;
 uniform sampler2D uBack;
 uniform vec2 uCell;
 uniform vec3 uGlow;
+uniform vec3 uSel;
 varying vec2 vUv;
 varying vec4 vCell;
 varying vec3 vFx;
@@ -262,10 +263,13 @@ void main() {
   float edge = min(e.x * 0.667, e.y);
   // bevel: the rim darkens a touch, so cards read as objects without lighting
   c *= 0.82 + 0.18 * smoothstep(0.0, 0.03, edge);
-  float g = vFx.x;
-  // glow (playable pick / ¡Ku! / win): a thin rim plus a brightened face
+  // glow 0-1 (playable pick / Ku / win): a thin rim plus a brightened face; 1-2: a multi-play
+  // selection adds a wider bright ring inside the rim
+  float g = min(vFx.x, 1.0);
+  float sl = clamp(vFx.x - 1.0, 0.0, 1.0);
   c = mix(c, uGlow, (1.0 - smoothstep(0.012, 0.05, edge)) * g);
   c += uGlow * (g * 0.06);
+  c = mix(c, uSel, (1.0 - smoothstep(0.035, 0.075, edge)) * smoothstep(0.014, 0.03, edge) * sl);
   c *= 1.0 - vFx.y * 0.5;
   gl_FragColor = vec4(c, 1.0);
   #include <colorspace_fragment>
@@ -373,8 +377,15 @@ interface FlyOpts {
 interface HumanReq {
   playable: Set<number>;
   canDraw: boolean;
-  resolve: (v: number | 'draw') => void;
+  /** multiPlay: by card id, the cards that may go down with it (null = plain pick) */
+  joinable: Map<number, number[]> | null;
+  resolve: (v: number | 'draw' | MultiPick) => void;
 }
+
+/** multiPlay: seconds between the cards of one multi-play leaving for the pile */
+const GROUP_STAGGER = 0.1;
+/** multiPlay: each next card of a group lands turned this much more (radians), a small fan on the pile */
+const GROUP_FAN = 0.2;
 
 const newPose = (): Pose => ({ pos: new THREE.Vector3(), quat: new THREE.Quaternion(), s: 1 });
 
@@ -677,6 +688,18 @@ export class CardTable implements TableView {
   private gen = 0;
   private reqGen = 0;
   private req: HumanReq | null = null;
+  /** multiPlay: the human's selected cards, in the order they will go down (badges 1, 2, 3...) */
+  private sel: CardObj[] = [];
+  /** multiPlay: a picked group still in the hand, waiting for its play events (not re-laid out) */
+  private groupWait = new Set<CardObj>();
+  /** multiPlay: flights of a multi-play's earlier cards still in the air, and where the group lands */
+  private groupJobs: Promise<void>[] = [];
+  private groupFirst: CardObj | null = null;
+  private groupN = 0;
+  /** multiDraw2: the penalty of the multi-play's cards so far */
+  private groupPen = 0;
+  private selLayer: HTMLDivElement | null = null;
+  private selBadges: HTMLDivElement[] = [];
   private needsSettle = false;
   private paused = false;
   private disposed = false;
@@ -860,6 +883,7 @@ export class CardTable implements TableView {
         uBack: { value: this.backTex },
         uCell: { value: new THREE.Vector2(A.CELL_SU, A.CELL_SV) },
         uGlow: { value: new THREE.Color('#ffe17a') },
+        uSel: { value: new THREE.Color('#8ff0ff') },
       },
       side: THREE.DoubleSide,
     });
@@ -1126,7 +1150,20 @@ export class CardTable implements TableView {
   private liftPx(o: CardObj): number {
     const r = this.req;
     if (!r || !o.card) return 0;
+    if (this.sel.length) {
+      // a multi-play selection: the picked cards stand well up, the ones that may join a little
+      if (this.sel.includes(o)) return this.fan.ch * 0.3;
+      return this.joinIds().includes(o.card.id) ? this.fan.ch * 0.17 : 0;
+    }
     return r.playable.has(o.card.id) ? this.fan.ch * 0.17 : 0;
+  }
+
+  /** multiPlay: the ids that may join the current selection */
+  private joinIds(): number[] {
+    const first = this.sel[0]?.card;
+    if (!first || !this.req?.joinable) return [];
+    const picked = new Set(this.sel.map((o) => o.card?.id));
+    return (this.req.joinable.get(first.id) ?? []).filter((id) => !picked.has(id));
   }
 
   private focusMemo: { key: string; fan: L.FanLayout | null } = { key: '', fan: null };
@@ -1484,6 +1521,13 @@ export class CardTable implements TableView {
     this.pile.length = 0;
     this.preview = null;
     this.sweepHeld = null;
+    this.sel = [];
+    this.groupWait.clear();
+    this.groupJobs = [];
+    this.groupFirst = null;
+    this.groupN = 0;
+    this.groupPen = 0;
+    this.updateSelBadges();
     this.deckTop.token++;
     this.deckTop.glow = 0;
     this.discardCount = 0;
@@ -1585,7 +1629,7 @@ export class CardTable implements TableView {
     const pose = newPose();
     for (let i = 0; i < n; i++) {
       const o = h[i];
-      if (o.held) continue;
+      if (o.held || (dur > 0 && this.groupWait.has(o))) continue;
       this.handPose(seat, i, n, pose, o);
       if (dur <= 0) this.snap(o, pose);
       else jobs.push(this.fly(o, pose, { dur, ...opt, delay: (opt.delay ?? 0) }));
@@ -1657,7 +1701,15 @@ export class CardTable implements TableView {
 
   /** keep only the top PILE_KEEP card meshes; older ones become pile height */
   private trimPile(): void {
-    while (this.pile.length > PILE_KEEP) this.release(this.pile.shift()!);
+    let cut = 0;
+    for (; this.pile.length > PILE_KEEP; cut++) this.release(this.pile.shift()!);
+    // the pile base grows less per released card than one step between kept cards (and stops growing at its
+    // cap): settle the kept cards to their new heights, or the next card (after a multi-play trims several)
+    // would land below the old top and hide under it
+    if (cut) {
+      const pose = newPose();
+      this.pile.forEach((o, k) => (o.pos.y = this.pilePose(k, o, pose).pos.y));
+    }
     this.updateDeckVisual();
   }
 
@@ -1710,7 +1762,7 @@ export class CardTable implements TableView {
   /** the human's colour-changing card already on the pile (previewPlay) while the colour is being picked */
   private preview: { o: CardObj; id: number } | null = null;
   /** a played sweep card still in its hand: it flies with the swept cards (or alone if no 'sweep' event follows) */
-  private sweepHeld: { o: CardObj; seat: Seat; card: Card; dragged: boolean } | null = null;
+  private sweepHeld: { o: CardObj; seat: Seat; card: Card; dragged: boolean; color: Color | null } | null = null;
 
   /** the colour in play (white when none), brightened a little */
   private fxColor(out = this.fxC, white = 0.25): THREE.Color {
@@ -2195,7 +2247,7 @@ export class CardTable implements TableView {
       case 'deal':
         return this.onDeal(ev, g);
       case 'play':
-        return this.onPlay(ev.seat, ev.card, ev.color, g);
+        return this.onPlay(ev.seat, ev.card, ev.color, g, !!ev.more);
       case 'draw':
         if (ev.deckBack !== undefined) this.setBack(this.deckTop, ev.deckBack);
         return this.onDraw(ev.seat, ev.count, ev.cards, ev.reason, g, ev.backs);
@@ -2218,8 +2270,10 @@ export class CardTable implements TableView {
       case 'window':
         return this.onWindow(ev.window);
       case 'shield':
+        if (ev.card) await this.respondCard(ev.seat, ev.card, g);
         return this.onShield(this.windowVictim ?? ev.seat);
       case 'mirror':
+        if (ev.card) await this.respondCard(ev.from, ev.card, g);
         return this.onMirror(ev.from, ev.to, ev.total);
       case 'swapHands':
         return this.onSwap(ev.a, ev.b, (ev as { cards?: Card[] }).cards, g);
@@ -2231,6 +2285,8 @@ export class CardTable implements TableView {
         return this.onKu(ev.seat);
       case 'kuCaught':
         return this.onKuCaught(ev.target);
+      case 'challenge':
+        return this.onChallenge(ev, g);
       case 'eliminated':
         return this.onEliminated(ev.seat, g);
       case 'reshuffle':
@@ -2580,7 +2636,7 @@ export class CardTable implements TableView {
     this.platesDirty();
   }
 
-  private async onPlay(seat: Seat, card: Card, color: Color | undefined, g: number): Promise<void> {
+  private async onPlay(seat: Seat, card: Card, color: Color | undefined, g: number, more = false): Promise<void> {
     this.remember(card);
     // already on the pile (previewPlay): only the colour and the effects are left
     const pre = this.preview && seat === 0 && this.preview.id === card.id ? this.preview.o : null;
@@ -2597,10 +2653,12 @@ export class CardTable implements TableView {
     if (!pre && idx < 0 && h.length) idx = seat === 0 ? h.findIndex((o) => !o.card) : Math.floor(h.length / 2);
     if (!pre && idx < 0 && h.length) idx = h.length - 1;
     let o: CardObj | null = pre ?? (idx >= 0 ? h.splice(idx, 1)[0] : null);
+    if (o) this.groupWait.delete(o);
     // the winning card: the hand's last one
     const last = !!o && h.length === 0;
     const dragged = !!o && this.dropped === o;
-    this.dropped = null;
+    // (a multi-play: the dragged card may be a later one of the group)
+    if (dragged || !more) this.dropped = null;
     const inHand = !!o;
     if (!o) {
       o = this.alloc();
@@ -2620,13 +2678,58 @@ export class CardTable implements TableView {
     this.lastPlayDraw = pen;
     this.streamDraw = card.face.kind === 'wildColor';
     this.skipAllDone.clear();
-    const slam = pen > 0 || h.length <= 1;
+    // multiPlay: this card is one of several going down in one move (more follow, or earlier ones are flying)
+    const group = more || this.groupJobs.length > 0;
+    const slam = !more && (pen > 0 || h.length <= 1);
     // a sweep card that may take others with it waits in the hand: onSweep throws them all together
-    if (!pre && inHand && card.face.kind === 'sweep' && h.some((x) => !x.card || x.card.face.color === card.face.color)) {
-      this.sweepHeld = { o, seat, card, dragged };
+    // (a wild sweep sweeps the colour its player chose)
+    const sweepCol = card.face.kind === 'sweep' ? card.face.color : card.face.kind === 'sweepWild' ? (color ?? null) : null;
+    if (!pre && inHand && sweepCol && h.some((x) => !x.card || x.card.face.color === sweepCol)) {
+      this.sweepHeld = { o, seat, card, dragged, color: sweepCol };
       return;
     }
-    if (!pre) {
+    // a multi +2 (rule multiDraw2): the big mark shows the whole group's penalty
+    let markPen = pen;
+    if (group) {
+      this.groupPen += pen;
+      if (!more) {
+        markPen = this.groupPen;
+        this.groupPen = 0;
+      }
+    }
+    if (!pre && group) {
+      // a multi-play: the cards leave one after another and land in order, each turned a little more
+      // than the one before (a small fan on the pile, the last one on top with the colour in play)
+      const k = this.groupFirst ? this.groupN : 0;
+      this.pileJitter(o, seat);
+      if (this.groupFirst && k > 0) {
+        const f = this.groupFirst;
+        const side = Math.cos(f.jyaw);
+        const fwd = Math.sin(f.jyaw);
+        o.jx = f.jx + side * 0.035 * k;
+        o.jz = f.jz - fwd * 0.035 * k;
+        o.jyaw = f.jyaw - GROUP_FAN * k;
+      } else this.groupFirst = o;
+      this.groupN = k + 1;
+      this.pile.push(o);
+      this.discardCount++;
+      void this.relayout(seat, 0.3, { delay: 0.1 });
+      const obj = o;
+      const flight = this.flyToPile(seat, obj, inHand, dragged, last, g, k).then(() => {
+        if (this.live(g) && more) this.land(obj, false);
+      });
+      if (more) {
+        this.groupJobs.push(flight);
+        await this.anim.wait(this.reduced ? GROUP_STAGGER * 0.5 : GROUP_STAGGER);
+        return;
+      }
+      await flight;
+      await Promise.all(this.groupJobs);
+      this.groupJobs = [];
+      this.groupFirst = null;
+      this.groupN = 0;
+      if (!this.live(g)) return;
+    } else if (!pre) {
       this.pileJitter(o, seat);
       this.pile.push(o);
       this.discardCount++;
@@ -2642,7 +2745,7 @@ export class CardTable implements TableView {
     if (pen > 0) {
       this.fxDraw(pen);
       // the big +N mark pops now (a stack event that follows confirms or grows the total)
-      void this.penMarkUp(this.stackTotal > 0 ? this.stackTotal + pen : pen);
+      void this.penMarkUp(this.stackTotal > 0 ? this.stackTotal + markPen : markPen);
     } else if (card.face.kind === 'wildColor' || card.face.kind === 'wild') this.fxSwirl(card.face.kind === 'wildColor');
     if (card.face.kind === 'skipAll') {
       const others = this.seats.filter((x) => x !== seat && !this.eliminated[x]);
@@ -2654,8 +2757,14 @@ export class CardTable implements TableView {
   }
 
   /** lift out of the fan, then a quick arc onto the pile top (the winning card spins); o is already on this.pile */
-  private async flyToPile(seat: Seat, o: CardObj, inHand: boolean, dragged: boolean, last: boolean, g: number): Promise<void> {
+  private async flyToPile(seat: Seat, o: CardObj, inHand: boolean, dragged: boolean, last: boolean, g: number, group = -1): Promise<void> {
     const pose = this.pilePose(this.pile.length - 1, o, newPose());
+    // a multi-play card that skips the lift (dragged, or reduced motion) waits as long, so the group's
+    // cards keep their order and land one after another
+    if (group >= 0 && (!inHand || dragged || this.reduced)) {
+      await this.anim.wait(this.reduced ? 0.04 : 0.12);
+      if (!this.live(g)) return;
+    }
     // 1) the card lifts out of its fan first (along its own up, away from its neighbours; opponents also lean
     //    towards the table centre), so it never cuts through the cards beside it
     if (inHand && !dragged && !this.reduced) {
@@ -2685,7 +2794,11 @@ export class CardTable implements TableView {
     const r2 = Math.random();
     const opt: FlyOpts = last
       ? { dur: 0.62, arc: seat === 0 ? 0.7 : 1.1, spin: (r1 < 0.5 ? -1 : 1) * Math.PI * 2.5, ease: ease.inOutQuad }
-      : { dur: 0.34 + r1 * 0.08, arc: (seat === 0 ? 0.26 : 0.4) * (0.8 + r2 * 0.45), spin: (r1 - 0.5) * 0.7, ease: ease.inOutQuad };
+      : group >= 0
+        ? // multi-play: the same flight for every card of the group (so they land in order), a little
+          // higher for each next one so it passes over the cards already down
+          { dur: 0.36, arc: (seat === 0 ? 0.28 : 0.42) + group * 0.04, spin: group % 2 ? 0.3 : -0.3, ease: ease.inOutQuad }
+        : { dur: 0.34 + r1 * 0.08, arc: (seat === 0 ? 0.26 : 0.4) * (0.8 + r2 * 0.45), spin: (r1 - 0.5) * 0.7, ease: ease.inOutQuad };
     if (last) this.tweenFx(o, 1, 0, 0.2);
     await this.fly(o, pose, opt);
     if (!this.live(g)) return;
@@ -2939,6 +3052,51 @@ export class CardTable implements TableView {
   }
 
   /** a translucent shield dome pops over the victim's seat */
+  /**
+   * an Escudo / Espejo answering a penalty: the card leaves its player's hand and lands on the pile, then
+   * tucks just under the top card (the engine puts it there: the pile's top and colour don't change)
+   */
+  private async respondCard(seat: Seat, card: Card, g: number): Promise<void> {
+    this.remember(card);
+    const h = this.hands[seat];
+    let idx = h.findIndex((o) => o.card?.id === card.id);
+    if (idx < 0 && h.length) idx = seat === 0 ? h.findIndex((o) => !o.card) : Math.floor(h.length / 2);
+    if (idx < 0 && h.length) idx = h.length - 1;
+    const o = idx >= 0 ? h.splice(idx, 1)[0] : null;
+    if (!o) return;
+    const dragged = this.dropped === o;
+    this.dropped = null;
+    o.held = false;
+    o.glow = 0;
+    o.dim = 0;
+    this.setFace(o, card);
+    this.pileJitter(o, seat);
+    this.pile.push(o);
+    this.discardCount++;
+    void this.relayout(seat, 0.3, { delay: 0.1 });
+    await this.flyToPile(seat, o, true, dragged, h.length === 0, g);
+    if (!this.live(g)) return;
+    this.land(o, false);
+    // under the top card: swap it with the one below and settle both
+    const n = this.pile.length;
+    if (n >= 2) {
+      const top = this.pile[n - 2];
+      this.pile[n - 2] = o;
+      this.pile[n - 1] = top;
+      const job = (x: CardObj, k: number) => {
+        const pose = this.pilePose(k, x, newPose());
+        x.pos.copy(pose.pos);
+        x.quat.copy(pose.quat);
+        x.s = pose.s;
+      };
+      job(o, n - 2);
+      job(top, n - 1);
+      this.kick();
+    }
+    this.trimPile();
+    this.platesDirty();
+  }
+
   private async onShield(seat: Seat): Promise<void> {
     this.sfx('shield');
     this.showBadge(0);
@@ -3028,6 +3186,109 @@ export class CardTable implements TableView {
     }, ease.linear);
     void this.stampAt(target, 'caught', 0.35);
     await this.anim.wait(0.35);
+  }
+
+  /**
+   * The +4 challenge, readable from every seat (about 2 s; reduced motion keeps the beats as short fades).
+   * The HTML layer draws what sits over the avatars (opts.onChallenge: the bolt, the shown hand, the stamp);
+   * the table keeps the time and adds its own sparks, shakes and the +N mark:
+   *  1 call: the bolt runs from the challenger to the wild's player;
+   *  2 reveal: that player's hand is shown (the human's own hand rises instead, its proof cards glowing gold);
+   *  3 verdict: the stamp lands on the loser, who shakes;
+   *  4 penalty: the +N mark shows what the loser draws (grown by 2 when the challenge failed) and waits
+   *    for the 'draw' event that follows, which flies it to the loser (penMarkFly).
+   */
+  private async onChallenge(ev: Extract<GameEvent, { type: 'challenge' }>, g: number): Promise<void> {
+    const red = this.reduced;
+    const low = this.quality === 'low';
+    const ms = (sec: number) => (sec * 1000) / Math.max(0.1, this.anim.speed);
+    const tell = (s: import('../contracts').ChallengeStep) => {
+      try {
+        this.opts.onChallenge?.(s);
+      } catch (e) {
+        console.error('[render] onChallenge failed', e);
+      }
+    };
+    const loser = ev.caught ? ev.target : ev.by;
+    const winner = ev.caught ? ev.by : ev.target;
+    const pending = this.stackTotal || this.penMarkTotal || 4;
+    const draw = ev.draw ?? (ev.caught ? pending : pending + 2);
+    const hand = ev.hand ?? [];
+    const proof = (ev.proof ?? []).map((c) => c.id);
+    const tCall = red ? 0.4 : 0.62;
+    const tShow = hand.length ? (red ? 0.5 : 0.75) : 0.12;
+    const tVerdict = red ? 0.4 : 0.5;
+    // 1: the call
+    this.sfx('charge');
+    this.sfxAt('mirror', 0.04);
+    tell({ step: 'call', by: ev.by, target: ev.target, ms: ms(tCall + 0.3) });
+    if (!red) {
+      // the bolt strikes the accused
+      void this.anim.wait(tCall * 0.45).then(() => {
+        if (!this.live(g)) return;
+        const p = this.platePoint(ev.target, new THREE.Vector3());
+        this.flashAt(p, this.penSize(p) * 1.8, FX_GOLD, 0.3);
+        if (!low) this.sparkRing(p, 0.05, 10, FX_GOLD, 0.9, 0.6);
+        void this.shakeSeat(ev.target, 0.04);
+      });
+    }
+    await this.anim.wait(tCall);
+    if (!this.live(g)) return;
+    // 2: the hand, face up
+    if (hand.length) {
+      this.sfx('deal');
+      if (ev.target === 0) void this.raiseOwnHand(proof, tShow + tVerdict);
+      else tell({ step: 'reveal', target: ev.target, hand, proof, ms: ms(tShow + tVerdict + 0.2) });
+      if (proof.length) this.sfxAt('select', 0.3);
+    }
+    await this.anim.wait(tShow);
+    if (!this.live(g)) return;
+    // 3: the verdict
+    tell({ step: 'verdict', loser, winner, caught: ev.caught, draw, ms: ms(1.15) });
+    this.sfx('slam');
+    this.sfx(loser === 0 ? 'chalLose' : winner === 0 || ev.caught ? 'chalWin' : 'chalLose');
+    void this.shakeSeat(loser, 0.08);
+    const amp = red ? 3 : 9;
+    void this.anim.tween(0.55, (_k, raw) => {
+      this.plateShake[loser] = raw >= 1 ? 0 : Math.sin(raw * Math.PI * 9) * amp * (1 - raw);
+    }, ease.linear);
+    const lp = this.platePoint(loser, new THREE.Vector3());
+    this.flashAt(lp, this.penSize(lp) * 2, COLOR_LIN.coral, 0.35);
+    if (!red && !low) {
+      this.sparkRing(lp, 0.05, 14, COLOR_LIN.coral, 1.1, 0.7);
+      this.sparkRing(this.platePoint(winner, new THREE.Vector3()), 0.05, 12, FX_GOLD, 0.9, 0.9);
+    }
+    await this.anim.wait(tVerdict);
+    if (!this.live(g)) return;
+    // 4: the penalty the loser draws
+    if (draw > 0) {
+      if (draw !== this.penMarkTotal) this.sfx('thump');
+      await this.penMarkUp(draw);
+    }
+  }
+
+  /** the human's own hand rises for a moment (shown to the table); the proof cards glow gold, the rest dim */
+  private raiseOwnHand(proof: number[], dur: number): Promise<void> {
+    const h = this.hands[0];
+    const base = h.map((o) => o.pos.clone());
+    const toks = h.map((o) => ++o.token);
+    const fx = h.map((o) => ++o.fxToken);
+    const g0 = h.map((o) => o.glow);
+    const d0 = h.map((o) => o.dim);
+    const hit = new Set(proof);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(this.layoutCam.quaternion);
+    const lift = this.worldPerPx(HAND_D) * Math.min(44, this.H * 0.07);
+    const red = this.reduced;
+    return this.anim.tween(dur, (_k, raw) => {
+      const env = raw >= 1 ? 0 : red ? 1 : Math.min(1, raw * 5, (1 - raw) * 5);
+      h.forEach((o, i) => {
+        const is = !!o.card && hit.has(o.card.id);
+        if (o.token === toks[i] && base[i]) o.pos.copy(base[i]).addScaledVector(up, lift * env * (is ? 1.5 : hit.size ? 0.5 : 1));
+        if (o.fxToken !== fx[i]) return;
+        o.glow = is ? lerp(g0[i], 0.75 + 0.25 * Math.cos(raw * Math.PI * 6), env) : g0[i];
+        o.dim = hit.size && !is ? lerp(d0[i], Math.max(d0[i], 0.45), env) : d0[i];
+      });
+    }, ease.linear);
   }
   private async moveHands(next: CardObj[][], cardsFor0: Card[] | undefined, g: number): Promise<void> {
     const old = this.hands.map((h) => h.slice());
@@ -3163,7 +3424,8 @@ export class CardTable implements TableView {
     if (!this.live(g)) return;
     if (held) {
       this.land(held.o, h.length <= 1);
-      this.setActiveColor(held.card.face.color);
+      if (held.o.card === held.card && this.chosen.has(held.card.id)) this.setFace(held.o, held.card, this.chosen.get(held.card.id));
+      this.setActiveColor(held.color);
     } else {
       this.puff(this.pilePos, 10);
       this.sfx('clack');
@@ -3185,8 +3447,9 @@ export class CardTable implements TableView {
     await this.flyToPile(s.seat, s.o, true, s.dragged, false, g);
     if (!this.live(g)) return;
     this.land(s.o, this.hands[s.seat].length <= 1);
+    if (s.o.card === s.card && this.chosen.has(s.card.id)) this.setFace(s.o, s.card, this.chosen.get(s.card.id));
     this.trimPile();
-    this.setActiveColor(s.card.face.color);
+    this.setActiveColor(s.color);
     this.platesDirty();
   }
   private async onKu(seat: Seat): Promise<void> {
@@ -3386,12 +3649,31 @@ export class CardTable implements TableView {
 
   // ───────────────────────── human pick ─────────────────────────
 
+  /** lift one of the human's cards as if tapped (null = drop it) */
+  markCard(cardId: number | null): void {
+    const o = cardId === null ? null : (this.hands[0].find((x) => x.card?.id === cardId) ?? null);
+    this.setPeek(0, o);
+    void this.relayout(0, 0.25);
+    this.kick();
+  }
+
   requestHumanPick(playable: number[], canDraw: boolean): Promise<number | 'draw'> {
+    return this.startPick(playable, canDraw, null) as Promise<number | 'draw'>;
+  }
+
+  requestHumanMultiPick(playable: number[], canDraw: boolean, joinable: Record<number, number[]>): Promise<number | 'draw' | MultiPick> {
+    const map = new Map<number, number[]>();
+    for (const [k, v] of Object.entries(joinable)) if (v.length) map.set(Number(k), v.slice());
+    return this.startPick(playable, canDraw, map.size ? map : null);
+  }
+
+  private startPick(playable: number[], canDraw: boolean, joinable: Map<number, number[]> | null): Promise<number | 'draw' | MultiPick> {
     const gen = ++this.reqGen;
     return new Promise((resolve) => {
       const start = () => {
         if (gen !== this.reqGen || this.disposed) return;
-        this.req = { playable: new Set(playable), canDraw, resolve };
+        this.sel = [];
+        this.req = { playable: new Set(playable), canDraw, joinable, resolve };
         this.applyPickFx();
       };
       void this.queue.then(start, start);
@@ -3400,6 +3682,8 @@ export class CardTable implements TableView {
 
   cancelHumanPick(): void {
     this.reqGen++;
+    this.sel = [];
+    this.updateSelBadges();
     if (this.req) {
       this.req = null;
       this.clearPickFx(-1);
@@ -3420,10 +3704,20 @@ export class CardTable implements TableView {
     if (!r) return;
     // no play at all: only the pyramid over the deck says "draw" (no dimmed hand, no deck glow)
     const mustDraw = r.canDraw && r.playable.size === 0;
+    const join = this.sel.length ? new Set(this.joinIds()) : null;
     for (const o of this.hands[0]) {
+      if (join) {
+        // multi-play selection: picked cards get the bright ring, the ones that may join glow, the rest dim
+        const id = o.card?.id ?? -1;
+        if (this.sel.includes(o)) this.tweenFx(o, 2, 0);
+        else if (join.has(id)) this.tweenFx(o, 1, 0);
+        else this.tweenFx(o, 0, r.playable.has(id) ? 0.7 : 1);
+        continue;
+      }
       const ok = !!o.card && r.playable.has(o.card.id);
       this.tweenFx(o, ok ? 1 : 0, ok || mustDraw ? 0 : 1);
     }
+    this.updateSelBadges();
     this.tweenFx(this.deckTop, r.canDraw && !mustDraw ? 1 : 0, 0);
     this.drawCue.visible = mustDraw;
     this.cueT = 0;
@@ -3431,15 +3725,16 @@ export class CardTable implements TableView {
     this.kick();
   }
 
-  private clearPickFx(keep: number): void {
-    for (const o of this.hands[0]) if (!o.card || o.card.id !== keep) this.tweenFx(o, 0, 0);
+  private clearPickFx(keep: number | readonly number[]): void {
+    const kept = (o: CardObj) => !!o.card && (typeof keep === 'number' ? o.card.id === keep : keep.includes(o.card.id));
+    for (const o of this.hands[0]) if (!kept(o)) this.tweenFx(o, 0, 0);
     this.tweenFx(this.deckTop, 0, 0);
     this.drawCue.visible = false;
     const h = this.hands[0];
     const pose = newPose();
     for (let i = 0; i < h.length; i++) {
       const o = h[i];
-      if (o.held || (o.card && o.card.id === keep)) continue;
+      if (o.held || kept(o)) continue;
       this.handPose(0, i, h.length, pose, o);
       void this.fly(o, pose, { dur: 0.18 });
     }
@@ -3450,6 +3745,8 @@ export class CardTable implements TableView {
     const r = this.req;
     if (!r) return;
     if (this.peek?.seat === 0) this.peek = null;
+    this.sel = [];
+    this.updateSelBadges();
     this.req = null;
     this.reqGen++;
     this.sfx('select');
@@ -3471,6 +3768,110 @@ export class CardTable implements TableView {
       r.resolve(v);
     } catch (e) {
       console.error('[render] pick resolve failed', e);
+    }
+  }
+
+  /**
+   * multiPlay: the selected group goes to the pile in badge order. The cards stay where they stand (the
+   * dragged one at the pile, the others lifted in the fan) until their play events fly them over.
+   */
+  private resolveGroup(): void {
+    const r = this.req;
+    const group = this.sel.filter((o) => !!o.card && this.hands[0].includes(o));
+    if (!r || group.length < 2) return;
+    if (this.peek?.seat === 0) this.peek = null;
+    this.sel = [];
+    this.req = null;
+    this.reqGen++;
+    this.sfx('select');
+    for (const o of group) {
+      this.tweenFx(o, 0.6, 0);
+      if (o.held) this.dropped = o;
+      o.held = false;
+      this.groupWait.add(o);
+    }
+    const ids = group.map((o) => o.card!.id);
+    this.clearPickFx(ids);
+    this.updateSelBadges();
+    try {
+      r.resolve({ cardId: ids[0], extra: ids.slice(1) });
+    } catch (e) {
+      console.error('[render] pick resolve failed', e);
+    }
+  }
+
+  /**
+   * multiPlay tap on a hand card: start a selection (a playable card others may join), add a card that
+   * may join, or take a picked card back (with the ones picked after it). A tap on any other card clears
+   * the selection; false = not handled here (the tap then focuses the card as usual).
+   */
+  private tapSelect(o: CardObj): boolean {
+    const r = this.req;
+    const id = o.card?.id;
+    if (!r?.joinable || id === undefined) return false;
+    if (this.sel.length) {
+      const i = this.sel.indexOf(o);
+      if (i >= 0) this.sel.length = i;
+      else if (this.joinIds().includes(id)) this.sel.push(o);
+      else {
+        this.sel = [];
+        this.applyPickFx();
+        return false;
+      }
+      this.sfx('select');
+      this.applyPickFx();
+      return true;
+    }
+    if (!r.playable.has(id) || !r.joinable.has(id)) return false;
+    this.sel = [o];
+    this.peek = null;
+    this.focusMemo.key = '';
+    this.sfx('select');
+    this.applyPickFx();
+    return true;
+  }
+
+  private clearSel(): void {
+    if (!this.sel.length) return;
+    this.sel = [];
+    this.applyPickFx();
+  }
+
+  /** multiPlay: the order badges (1, 2, 3...) on the selected cards' top-left corners, HTML over the canvas */
+  private updateSelBadges(): void {
+    const n = this.sel.length;
+    if (!n && !this.selBadges.some((b) => b.style.display !== 'none')) return;
+    if (n && !this.selLayer) {
+      const l = document.createElement('div');
+      l.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:hidden;z-index:1;';
+      this.container.appendChild(l);
+      this.selLayer = l;
+    }
+    const pt = { x: 0, y: 0 };
+    const v = new THREE.Vector3();
+    for (let i = 0; i < Math.max(n, this.selBadges.length); i++) {
+      let b = this.selBadges[i];
+      if (i >= n) {
+        if (b) b.style.display = 'none';
+        continue;
+      }
+      if (!b) {
+        b = document.createElement('div');
+        b.className = 'ku-sel-badge';
+        b.style.cssText =
+          'position:absolute;left:0;top:0;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:#8ff0ff;color:#0b2530;' +
+          'font:800 13px/22px system-ui,sans-serif;text-align:center;box-shadow:0 0 0 2px #0b2530,0 2px 6px rgba(0,0,0,.5);will-change:transform;';
+        this.selLayer!.appendChild(b);
+        this.selBadges[i] = b;
+      }
+      const o = this.sel[i];
+      // on the card's top edge, left of centre: clear of the corner index, above the cards beside it
+      v.set(-L.CARD_W * 0.18, L.CARD_H * 0.5, 0.002).multiplyScalar(o.s).applyQuaternion(o.quat).add(o.pos);
+      if (this.push > 0) v.add(tmpV2.subVectors(this.camera.position, this.layoutCam.position));
+      this.toScreen(v, pt);
+      if (b.textContent !== String(i + 1)) b.textContent = String(i + 1);
+      b.style.display = 'block';
+      b.style.transform = `translate(${pt.x.toFixed(1)}px,${pt.y.toFixed(1)}px)`;
     }
   }
 
@@ -3601,8 +4002,9 @@ export class CardTable implements TableView {
       } else if (this.req && this.hitDeck(x, y)) kind = 'deck';
     }
     if (!kind) {
-      // a tap on the table lets go of the focused card
+      // a tap on the table lets go of the focused card (and of a multi-play selection)
       this.setPeek(0, null);
+      this.clearSel();
       return;
     }
     this.ptr = { id: e.pointerId, x0: x, y0: y, x, y, idx, deck: kind === 'deck', dragging: false, t: performance.now(), kind, slid: false, touch, wasPeek };
@@ -3685,6 +4087,8 @@ export class CardTable implements TableView {
     const ok = !!r && !!o.card && r.playable.has(o.card.id);
     if (p.dragging) {
       const far = p.y0 - y > Math.max(50, this.fan.ch * 0.6);
+      // multiPlay: dragging any selected card plays the whole selection in badge order
+      if (far && this.sel.length > 1 && this.sel.includes(o)) return this.resolveGroup();
       if (far && ok) return this.resolvePick(o.card!.id);
       o.held = false;
       if (far) {
@@ -3696,6 +4100,8 @@ export class CardTable implements TableView {
       return;
     }
     if (p.slid) return;
+    // multiPlay: a tap selects / adds / takes back cards of the same number
+    if (moved < 16 && this.tapSelect(o)) return;
     // a tap only focuses the card (tap it again to let go); playing takes a drag
     if (moved < 16) this.setPeek(0, this.peek?.seat === 0 && this.peek.o === o ? null : o);
   };
@@ -3883,6 +4289,7 @@ export class CardTable implements TableView {
     if (this.plateScale.some((v) => v !== 1) || this.plateShake.some((v) => v !== 0)) this.emitPlates();
 
     this.writeInstances();
+    if (this.sel.length) this.updateSelBadges();
   }
 
   private writeInstances(): void {
@@ -4133,9 +4540,12 @@ export class CardTable implements TableView {
       else loose.push(o);
     }
     const rest = sorted.filter((c) => !used.has(c.id));
+    // faceless cards take the new faces first. A shown card the list no longer has is still on its way
+    // out (the later cards of a multi-play, or a sweep's cards, whose events have not come yet): it keeps
+    // its face, else it would turn to its back and its own play event would take another card of the hand
+    loose.sort((a, b) => (a.card ? 1 : 0) - (b.card ? 1 : 0));
     loose.forEach((o, i) => {
       if (rest[i]) this.setFace(o, rest[i]);
-      else o.card = null;
     });
     this.sortOpen(seat);
     // an open hand the camera framing did not expect: frame again and move everything to the new view
@@ -4241,6 +4651,8 @@ export class CardTable implements TableView {
     this.gen++;
     this.reqGen++;
     this.req = null;
+    this.selLayer?.remove();
+    this.selLayer = null;
     this.loop.cancel();
     window.clearInterval(this.heartbeat);
     window.removeEventListener('resize', this.onResize);

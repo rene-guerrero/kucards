@@ -225,7 +225,7 @@ describe('penalty response window', () => {
     const m = scenario({ rules, hands: { 0: [d2, num('mar', 1)], 1: [mi, num('mar', 3)], 2: [num('palma', 1)] }, top: num('sol', 5) });
     const a = play(m, { kind: 'play', seat: 0, cardId: d2.id }).match;
     const { match, events } = play(a, { kind: 'respond', seat: 1, cardId: mi.id });
-    expect(events).toContainEqual({ type: 'mirror', from: 1, to: 0, total: 2 });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'mirror', from: 1, to: 0, total: 2 }));
     const r = match.round!;
     expect(r.hands[0]).toHaveLength(3);
     expect(r.hands[1]).toHaveLength(1);
@@ -246,7 +246,7 @@ describe('penalty response window', () => {
     expect(b.round!.pendingFrom).toBe(1);
     expect(kinds(b)).toEqual(['respond', 'acceptPenalty']); // the +2 cannot be stacked on a mirrored stack
     const c = play(b, { kind: 'respond', seat: 0, cardId: mi0.id });
-    expect(c.events).toContainEqual({ type: 'mirror', from: 0, to: 1, total: 2 });
+    expect(c.events).toContainEqual(expect.objectContaining({ type: 'mirror', from: 0, to: 1, total: 2 }));
     const r = c.match.round!;
     expect(r.hands[1]).toHaveLength(3); // no response left: drawn at once
     expect(r.turn).toBe(2); // play resumes after the original victim
@@ -314,7 +314,7 @@ describe('penalty response window', () => {
       expect(legalMoves(a, 2)).toEqual([{ kind: 'acceptPenalty', seat: 2 }]);
       expect(legalMoves(a, partner)).toContainEqual({ kind: 'respond', seat: partner, cardId: sh.id });
       const b = play(a, { kind: 'respond', seat: partner, cardId: sh.id });
-      expect(b.events).toContainEqual({ type: 'shield', seat: partner });
+      expect(b.events).toContainEqual(expect.objectContaining({ type: 'shield', seat: partner }));
       expect(b.match.round!.turn).toBe(2);
       expect(b.match.round!.hands[2]).toHaveLength(1);
       expect(closeWindow(a).match.round!.hands[2]).toHaveLength(3);

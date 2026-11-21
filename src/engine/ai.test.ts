@@ -589,7 +589,7 @@ describe('CPU +4 challenges', () => {
       const mv = chooseMove(m, 1, level);
       expect(mv?.kind, level).toBe('challenge');
       const out = applyMove(m, mv!);
-      expect(out.events).toContainEqual({ type: 'challenge', by: 1, target: 0, caught: true });
+      expect(out.events).toContainEqual(expect.objectContaining({ type: 'challenge', by: 1, target: 0, caught: true }));
     }
   });
 

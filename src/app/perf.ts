@@ -225,6 +225,11 @@ export class QualityGovernor {
   feed(stats: FrameStats, current: Quality): Quality | null {
     const next = LOWER[current];
     if (!next) return null;
+    // a hidden / background tab runs slow on purpose: those frames say nothing about the device
+    if (typeof document !== 'undefined' && document.hidden) {
+      this.bad = 0;
+      return null;
+    }
     // a sample taken under another level (before setQuality took effect) says nothing about this one
     if (stats.quality !== current) {
       this.bad = 0;

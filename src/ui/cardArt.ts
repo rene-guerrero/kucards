@@ -66,6 +66,12 @@ export function symbolSvg(c: AnyColor, size = 24, fill = COLOR_HEX[c]): string {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" focusable="false">${symbolMarkup(c, fill)}</svg>`;
 }
 
+/** mirror glyph: a path comes in from the top left, hits the bar (the mirror) and bounces back; `MIRROR_HEAD` is the arrowhead of the leg going out. The same paths as in src/render/cardAtlas.ts */
+const MIRROR_BOUNCE = 'M4.8 4.8 16.8 12 8 17.4';
+const MIRROR_HEAD = 'M4.4 19.6 9.55 19.98 6.43 14.86Z';
+const MIRROR_BAR = 'M20 3.6v16.8';
+/** skipAll glyph: four arcs of a ring (top, right, bottom, left); the same path as in src/render/cardAtlas.ts */
+const SKIP_ALL_RING = 'M7.31 3.17A10 10 0 0 1 16.69 3.17M20.83 7.31A10 10 0 0 1 20.83 16.69M16.69 20.83A10 10 0 0 1 7.31 20.83M3.17 16.69A10 10 0 0 1 3.17 7.31';
 /** action glyphs in the same 24×24 box (stroke `col`) */
 function glyph(kind: CardKind, col: string, isIndex = col === CREAM): string {
   const st = `fill="none" stroke="${col}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"`;
@@ -81,8 +87,13 @@ function glyph(kind: CardKind, col: string, isIndex = col === CREAM): string {
     case 'shield':
       return `<path d="M12 3.5 19 6v5.5c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6z" ${st}/><path d="M8.6 12l2.4 2.4 4.4-4.6" ${st.replace('2.6', '2')}/>`;
     case 'mirror':
-      return `<path d="M12 3v18M8 7 4 12l4 5M16 7l4 5-4 5" ${st}/>`;
-    case 'sweep': {
+      // reflect: a thick bar (the mirror) and an arrow that comes in at an angle and bounces back off it
+      return (
+        `<path d="${MIRROR_BAR}" ${st.replace('2.6', '3.4')}/><path d="${MIRROR_BOUNCE}" ${st}/>` +
+        `<path d="${MIRROR_HEAD}" fill="${col}" stroke="${col}" stroke-width="1.2" stroke-linejoin="round"/>`
+      );
+    case 'sweep':
+    case 'sweepWild': {
       // the hand, fanned out, goes down onto the pile. On the capsule (deep colour): four cards, a curved
       // arrow and a short stack (top card and two edges); as the ivory corner index: three cards over a plain down arrow.
       const small = isIndex;
@@ -103,9 +114,11 @@ function glyph(kind: CardKind, col: string, isIndex = col === CREAM): string {
     case 'swap':
       return `<path d="M4 8h14l-3-3M20 16H6l3 3" ${st}/><circle cx="12" cy="12" r="1.6" fill="${col}"/>`;
     case 'flip':
+    case 'wildFlip':
       return `<circle cx="12" cy="12" r="8" ${st}/><path d="M12 4a8 8 0 0 1 0 16z" fill="${col}"/>`;
     case 'skipAll':
-      return `<circle cx="12" cy="12" r="8.4" ${st}/><path d="M12 5.6v3M12 15.4v3M5.6 12h3M15.4 12h3" ${st.replace('2.6', '2.2')}/><circle cx="12" cy="12" r="1.8" fill="${col}"/>`;
+      // a small "no" sign inside a broken ring of four arcs: the stop goes out to every side
+      return `<circle cx="12" cy="12" r="5.4" ${st}/><path d="M8.2 15.8 15.8 8.2" ${st}/><path d="${SKIP_ALL_RING}" ${st.replace('2.6', '2.2')}/>`;
     case 'wildColor':
       return `<path d="M12 2.6c2.6 3.4 3.9 5.5 3.9 7.2a3.9 3.9 0 0 1-7.8 0c0-1.7 1.3-3.8 3.9-7.2z" fill="${col}"/><path d="M5 15.5h14M6.5 18.6h11M8 21.6h8" ${st.replace('2.6', '2')}/>`;
     default:

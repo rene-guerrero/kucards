@@ -17,8 +17,8 @@
  */
 import type { Card, CardFace, Color, MatchState, Move, PlayStyle, RoundState, Seat } from '../contracts';
 import { sideColors } from '../contracts';
-import { buildDeck, cardPoints, dayFaces, nightFaces } from './cards';
-import { isLegal, opponents, stepSeat } from './game';
+import { cardPoints, matchDeck } from './cards';
+import { canPlay, isLegal, multiPlayOptions, opponents, stepSeat } from './game';
 import { bit, colorIdx, drawOf, isPenaltyCard, isWildCard, type Knowledge } from './aiKnow';
 import type { Rng } from './rng';
 
@@ -267,8 +267,9 @@ export function scoreTurn(c: Ctx, mv: Move): number {
   const face = card.face;
   let after = hand.filter((x) => x !== card);
   let swept = 0;
-  if (face.kind === 'sweep' && face.color) {
-    const keep = after.filter((x) => x.face.color !== face.color);
+  const sweepCol = face.kind === 'sweep' ? face.color : face.kind === 'sweepWild' ? (ex.color ?? null) : null;
+  if (sweepCol) {
+    const keep = after.filter((x) => x.face.color !== sweepCol);
     swept = after.length - keep.length;
     after = keep;
   }
@@ -350,8 +351,16 @@ export function scoreTurn(c: Ctx, mv: Move): number {
       case 'sweep':
         sc = swept >= 2 ? 14 + 9 * swept : 6 + 3 * swept;
         break;
+      case 'sweepWild':
+        // the colour that sheds the most cards (a wild spent on one card is a waste)
+        sc = swept >= 2 ? 10 + 9 * swept : -10 + 3 * swept;
+        break;
       case 'flip':
         sc = 10 + flipValue(c, card, after);
+        break;
+      case 'wildFlip':
+        // two-sided: an Eclipse whose colour I pick from the side it turns to; one-sided: a plain wild
+        sc = card.other ? (after.length <= 1 ? 30 : 0) + flipValue(c, card, after, ex.color) : after.length <= 1 ? 30 : -15;
         break;
       case 'shield':
       case 'mirror':
@@ -364,16 +373,19 @@ export function scoreTurn(c: Ctx, mv: Move): number {
   }
   if (face.color) sc += 2 * colorCount(after, face.color);
   if (face.color === null && ex.color) {
-    // wild colour: my colours (after a swap I get the target's hand, so their liked colour instead)
+    // wild colour: my colours (after a swap I get the target's hand, so their liked colour instead; a wild
+    // sweep and a wild Eclipse weigh their colour themselves)
     if (face.kind === 'swap' && ex.target !== undefined && c.k) sc += c.k.likes[ex.target] & bit(ex.color) ? 4 : 0;
-    else {
+    else if (face.kind === 'sweepWild' || (face.kind === 'wildFlip' && card.other)) {
+      /* scored above */
+    } else {
       const counts = sideColors(r.side).map((x) => colorCount(after, x));
       const max = Math.max(...counts);
       const mine = colorCount(after, ex.color);
       sc += 3 * mine + (max > 0 && mine === max ? 1 : 0);
     }
   }
-  if (face.color === null && big && face.kind !== 'swap') sc -= w.hoard;
+  if (face.color === null && big && face.kind !== 'swap' && face.kind !== 'sweepWild') sc -= w.hoard;
   if (w.numbers && face.kind !== 'number') sc -= w.numbers * 0.5;
   if (w.variety) sc += w.variety * sideColors(r.side).reduce((t, x) => t + (colorCount(after, x) > 0 ? 1 : 0), 0);
   if (hard) sc += hardExtras(c, card, after, resColor, victim, victimLen, nextPlayer);
@@ -389,7 +401,10 @@ export function faceStrength(f: CardFace): number {
     case 'number':
       return 1;
     case 'wild':
+    case 'wildFlip':
       return 5;
+    case 'sweepWild':
+      return 4;
     case 'wild4':
     case 'wildColor':
       return 6;
@@ -405,14 +420,20 @@ export function faceStrength(f: CardFace): number {
   }
 }
 
-let avgStrength: [number, number] | null = null;
-/** the average face strength of each side of the Día y Noche deck: [day, night] */
-function sideAvg(): [number, number] {
-  if (!avgStrength) {
-    const avg = (fs: CardFace[]) => fs.reduce((t, f) => t + faceStrength(f), 0) / fs.length;
-    avgStrength = [avg(dayFaces()), avg(nightFaces())];
+const avgStrength = new Map<string, [number, number]>();
+/** the average face strength of each side of the match's two-sided deck: [day, night] */
+function sideAvg(m: MatchState): [number, number] {
+  const key = JSON.stringify([m.deckSpec ?? null, m.nightSpec ?? null]);
+  let v = avgStrength.get(key);
+  if (!v) {
+    const deck = matchDeck(m);
+    const avg = (fs: CardFace[]) => fs.reduce((t, f) => t + faceStrength(f), 0) / Math.max(1, fs.length);
+    // the deck starts on the day side: `face` is the day face, `other` the night one
+    v = [avg(deck.map((x) => x.face)), avg(deck.map((x) => x.other ?? x.face))];
+    if (avgStrength.size > 16) avgStrength.clear();
+    avgStrength.set(key, v);
   }
-  return avgStrength;
+  return v;
 }
 
 /**
@@ -421,11 +442,11 @@ function sideAvg(): [number, number] {
  * an average hand of the side in play would be worth; the short opponents count most. Plus how many of
  * my cards follow the face the Eclipse turns up.
  */
-export function flipValue(c: Ctx, card: Card, after: readonly Card[]): number {
+export function flipValue(c: Ctx, card: Card, after: readonly Card[], pick?: Color): number {
   const { m, r, seat } = c;
   const sum = (cs: readonly Card[], other: boolean) => cs.reduce((t, x) => t + faceStrength(other ? x.other ?? x.face : x.face), 0);
   let v = 2 * (sum(after, true) - sum(after, false));
-  const [day, night] = sideAvg();
+  const [day, night] = sideAvg(m);
   const avgNow = r.side === 'dark' ? night : day;
   for (const s of m.seats) {
     if (s === seat || r.eliminated[s]) continue;
@@ -434,9 +455,16 @@ export function flipValue(c: Ctx, card: Card, after: readonly Card[]): number {
     const weight = hand.length <= 2 ? 3 : hand.length <= 4 ? 1.5 : 1;
     v += (opponents(m, seat, s) ? -1.2 : 0.6 * c.w.partner) * weight * gain;
   }
-  // the face the Eclipse turns up: how many of my cards follow it
+  // the face the Eclipse turns up: how many of my cards follow it (wildFlip: the colour I pick)
   const top = card.other;
-  if (top) {
+  if (pick) {
+    let fit = 0;
+    for (const x of after) {
+      const f = x.other ?? x.face;
+      if (f.color === null || f.color === pick) fit++;
+    }
+    v += 3 * Math.min(fit, 4) - (fit === 0 ? 6 : 0);
+  } else if (top) {
     const col = top.color;
     let fit = 0;
     for (const x of after) {
@@ -623,7 +651,7 @@ function shouldChallenge(c: Ctx, canStack: boolean): boolean {
     frac = c.k.unseen[colorIdx(prevColor)] / Math.max(1, c.k.unseenTotal);
   } else {
     // public view: the deck's cards minus the pile and the own hand
-    const deck = buildDeck(c.m.rules);
+    const deck = matchDeck(c.m);
     const seen = [...r.discard, ...c.hand];
     const total = deck.length - seen.length;
     const ofColor = deck.filter((x) => x.face.color === prevColor).length - seen.filter((x) => x.face.color === prevColor).length;
@@ -663,20 +691,100 @@ export function hitsPartner(c: Ctx, mv: Move): boolean {
   return next !== c.seat && !opponents(c.m, c.seat, next);
 }
 
-/** add `ku: true` on the second-to-last card, and a partnerPass gift when the engine accepts one */
-export function finishPlay(c: Ctx, mv: Move): Move {
-  if (mv.kind !== 'play') return mv;
+/**
+ * How many cards of a multi-play group (`max` of them, the opening card included) the CPU puts down.
+ * Numbers: all (dumping cards is nearly always good). +2s: all onto an opponent, just the one onto the
+ * partner. Skips (and reverses between two players, which skip): the count whose turn lands best, back on
+ * the CPU or its partner, more cards breaking ties, skipping the partner costs. Reverses: an odd count, so
+ * the direction still turns as the CPU chose.
+ */
+function multiCount(c: Ctx, kind: string, max: number): number {
+  if (kind === 'number') return max;
+  const nx = stepSeat(c.m, c.r, c.seat);
+  if (kind === 'draw2') return nx !== c.seat && !opponents(c.m, c.seat, nx) ? 1 : max;
+  if (kind === 'reverse' && !c.twoPlayers) return max % 2 ? max : max - 1;
+  let best = 1;
+  let bestV = -Infinity;
+  for (let k = 1; k <= max; k++) {
+    let s = c.seat;
+    let v = k;
+    for (let i = 0; i < k; i++) {
+      s = stepSeat(c.m, c.r, s);
+      if (s !== c.seat && !opponents(c.m, c.seat, s)) v -= 2 * c.w.partner;
+    }
+    const land = stepSeat(c.m, c.r, s);
+    if (land === c.seat) v += 4;
+    else if (!opponents(c.m, c.seat, land)) v += 3 * c.w.partner;
+    if (v >= bestV) {
+      bestV = v;
+      best = k;
+    }
+  }
+  return best;
+}
+
+/**
+ * Multi-play rules: put other cards of the group down with this one (the same number, multiPlay; more
+ * +2 / reverse / skip cards, multiDraw2 / multiReverse / multiSkip; how many: multiCount; easy now and then
+ * plays just the one). The order puts the colour the CPU wants in play last: the colour it keeps most cards
+ * of, and (hard) one the next opponent showed it cannot follow. When that card is the one picked to open
+ * the play, another card of the group opens instead if it also fits the pile.
+ */
+export function addMulti(c: Ctx, mv: Move): Move {
+  if (mv.kind !== 'play' || mv.extra?.length) return mv;
+  const opts = multiPlayOptions(c.m, mv);
+  if (!opts.length) return mv;
+  if (c.level === 1 && c.rng.next() < 0.3) return mv;
+  const first = c.hand.find((x) => x.id === mv.cardId);
+  if (!first) return mv;
+  const all = [first, ...opts.map((id) => c.hand.find((x) => x.id === id)!)];
+  const n = multiCount(c, first.face.kind, all.length);
+  if (n <= 1) return mv;
+  const nx = stepSeat(c.m, c.r, c.seat);
+  const want = (x: Card, rest: readonly Card[]): number => {
+    const col = x.face.color;
+    if (!col) return -1;
+    let v = colorCount(rest, col) * 10;
+    if (c.k && nx !== c.seat && opponents(c.m, c.seat, nx) && c.k.voids[nx] & bit(col)) v += 6;
+    return v;
+  };
+  // fewer than all: keep the cards of the colours the CPU holds least of (the opening card stays)
+  let group = all;
+  if (n < all.length) {
+    const others = c.hand.filter((x) => !all.includes(x));
+    const extra = all.slice(1).sort((a, b) => want(a, others) - want(b, others));
+    group = [first, ...extra.slice(0, n - 1)];
+  }
+  const rest = c.hand.filter((x) => !group.includes(x));
+  const best = (xs: Card[]): Card => xs.reduce((a, b) => (want(b, rest) > want(a, rest) ? b : a));
+  let lead = first;
+  let last = best(group);
+  if (last === first) {
+    const alt = group.find((x) => x !== first && canPlay(x, c.r, c.m.rules));
+    if (alt) lead = alt;
+    else last = best(group.filter((x) => x !== first));
+  }
+  const mid = group.filter((x) => x !== lead && x !== last);
+  return { ...mv, cardId: lead.id, extra: [...mid, last].map((x) => x.id) };
+}
+
+/** add multiPlay extras, `ku: true` on the second-to-last card, and a partnerPass gift when the engine accepts one */
+export function finishPlay(c: Ctx, mv0: Move): Move {
+  if (mv0.kind !== 'play') return mv0;
   const { m, r, seat, hand } = c;
+  const multi = addMulti(c, mv0);
+  const mv = isLegal(m, multi) ? multi : mv0;
+  if (mv.kind !== 'play') return mv;
   let out: Move = mv;
   const card = hand.find((x) => x.id === mv.cardId);
   if (card && m.teams && m.rules.partnerPass && !m.rules.sevenZero && card.face.kind === 'number' && card.face.value === 7 && extra(mv).give === undefined && c.level >= 2) {
-    const gift = pickGift(c, card);
+    const gift = pickGift(c, card, mv.extra ?? []);
     if (gift !== null) {
       const cand = { ...mv, give: gift } as Move;
       if (isLegal(m, cand) && scoreTurn(c, cand) > scoreTurn(c, mv)) out = cand;
     }
   }
-  const left = hand.length - 1 - (extra(out).give !== undefined ? 1 : 0);
+  const left = hand.length - 1 - (extra(out).give !== undefined ? 1 : 0) - (mv.extra?.length ?? 0);
   if (m.rules.kuCall && left === 1 && !r.kuCalled[seat]) {
     const forget = c.w.kuEarly ? 0 : c.level > 2 ? (c.slip ? HARD_W.forgetKu : 0) : c.level === 2 ? NORMAL_W.forgetKu : c.w === STYLE_WEIGHTS.impulsive ? IMPULSIVE_FORGET_KU : EASY_FORGET_KU;
     if (!forget || c.rng.next() >= forget) out = { ...out, ku: true } as Move;
@@ -684,8 +792,8 @@ export function finishPlay(c: Ctx, mv: Move): Move {
   return out;
 }
 
-function pickGift(c: Ctx, seven: Card): number | null {
-  const rest = c.hand.filter((x) => x !== seven);
+function pickGift(c: Ctx, seven: Card, gone: readonly number[] = []): number | null {
+  const rest = c.hand.filter((x) => x !== seven && !gone.includes(x.id));
   if (rest.length < 2) return null;
   let best: Card | null = null;
   let bestV = -Infinity;

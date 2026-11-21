@@ -1,4 +1,4 @@
-import type { Card, RestoreState, Seat, TableView, TableViewOptions } from '../contracts';
+import type { Card, MultiPick, RestoreState, Seat, TableView, TableViewOptions } from '../contracts';
 import { CardTable } from './cardTable';
 
 /** TableView with the optional extras implemented, plus two extensions the contract does not carry yet. */
@@ -22,6 +22,7 @@ export interface TableViewExt extends TableView {
   previewPlay(cardId: number): Promise<void>;
   /** return a previewed card to the hand (no play followed) */
   cancelPreview(): void;
+  requestHumanMultiPick(playable: number[], canDraw: boolean, joinable: Record<number, number[]>): Promise<number | 'draw' | MultiPick>;
 }
 
 export function createTableView(opts: TableViewOptions): TableViewExt {

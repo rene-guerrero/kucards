@@ -131,9 +131,10 @@ export class AvatarController {
         this.gesture(ev.by, 'thumbsUp');
         break;
       case 'challenge':
-        // the loser of the challenge winces, the winner looks smug
-        this.react(ev.caught ? ev.target : ev.by, 'hurt', 1.8);
-        this.react(ev.caught ? ev.by : ev.target, 'smug', 1.6);
+        // the call: the challenger accuses, the accused is startled. The verdict faces (the loser's wince,
+        // the winner's cheer) come with the stamp, from the table's challenge sequence (SeatPlates.challenge)
+        this.react(ev.by, 'angry', 1.3);
+        this.react(ev.target, 'amazed', 1.3);
         break;
       case 'shield':
         this.react(ev.seat, 'smug', 1.4);

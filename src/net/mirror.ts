@@ -181,7 +181,9 @@ export function applyEvent(m: MatchState, ev: GameEvent, faceOf: (id: number) =>
     default:
       break;
   }
-  for (let s = 0; s < r.hands.length; s++) if (r.hands[s].length > 2) r.kuCalled[s] = false;
+  // (multiPlay: a ¡Ku! called with more cards, and the cards of a multi-play still landing, keep the flag)
+  const keep = ev.type === 'ku' || (ev.type === 'play' && ev.more) ? ev.seat : -1;
+  for (let s = 0; s < r.hands.length; s++) if (r.hands[s].length > 2 && s !== keep) r.kuCalled[s] = false;
   return { ...m, scores, round: r };
 }
 

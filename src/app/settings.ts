@@ -153,6 +153,7 @@ export function migrateSettings(raw: unknown, src: RulesSource = ENGINE): AppSet
     reducedMotion: isBool(s.reducedMotion) ? s.reducedMotion : false,
     players: teamPlay ? 4 : s.players === 2 || s.players === 3 || s.players === 4 ? s.players : 4,
     teamPlay,
+    ...(typeof (s as { customMode?: unknown }).customMode === 'string' ? { customMode: (s as { customMode: string }).customMode } : {}),
     lineup: sanitizeLineupSetting(s.lineup),
     avatars: isBool(s.avatars) ? s.avatars : true,
     avatarFace: sanitizeFace(s.avatarFace ?? 0),

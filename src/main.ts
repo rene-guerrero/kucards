@@ -24,6 +24,11 @@ import { onlineAvailable, served, localPlayAvailable, type NetMode } from './net
 import { rememberedRoom } from './net/identity';
 import type { OnlineController } from './app/online';
 import { buildNewGame, type NewGameStart } from './ui/newgame';
+import { copyMode, customMode, deleteCustomMode, migrateProfiles, modeNameFree, saveCustomMode } from './app/customModes';
+import { buildModeEditor } from './ui/modeEditor';
+import { buildModeCatalog } from './ui/modeCatalog';
+import { builtInModeNames } from './ui/modeSelect';
+import type { ModeDef } from './engine/modes';
 import { btn, confirmDialog, Overlay } from './ui/overlay';
 import { allPresets, loadProfiles } from './app/ruleProfiles';
 import { buildSettings, type RuleSelectItem, descriptorsForMode, presetName, rulesSummary, sameAs } from './ui/settings';
@@ -31,6 +36,7 @@ import { buildSettings, type RuleSelectItem, descriptorsForMode, presetName, rul
 installErrorLog();
 
 let settings: AppSettings = loadSettings();
+migrateProfiles(loadProfiles(), builtInModeNames());
 saveSettings(settings);
 
 function applySettings(prev: AppSettings | null): void {
@@ -94,11 +100,14 @@ let ngPartnerSide: 'after' | 'before' = 'after';
 
 function newGame(o: NewGameStart): void {
   clearSave();
-  const rules = rulesFor(settings, o.mode);
-  // Codo a codo: the partner sits where the new-game screen shows them (right = 'after', left = 'before');
+  // a player-made mode plays its own definition (rules, deck, seating); built-ins their rule set
+  const custom = o.custom ? customMode(o.custom) : null;
+  const rules = custom ? { ...custom.rules } : rulesFor(settings, o.mode);
+  // side-by-side seating: the partner sits where the new-game screen shows them (right = 'after', left = 'before');
   // the lineup is already by seat (the screen moves the partner's character with the side)
-  const partnerSide = o.mode === 'sideBySide' ? (o.partnerSide ?? 'after') : undefined;
-  const match = { ...createMatch(rules, { mode: o.mode, players: o.players, teams: o.teams, partnerSide }), clock: sanitizeClock(o.clock) };
+  const sideSeat = custom ? custom.teams === 'always' && custom.seating === 'side' : o.mode === 'sideBySide';
+  const partnerSide = sideSeat ? (o.partnerSide ?? 'after') : undefined;
+  const match = { ...createMatch(rules, { mode: o.mode, players: o.players, teams: o.teams, partnerSide, ...(custom ? { custom } : {}) }), clock: sanitizeClock(o.clock) };
   void play(match, o.lineup, false);
 }
 
@@ -115,7 +124,9 @@ function about(): void {
 
 function update(next: AppSettings, key: keyof AppSettings): void {
   const prev = settings;
-  settings = key === 'qualityMode' || key === 'quality' ? resolveQuality(next) : next;
+  // picking Automática again re-detects the device (a stored step-down from one slow stretch doesn't stick)
+  const fresh = key === 'qualityMode' && next.qualityMode === 'auto' ? { ...next, autoQuality: undefined } : next;
+  settings = key === 'qualityMode' || key === 'quality' ? resolveQuality(fresh) : next;
   saveSettings(settings);
   applySettings(prev);
   // the language changes every label: rebuild the open screen in place
@@ -175,6 +186,8 @@ function screen(id: ScreenId): HTMLElement {
           return items;
         },
         onMode: (m) => update(withMode(settings, m), 'mode'),
+        customMode: settings.customMode,
+        onCustom: (id) => update({ ...settings, customMode: id ?? undefined }, 'mode'),
         onPlayers: (n) => update({ ...settings, players: n }, 'players'),
         onLineup: (l) => update({ ...settings, lineup: l }, 'lineup'),
         onTeams: (on) => update({ ...settings, teamPlay: on }, 'teamPlay'),
@@ -203,6 +216,8 @@ function screen(id: ScreenId): HTMLElement {
         onBack: () => (backTo === 'game' ? backToGame() : show(backTo)),
         resolvedQuality: () => settings.quality,
         onAbout: about,
+        editMode: openModeEditor,
+        browseModes: openModeCatalog,
       });
     }
     case 'howto':
@@ -210,6 +225,53 @@ function screen(id: ScreenId): HTMLElement {
     case 'game':
       return h('div');
   }
+}
+
+/** "Buscar modos": the online catalog; saving copies a mode into the player's own */
+function openModeCatalog(): void {
+  overlay.showScreen(
+    buildModeCatalog({
+      onSave: (def) => {
+        const saved = copyMode(def, builtInModeNames());
+        settings = { ...settings, customMode: saved.id, mode: saved.base };
+      },
+      onBack: () => {
+        update({ ...settings, settingsTab: 'rules' }, 'mode');
+        show('settings');
+      },
+    }),
+  );
+}
+
+/** the game-mode editor over Ajustes › Reglas; saving selects the mode and goes back there */
+function openModeEditor(draft: ModeDef, isNew: boolean): void {
+  const back = () => {
+    settings = { ...settings, settingsTab: 'rules' };
+    show('settings');
+  };
+  overlay.showScreen(
+    buildModeEditor({
+      draft,
+      isNew,
+      descriptors: descriptorsForMode(RULE_SETTINGS, draft.base),
+      nameFree: (n) => modeNameFree(n, builtInModeNames(), isNew ? undefined : draft.id),
+      onSave: (def) => {
+        const saved = saveCustomMode(def);
+        update({ ...settings, customMode: saved.id, mode: saved.base, settingsTab: 'rules' }, 'mode');
+        show('settings');
+      },
+      onDelete: isNew
+        ? undefined
+        : async () => {
+            const ok = await confirmDialog(overlay, { title: t('modes.deleteTitle', { name: draft.name }), body: t('modes.deleteBody'), ok: t('modes.delete'), cancel: t('common.cancel'), danger: true });
+            if (!ok) return;
+            deleteCustomMode(draft.id);
+            update({ ...settings, customMode: settings.customMode === draft.id ? undefined : settings.customMode }, 'mode');
+            back();
+          },
+      onBack: back,
+    }),
+  );
 }
 
 function show(id: ScreenId, animate = true): void {
@@ -286,6 +348,23 @@ async function openOnline(code?: string, quiet = false, net: NetMode = served() 
       onExit: () => {
         if (current === 'game' || !backdrop) startBackdrop();
         show('menu');
+      },
+      // the lobby's gear: the same rule editor as the offline new-game screen (Ajustes › Reglas)
+      editRules: (mode, done) => {
+        overlay.showScreen(
+          buildSettings({
+            settings,
+            ruleDescriptors: RULE_SETTINGS,
+            presets: RULE_PRESETS,
+            rulesMode: mode,
+            matchInProgress: false,
+            confirm: (o) => confirmDialog(overlay, o),
+            onChange: update,
+            onBack: done,
+            resolvedQuality: () => settings.quality,
+            onAbout: about,
+          }),
+        );
       },
     });
   }

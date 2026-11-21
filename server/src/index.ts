@@ -46,6 +46,16 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
 
     const parts = url.pathname.replace(/\/+$/, '').split('/').filter(Boolean); // ['api','rooms',code?,'ws'?]
+    // the online mode catalog (one Durable Object): publish / search / open a share code
+    if (parts[0] === 'api' && parts[1] === 'modes') {
+      const cat = env.MODES.get(env.MODES.idFromName('catalog'));
+      let res: Response;
+      if (parts.length === 2 && req.method === 'POST') res = await cat.fetch('https://modes/publish', { method: 'POST', body: await req.text() });
+      else if (parts.length === 2 && req.method === 'GET') res = await cat.fetch(`https://modes/search?${url.searchParams}`);
+      else if (parts.length === 3 && req.method === 'GET') res = await cat.fetch(`https://modes/get?code=${encodeURIComponent(parts[2])}`);
+      else return json({ error: 'not_found' }, 404, h);
+      return json(await res.json(), res.status, h);
+    }
     if (parts[0] !== 'api' || parts[1] !== 'rooms') {
       if (url.pathname === '/' || url.pathname === '/health') return json({ ok: true, service: 'kucards-rooms' }, 200, h);
       return json({ error: 'not_found' }, 404, h);
@@ -91,3 +101,5 @@ export default {
     return json({ error: 'not_found' }, 404, h);
   },
 } satisfies ExportedHandler<Env>;
+
+export { ModeStore } from './modes';

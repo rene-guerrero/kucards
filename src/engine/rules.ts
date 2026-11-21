@@ -1,4 +1,5 @@
 import type { GameMode, RulePreset, RuleSettings, SettingDescriptor } from '../contracts';
+import { applyForced, modeDef } from './modes';
 
 export const RULES_VERSION = 1;
 
@@ -10,11 +11,13 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
   {
     key: 'handSize', group: 'match', type: 'select', default: 7,
     label: { es: 'Cartas por jugador', en: 'Cards per player' },
+    help: { es: 'Cuántas cartas recibe cada jugador al repartir.', en: 'How many cards each player is dealt.' },
     options: [5, 7, 10].map((n) => ({ value: n, label: { es: String(n), en: String(n) } })),
   },
   {
     key: 'target', group: 'match', type: 'select', default: 500,
     label: { es: 'Meta de la partida', en: 'Match target' },
+    help: { es: 'La partida termina al llegar a estos puntos. Gana quien menos tenga.', en: 'The match ends when someone reaches these points. Fewest points wins.' },
     options: [
       { value: 0, label: { es: 'Una ronda', en: 'One round' } },
       { value: 200, label: { es: '200 puntos', en: '200 points' } },
@@ -24,6 +27,7 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
   {
     key: 'drawMode', group: 'turn', type: 'select', default: 'one',
     label: { es: 'Al no poder jugar', en: 'When you cannot play' },
+    help: { es: 'Si no tienes carta que sirva: robas una, o robas hasta encontrar una que puedas jugar.', en: 'With no card to play: draw one, or draw until you get one you can play.' },
     options: [
       { value: 'one', label: { es: 'Robar una', en: 'Draw one' } },
       { value: 'untilPlayable', label: { es: 'Robar hasta poder jugar', en: 'Draw until playable' } },
@@ -48,6 +52,36 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
     options: [on, off],
   },
   {
+    key: 'multiPlay', group: 'turn', type: 'toggle', default: false,
+    label: { es: 'Jugar varias del mismo número', en: 'Play same numbers together' },
+    help: { es: 'Si la primera se puede jugar, puedes jugar a la vez otras cartas con el mismo número; la última que elijas marca el color.', en: 'If the first one is playable, you can play other cards with the same number at once; the last one you pick sets the colour.' },
+    options: [on, off],
+  },
+  {
+    key: 'multiDraw2', group: 'turn', type: 'toggle', default: false,
+    label: { es: 'Varios +2 a la vez', en: 'Several +2 at once' },
+    help: { es: 'Si el primero se puede jugar, puedes soltar a la vez otros +2 de cualquier color: cada uno suma 2 (tres +2 son +6). El siguiente aún puede acumular si se permite.', en: 'If the first one is playable, you can drop other +2s of any colour at once: each adds 2 (three +2s make +6). The next player may still stack if allowed.' },
+    options: [on, off],
+  },
+  {
+    key: 'multiReverse', group: 'turn', type: 'toggle', default: false,
+    label: { es: 'Varias Vueltas a la vez', en: 'Several Reverses at once' },
+    help: { es: 'Si la primera se puede jugar, puedes soltar a la vez otras Vueltas de cualquier color: cada una cambia el sentido (dos lo dejan igual). Entre dos jugadores cada una salta al otro.', en: 'If the first one is playable, you can drop other Reverses of any colour at once: each turns the direction (two keep it). With two players each one skips the other.' },
+    options: [on, off],
+  },
+  {
+    key: 'multiSkip', group: 'turn', type: 'toggle', default: false,
+    label: { es: 'Varios Saltos a la vez', en: 'Several Skips at once' },
+    help: { es: 'Si el primero se puede jugar, puedes soltar a la vez otros Saltos de cualquier color: cada uno salta a un jugador más, dando la vuelta a la mesa.', en: 'If the first one is playable, you can drop other Skips of any colour at once: each one skips one more player, round the table.' },
+    options: [on, off],
+  },
+  {
+    key: 'numberFinish', group: 'match', type: 'toggle', default: false,
+    label: { es: 'Ganar solo con números', en: 'Win with numbers only' },
+    help: { es: 'No puedes ganar con una carta especial: tu última carta debe ser un número.', en: 'You can’t win with a special card: your last card must be a number.' },
+    options: [on, off],
+  },
+  {
     key: 'kuCall', group: 'turn', type: 'toggle', default: true,
     label: { es: 'Gritar ¡Ku!', en: 'Call ¡Ku!' },
     help: { es: 'Al quedarte con una carta debes gritar ¡Ku!; si te descubren, robas 2.', en: 'Call ¡Ku! on your last card or draw 2 if caught.' },
@@ -57,6 +91,7 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
     // only Clásico may turn it off; every other mode always stacks +2 / +4 freely (modeRules)
     key: 'stacking', group: 'penalties', type: 'select', default: 'off', modes: ['classic'],
     label: { es: 'Acumular castigos', en: 'Stack penalties' },
+    help: { es: 'Si te lanzan un +2 o +4, puedes responder con otro y pasar la suma al siguiente.', en: 'When hit by a +2 or +4, answer with another and pass the total on.' },
     options: [
       { value: 'off', label: { es: 'No', en: 'Off' } },
       { value: 'same', label: { es: 'Solo la misma carta', en: 'Same card only' } },
@@ -125,9 +160,6 @@ export const RULE_PRESETS: RulePreset[] = [
  * Barrida and Cambio, Codo a codo always has Barrida.
  */
 export function modeRules(mode: GameMode, rules: RuleSettings): RuleSettings {
-  const out = { ...rules };
-  if (mode !== 'classic') out.stacking = 'any';
-  if (mode === 'action') Object.assign(out, { 'power.sweep': true, 'power.swap': true });
-  if (mode === 'sideBySide') out['power.sweep'] = true;
-  return out;
+  // what each mode enforces lives in its definition (modes.ts: BUILTIN_MODES[...].forced)
+  return applyForced(modeDef(mode), rules);
 }

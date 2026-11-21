@@ -61,6 +61,11 @@
  *    (wilds do not count), reshuffling as needed and stopping when nothing is left; it loses the turn.
  *    It is not a stackable penalty: no stacking, shield, mirror or challenge.
  *  - shield / mirror played on their turn are plain coloured cards.
+ *  - sweepWild (wild, player-made decks): `color`; every other card of the chosen colour leaves the hand
+ *    like a sweep's, and the chosen colour is in play.
+ *  - wildFlip (wild, two-sided decks): an Eclipse whose player picks the colour in play after the turn
+ *    over: `color` is one of the OTHER side's colours (the side it turns to), and it wins over the colour of
+ *    the face the Eclipse turns up. In a one-sided deck (never dealt there) it is a plain wild.
  *  Going out on a penalty card or a wildColor still makes the next seat draw before scoring.
  *
  * Jump-in has NO window: when `jumpIn` is on, `legalMoves(match, seat)` lists a `jumpIn` for any
@@ -92,24 +97,41 @@
  */
 import type { Card, CardFace, Color, GameEvent, MatchSetup, MatchState, Move, ResponseWindow, RoundState, RuleSettings, Seat } from '../contracts';
 import { COLORS, sideColors } from '../contracts';
-import { buildDeck, cardPoints, isWildKind, otherSideColor, PENALTY_DRAW, turnOver } from './cards';
+import { cardPoints, isWildKind, matchDeck, otherSideColor, PENALTY_DRAW, turnOver } from './cards';
 import { Rng } from './rng';
 import { modeRules } from './rules';
+import { modeDef } from './modes';
 
 const SEATS_FOR: Record<2 | 3 | 4, Seat[]> = { 2: [0, 2], 3: [0, 1, 3], 4: [0, 1, 2, 3] };
 
 export function createMatch(rules: RuleSettings, setup: MatchSetup, seed = Date.now()): MatchState {
-  const side = setup.mode === 'sideBySide';
-  const players = side ? 4 : setup.players;
+  // seating and teams come from the mode's definition: teams 'always' forces 4 players in 2 vs 2,
+  // 'optional' follows the setup (4 players), 'off' never; seating 'side' = Codo a codo, 'across' = Enfrente
+  const md = setup.custom ?? modeDef(setup.mode);
+  const players = md.teams === 'always' ? 4 : setup.players;
   const seats = SEATS_FOR[players];
-  const teams: MatchState['teams'] = side
-    ? setup.partnerSide === 'before'
-      ? [[0, 3], [1, 2]] // Codo a codo, partner plays just before the human
-      : [[0, 1], [2, 3]] // Codo a codo: A A B B, partner plays just after the human
-    : setup.teams && players === 4
-      ? [[0, 2], [1, 3]] // 2 vs 2 Enfrente: A B A B
-      : undefined;
-  return { rules: modeRules(setup.mode, rules), mode: setup.mode, seats, scores: [0, 0, 0, 0, 0, 0], round: null, teams, over: false, winner: null, rng: seed | 0 };
+  const teamsOn = players === 4 && (md.teams === 'always' || (md.teams === 'optional' && !!setup.teams));
+  const teams: MatchState['teams'] = !teamsOn
+    ? undefined
+    : md.seating === 'side'
+      ? setup.partnerSide === 'before'
+        ? [[0, 3], [1, 2]] // side by side, partner plays just before the human
+        : [[0, 1], [2, 3]] // side by side: A A B B, partner plays just after the human
+      : [[0, 2], [1, 3]]; // across: A B A B
+  // a player-made mode plays its own rules (nothing forced on top) and its own deck (two-sided: its day
+  // list `deck` and its night list `night`)
+  const c = setup.custom;
+  const mrules = c ? { ...rules, ...c.rules, deck: c.twoSided ? 'dayNight' : (c.rules.deck === 'dayNight' ? 'classic' : (c.rules.deck ?? 'classic')) } : modeRules(setup.mode, rules);
+  const deck = c ? c.deck : setup.deck;
+  const night = c ? (c.twoSided ? c.night : undefined) : setup.night;
+  return {
+    rules: mrules,
+    mode: c ? c.base : setup.mode,
+    ...(deck ? { deckSpec: deck } : {}),
+    ...(night ? { nightSpec: night } : {}),
+    ...(c ? { custom: { id: c.id, name: c.name, icon: c.icon } } : {}),
+    seats, scores: [0, 0, 0, 0, 0, 0], round: null, teams, over: false, winner: null, rng: seed | 0,
+  };
 }
 
 export function shuffle<T>(xs: readonly T[], rng: Rng): T[] {
@@ -123,13 +145,18 @@ export function shuffle<T>(xs: readonly T[], rng: Rng): T[] {
 
 export function startRound(match: MatchState): { match: MatchState; events: GameEvent[] } {
   const rng = new Rng(match.rng);
-  const deck = shuffle(buildDeck(match.rules), rng);
+  const deck = shuffle(matchDeck(match), rng);
   const handSize = Number(match.rules.handSize) || 7;
   const hands: Card[][] = [[], [], [], [], [], []];
   for (let i = 0; i < handSize; i++) for (const s of match.seats) hands[s].push(deck.pop()!);
   // the first card on the pile is a number card (others go back under the deck)
+  // (a player-made deck may hold no number card: then any coloured card, else whatever comes)
   let first = deck.pop()!;
-  while (first.face.kind !== 'number') {
+  for (let tries = 0; first.face.kind !== 'number' && tries < deck.length; tries++) {
+    deck.unshift(first);
+    first = deck.pop()!;
+  }
+  for (let tries = 0; first.face.color === null && tries < deck.length; tries++) {
     deck.unshift(first);
     first = deck.pop()!;
   }
@@ -168,7 +195,7 @@ export function matches(card: Card, top: Card, activeColor: Color): boolean {
  * mirrorVictim: once a pending penalty was mirrored, the seat it was first aimed at (play resumes after it).
  */
 export interface EngineRound extends RoundState {
-  challenge?: { from: Seat; victim: Seat; illegal: boolean } | null;
+  challenge?: { from: Seat; victim: Seat; illegal: boolean; proof?: number[] } | null;
   mirrorVictim?: Seat | null;
 }
 const er = (r: RoundState): EngineRound => r as EngineRound;
@@ -246,11 +273,50 @@ export function identical(card: Card, top: Card): boolean {
 
 const isSevenZero = (rules: RuleSettings) => !!rules.sevenZero;
 const isSeven = (c: Card) => c.face.kind === 'number' && c.face.value === 7;
+const isNumber = (c: Card) => c.face.kind === 'number';
+
+/**
+ * numberFinish: a move that takes `removed` out of `hand` may empty it only when every card it puts down
+ * is a number (a sweep, a power card or any other special card can never be the winning play).
+ */
+function finishOk(rules: RuleSettings, hand: readonly Card[], removed: readonly Card[]): boolean {
+  if (!rules.numberFinish || removed.length < hand.length) return true;
+  return removed.every(isNumber);
+}
+
+/** the cards a turn play takes out of the hand: the card, what a sweep discards with it, multi-play extras */
+function playRemoves(hand: readonly Card[], card: Card, color?: Color, extra?: readonly number[]): Card[] {
+  const out = [card];
+  const sweepColor = card.face.kind === 'sweep' ? card.face.color : card.face.kind === 'sweepWild' ? (color ?? null) : null;
+  if (sweepColor) for (const c of hand) if (c !== card && c.face.color === sweepColor) out.push(c);
+  if (extra) for (const id of extra) {
+    const c = hand.find((x) => x.id === id);
+    if (c && !out.includes(c)) out.push(c);
+  }
+  return out;
+}
+
+/** a play / jump-in / respond move allowed by numberFinish */
+function finishMoveOk(rules: RuleSettings, hand: readonly Card[], mv: Move): boolean {
+  if (!rules.numberFinish) return true;
+  if (mv.kind !== 'play' && mv.kind !== 'jumpIn' && mv.kind !== 'respond') return true;
+  const card = hand.find((c) => c.id === mv.cardId);
+  if (!card) return false;
+  // (a jumped-in sweep sweeps its colour too)
+  return finishOk(rules, hand, mv.kind === 'play' ? playRemoves(hand, card, mv.color, mv.extra) : mv.kind === 'jumpIn' ? playRemoves(hand, card) : [card]);
+}
+
+/** the seat on turn could put this card down now (matching, and numberFinish allows it) */
+function turnPlayable(rules: RuleSettings, r: RoundState, hand: readonly Card[], c: Card): boolean {
+  return matches(c, topCard(r), r.activeColor) && finishOk(rules, hand, playRemoves(hand, c));
+}
 
 function playVariants(m: MatchState, r: RoundState, seat: Seat, card: Card): Move[] {
   const base = { kind: 'play' as const, seat, cardId: card.id };
   const targets = () => activeSeats(m, r).filter((t) => t !== seat);
-  const colors = r.side === 'dark' ? sideColors('dark') : COLORS;
+  // wildFlip in a two-sided deck: the colours of the side it turns to
+  const flipTo = card.face.kind === 'wildFlip' && !!topCard(r).other;
+  const colors = (r.side === 'dark') !== flipTo ? sideColors('dark') : COLORS;
   if (card.face.kind === 'swap') return colors.flatMap((color) => targets().map((target) => ({ ...base, color, target })));
   if (isWildKind(card.face.kind)) return colors.map((color) => ({ ...base, color }));
   if (isSevenZero(m.rules) && isSeven(card)) return targets().map((target) => ({ ...base, target }));
@@ -300,32 +366,37 @@ export function legalMoves(match: MatchState, seat?: Seat): Move[] {
   if (w?.reason === 'ku' && w.victim !== undefined && w.seats.includes(s)) out.push({ kind: 'catchKu', seat: s, target: w.victim });
   // ¡Ku! (added at the end): only when it matters
   const kuOpen = hand.length === 1 && w?.reason === 'ku' && w.victim === s;
+  // numberFinish: moves that would win with a special card are left out
+  const ok = (mvs: Move[]): Move[] => (rules.numberFinish ? mvs.filter((mv) => finishMoveOk(rules, hand, mv)) : mvs);
 
   if (s === r.turn) {
     if (r.pendingDraw > 0) {
-      for (const c of hand) if (canStack(c, r, rules)) out.push(...playVariants(match, r, s, c));
-      for (const c of responseCards(r, s)) out.push({ kind: 'respond', seat: s, cardId: c.id });
+      for (const c of hand) if (canStack(c, r, rules)) out.push(...ok(playVariants(match, r, s, c)));
+      out.push(...ok(responseCards(r, s).map((c) => ({ kind: 'respond' as const, seat: s, cardId: c.id }))));
       const stacks = out.some((x) => x.kind === 'play');
       if (canChallenge(match, r, s)) out.push({ kind: 'challenge', seat: s });
       if (!stacks) out.push({ kind: 'acceptPenalty', seat: s }); // stacking is mandatory
     } else if (r.drewThisTurn) {
       const drawn = r.drawnCardId != null ? hand.find((c) => c.id === r.drawnCardId) : hand[hand.length - 1];
-      const playable = !!drawn && canPlay(drawn, r, rules);
-      if (playable) out.push(...playVariants(match, r, s, drawn));
-      if (!(playable && rules.forcePlay)) out.push({ kind: 'pass', seat: s });
+      const plays = drawn && canPlay(drawn, r, rules) ? ok(playVariants(match, r, s, drawn)) : [];
+      out.push(...plays);
+      if (!(plays.length && rules.forcePlay)) out.push({ kind: 'pass', seat: s });
     } else {
-      for (const c of hand) if (canPlay(c, r, rules)) out.push(...playVariants(match, r, s, c));
+      for (const c of hand) if (canPlay(c, r, rules)) out.push(...ok(playVariants(match, r, s, c)));
       out.push({ kind: 'draw', seat: s });
     }
   } else if (w?.reason === 'penalty') {
-    for (const c of responseCards(r, s)) out.push({ kind: 'respond', seat: s, cardId: c.id });
+    out.push(...ok(responseCards(r, s).map((c) => ({ kind: 'respond' as const, seat: s, cardId: c.id }))));
   } else if (rules.jumpIn && r.pendingDraw === 0) {
     const top = topCard(r);
-    for (const c of hand) if (identical(c, top)) out.push(...jumpInVariants(match, r, s, c));
+    for (const c of hand) if (identical(c, top)) out.push(...ok(jumpInVariants(match, r, s, c)));
   }
   // with two cards about to play the second-to-last (your turn or a jump-in), or with one card while the
-  // catch window is open against you
-  const kuNow = (hand.length === 2 && out.some((m) => m.kind === 'play' || m.kind === 'jumpIn')) || kuOpen;
+  // catch window is open against you; multiPlay: with more cards when one play could leave just one
+  const kuNow =
+    (hand.length === 2 && out.some((m) => m.kind === 'play' || m.kind === 'jumpIn')) ||
+    kuOpen ||
+    (hand.length > 2 && anyMulti(rules) && out.some((m) => m.kind === 'play' && multiPlayOptions(match, m).length >= hand.length - 2));
   if (rules.kuCall && kuNow && !r.kuCalled[s]) out.push({ kind: 'callKu', seat: s });
   return out;
 }
@@ -343,11 +414,58 @@ export function giveOptions(match: MatchState, move: Move): number[] {
   if (partner === null || r.eliminated[partner]) return [];
   const hand = r.hands[move.seat];
   const card = hand.find((c) => c.id === move.cardId);
-  if (!card || !isSeven(card) || hand.length < 3) return [];
-  return hand.filter((c) => c !== card).map((c) => c.id);
+  // multiPlay extras leave with the 7 too: the giver must still keep a card
+  const extra = move.extra ?? [];
+  if (!card || !isSeven(card) || hand.length - extra.length < 3) return [];
+  return hand.filter((c) => c !== card && !extra.includes(c.id)).map((c) => c.id);
 }
 
-/** structural move equality, ignoring the optional `ku` / `give` flags on plays */
+/** is any multi-play rule on (multiPlay, multiDraw2, multiReverse, multiSkip)? */
+const anyMulti = (rules: RuleSettings): boolean => !!(rules.multiPlay || rules.multiDraw2 || rules.multiReverse || rules.multiSkip);
+
+/** the multi-play rule that lets more cards of this card's kind go down with it is on */
+function multiKind(rules: RuleSettings, card: Card): boolean {
+  switch (card.face.kind) {
+    case 'number':
+      return !!rules.multiPlay;
+    case 'draw2':
+      return !!rules.multiDraw2;
+    case 'reverse':
+      return !!rules.multiReverse;
+    case 'skip':
+      return !!rules.multiSkip;
+    default:
+      return false;
+  }
+}
+
+/** cards of one multi-play group: the same number (multiPlay), or the same action kind (+2, reverse, skip) */
+const sameGroup = (a: Card, b: Card): boolean => a.face.kind === b.face.kind && (a.face.kind !== 'number' || a.face.value === b.face.value);
+
+/**
+ * The card ids that may join this play move as `extra` (any of them, in any order), never mixing kinds:
+ * multiPlay: the other number cards with the same value; multiDraw2 / multiReverse / multiSkip: the other
+ * +2 / reverse / skip cards, of any colour. Empty when the move cannot carry any: rule off, not a turn play
+ * (the card just drawn and out-of-turn moves never do), a stack on a penalty other than +2s, or no such
+ * card. A `give` card on the move is left out. numberFinish: an action group may not empty the hand, so
+ * one card fewer is offered when all of them would.
+ */
+export function multiPlayOptions(match: MatchState, move: Move): number[] {
+  const r = match.round;
+  if (!r || r.over || match.over || move.kind !== 'play' || !anyMulti(match.rules)) return [];
+  if (move.seat !== r.turn || r.drewThisTurn) return [];
+  const hand = r.hands[move.seat];
+  const card = hand.find((c) => c.id === move.cardId);
+  if (!card || !multiKind(match.rules, card)) return [];
+  // multiDraw2: several +2s may also answer a pending penalty together, when the first one may stack
+  if (r.pendingDraw > 0 && card.face.kind !== 'draw2') return [];
+  if (!canPlay(card, r, match.rules)) return [];
+  const out = hand.filter((c) => c !== card && sameGroup(c, card) && c.id !== move.give).map((c) => c.id);
+  if (match.rules.numberFinish && !isNumber(card) && out.length >= hand.length - 1) out.length = Math.max(0, hand.length - 2);
+  return out;
+}
+
+/** structural move equality, ignoring the optional `ku` / `give` / `extra` flags on plays */
 export function sameMove(a: Move, b: Move): boolean {
   if (a.kind !== b.kind || a.seat !== b.seat) return false;
   const x = a as Partial<Record<'cardId' | 'color' | 'target', unknown>>;
@@ -357,7 +475,17 @@ export function sameMove(a: Move, b: Move): boolean {
 
 export function isLegal(match: MatchState, move: Move): boolean {
   if (!legalMoves(match, move.seat).some((l) => sameMove(l, move))) return false;
-  if (move.kind === 'play' && move.give !== undefined) return giveOptions(match, move).includes(move.give);
+  if (move.kind !== 'play') return true;
+  if (move.extra !== undefined) {
+    const extra = move.extra;
+    if (!Array.isArray(extra)) return false;
+    if (extra.length) {
+      const opts = multiPlayOptions(match, { ...move, extra: undefined });
+      if (new Set(extra).size !== extra.length || !extra.every((id) => opts.includes(id))) return false;
+      if (!finishMoveOk(match.rules, match.round!.hands[move.seat], move)) return false;
+    }
+  }
+  if (move.give !== undefined) return giveOptions(match, move).includes(move.give);
   return true;
 }
 
@@ -385,9 +513,10 @@ function begin(match: MatchState): St {
   return { m, r, rng: new Rng(match.rng), ev: [] };
 }
 
-function finish(st: St): { match: MatchState; events: GameEvent[] } {
+function finish(st: St, keepKu: Seat | null = null): { match: MatchState; events: GameEvent[] } {
   const { r } = st;
-  for (let s = 0; s < r.hands.length; s++) if (r.hands[s].length > 2) r.kuCalled[s] = false;
+  // keepKu: a ¡Ku! called early for a multi-play that will leave one card stays until that play
+  for (let s = 0; s < r.hands.length; s++) if (r.hands[s].length > 2 && s !== keepKu) r.kuCalled[s] = false;
   st.m.rng = st.rng.s;
   return { match: st.m, events: st.ev };
 }
@@ -401,14 +530,18 @@ function setTurn(st: St, seat: Seat): void {
   st.ev.push(st.r.discard[0]?.other ? { type: 'turn', seat, deckBack: deckBackOf(st.r.deck) } : { type: 'turn', seat });
 }
 
-/** Día y Noche: an Eclipse turns every card in play over (see DESIGN NOTES) */
-function flipAll(st: St, seat: Seat): void {
+/**
+ * Día y Noche: an Eclipse turns every card in play over (see DESIGN NOTES). `color` (wildFlip) is the
+ * colour its player picked from the new side. A one-sided deck has nothing to turn over: nothing happens.
+ */
+function flipAll(st: St, seat: Seat, color?: Color): void {
   const { r } = st;
+  if (!topCard(r).other) return;
   r.hands = r.hands.map((h) => h.map(turnOver));
   r.deck = r.deck.map(turnOver);
   r.discard = r.discard.map(turnOver);
   r.side = r.side === 'dark' ? 'light' : 'dark';
-  r.activeColor = topCard(r).face.color ?? otherSideColor(r.activeColor);
+  r.activeColor = color ?? topCard(r).face.color ?? otherSideColor(r.activeColor);
   er(r).challenge = null;
   st.ev.push({ type: 'flip', side: r.side, color: r.activeColor, seat, hand: r.hands[0].slice(), backs: backsOf(r.hands), deckBack: deckBackOf(r.deck) });
 }
@@ -546,8 +679,7 @@ export function timeUp(match: MatchState): { match: MatchState; events: GameEven
 function isStuck(st: St): boolean {
   const { m, r } = st;
   if (r.deck.length > 0 || r.discard.length > 1 || r.pendingDraw > 0) return false;
-  const top = topCard(r);
-  return !activeSeats(m, r).some((s) => r.hands[s].some((c) => matches(c, top, r.activeColor)));
+  return !activeSeats(m, r).some((s) => r.hands[s].some((c) => turnPlayable(m.rules, r, r.hands[s], c)));
 }
 
 /** elimination check after a seat's hand grew; may end the round */
@@ -611,7 +743,7 @@ function aimPenalty(st: St, victim: Seat, keep: boolean): void {
   if (w || r.window) setWindow(st, w);
 }
 
-function penalty(st: St, from: Seat, n: number, challenge: { illegal: boolean } | null): void {
+function penalty(st: St, from: Seat, n: number, challenge: { illegal: boolean; proof?: number[] } | null): void {
   const { m, r } = st;
   const victim = next(st, from);
   const stacking = m.rules.stacking === 'same' || m.rules.stacking === 'any';
@@ -619,7 +751,7 @@ function penalty(st: St, from: Seat, n: number, challenge: { illegal: boolean } 
   const stacked = r.pendingDraw > 0;
   r.pendingDraw += n;
   r.pendingFrom = from;
-  er(r).challenge = challenge && !stacked ? { from, victim, illegal: challenge.illegal } : null;
+  er(r).challenge = challenge && !stacked ? { from, victim, illegal: challenge.illegal, proof: challenge.proof } : null;
   if (stacking) st.ev.push({ type: 'stack', total: r.pendingDraw });
   aimPenalty(st, victim, stacking || !!challenge);
 }
@@ -653,7 +785,7 @@ function respond(st: St, seat: Seat, card: Card): void {
   r.discard.splice(r.discard.length - 1, 0, card); // under the top card: pile and active colour unchanged
   if (card.face.kind === 'shield') {
     const mv = er(r).mirrorVictim;
-    st.ev.push({ type: 'shield', seat });
+    st.ev.push({ type: 'shield', seat, card });
     clearPenalty(st);
     if (hand.length === 0) {
       endRound(st, seat);
@@ -667,7 +799,7 @@ function respond(st: St, seat: Seat, card: Card): void {
     if (er(r).mirrorVictim == null) er(r).mirrorVictim = seat;
     er(r).challenge = null;
     r.pendingFrom = seat;
-    st.ev.push({ type: 'mirror', from: seat, to, total });
+    st.ev.push({ type: 'mirror', from: seat, to, total, card });
     if (hand.length === 0) {
       drawCards(st, to, total, 'penalty');
       endRound(st, seat);
@@ -683,7 +815,10 @@ function challenge(st: St, seat: Seat): void {
   const c = er(r).challenge!;
   const total = r.pendingDraw;
   clearPenalty(st);
-  st.ev.push({ type: 'challenge', by: seat, target: c.from, caught: c.illegal });
+  // the +4's player shows the hand (public from here on): `proof` = the cards that could have been played instead
+  const shown = r.hands[c.from].map((x) => ({ ...x, face: { ...x.face } }));
+  const proofIds = new Set(c.proof ?? []);
+  st.ev.push({ type: 'challenge', by: seat, target: c.from, caught: c.illegal, hand: shown, proof: shown.filter((x) => proofIds.has(x.id)), draw: c.illegal ? total : total + 2 });
   if (c.illegal) {
     // caught: the player draws the stack, the victim plays on as if nothing happened
     drawCards(st, c.from, total, 'penalty');
@@ -697,10 +832,14 @@ function challenge(st: St, seat: Seat): void {
 
 // ───────────────────────── card effects ─────────────────────────
 
-function skipNext(st: St, from: Seat): void {
-  const skipped = next(st, from);
-  st.ev.push({ type: 'skip', seat: skipped });
-  setTurn(st, next(st, skipped));
+/** `n` seats after `from` lose their turn (multiSkip: one per skip, round the table, possibly `from` itself) */
+function skipNext(st: St, from: Seat, n = 1): void {
+  let s = from;
+  for (let i = 0; i < n; i++) {
+    s = next(st, s);
+    st.ev.push({ type: 'skip', seat: s });
+  }
+  setTurn(st, next(st, s));
 }
 
 function swapHands(st: St, a: Seat, b: Seat): void {
@@ -741,6 +880,7 @@ interface PlayOpts {
   target?: Seat;
   ku?: boolean;
   give?: number;
+  extra?: number[];
 }
 
 /** a card leaves `seat`'s hand for the pile (turn play or jump-in) and its effect resolves */
@@ -750,24 +890,37 @@ function resolvePlay(st: St, seat: Seat, card: Card, opts: PlayOpts): void {
   const hand = r.hands[seat];
   const kind = card.face.kind;
   const prevColor = r.activeColor;
-  const swept = kind === 'sweep' ? hand.filter((c) => c !== card && c.face.color === card.face.color) : [];
+  const sweepColor = kind === 'sweep' ? card.face.color : kind === 'sweepWild' ? (opts.color ?? null) : null;
+  const swept = sweepColor ? hand.filter((c) => c !== card && c.face.color === sweepColor) : [];
   const given = opts.give !== undefined ? hand.find((c) => c.id === opts.give && c !== card) : undefined;
-  const remaining = hand.length - 1 - swept.length - (given ? 1 : 0);
+  // multi-play: the other cards of the group (same number, or same +2 / reverse / skip kind), in the order
+  // they go down (the last sets the colour)
+  const extras = (opts.extra ?? []).map((id) => hand.find((c) => c.id === id && c !== card)).filter((c): c is Card => !!c);
+  const remaining = hand.length - 1 - swept.length - (given ? 1 : 0) - extras.length;
   if (opts.ku && rules.kuCall && (hand.length <= 2 || remaining <= 1) && !r.kuCalled[seat]) {
     r.kuCalled[seat] = true;
     st.ev.push({ type: 'ku', seat });
   }
   // challenge: did the player hold a card of the colour in play that could have been played instead?
   const challengeInfo =
-    kind === 'wild4' || kind === 'draw10' ? { illegal: hand.some((c) => c !== card && c.face.color === prevColor && canPlay(c, r, rules)) } : null;
+    kind === 'wild4' || kind === 'draw10' ? { illegal: hand.some((c) => c !== card && c.face.color === prevColor && canPlay(c, r, rules)), proof: hand.filter((c) => c !== card && c.face.color === prevColor && canPlay(c, r, rules)).map((c) => c.id) } : null;
 
   hand.splice(hand.indexOf(card), 1);
   r.discard.push(card);
   const wild = isWildKind(kind);
+  // wildFlip (two-sided): the colour is one of the other side's; the turn over below keeps it in play
+  const flipColor = kind === 'wildFlip' && card.other ? opts.color : undefined;
   r.activeColor = card.face.color ?? opts.color ?? r.activeColor;
-  st.ev.push(wild ? { type: 'play', seat, card, color: r.activeColor } : { type: 'play', seat, card });
+  const more = extras.length ? { more: true } : {};
+  st.ev.push(wild ? { type: 'play', seat, card, color: r.activeColor, ...more } : { type: 'play', seat, card, ...more });
   r.drewThisTurn = false;
   r.drawnCardId = null;
+  extras.forEach((c, i) => {
+    hand.splice(hand.indexOf(c), 1);
+    r.discard.push(c);
+    r.activeColor = c.face.color ?? r.activeColor;
+    st.ev.push(i < extras.length - 1 ? { type: 'play', seat, card: c, more: true } : { type: 'play', seat, card: c });
+  });
 
   if (swept.length) {
     for (const c of swept) hand.splice(hand.indexOf(c), 1);
@@ -783,7 +936,10 @@ function resolvePlay(st: St, seat: Seat, card: Card, opts: PlayOpts): void {
     if (r.over) return;
   }
 
-  const draw = penaltyOf(card.face);
+  // multiDraw2: every +2 of the group adds its penalty
+  const draw = extras.reduce((t, c) => t + penaltyOf(c.face), penaltyOf(card.face));
+  // multiSkip / multiReverse: each card of the group acts once
+  const times = 1 + extras.length;
   if (hand.length === 0) {
     // going out: a final penalty card (or wildColor) still makes the victim draw (it counts for scoring)
     if (draw > 0) {
@@ -795,6 +951,8 @@ function resolvePlay(st: St, seat: Seat, card: Card, opts: PlayOpts): void {
     return;
   }
 
+  // a ¡Ku! called early (for a multi-play) does not outlive a play that still leaves two or more cards
+  if (hand.length >= 2) r.kuCalled[seat] = false;
   let kuSeat: Seat | null = rules.kuCall && hand.length === 1 && !r.kuCalled[seat] ? seat : null;
 
   switch (kind) {
@@ -817,7 +975,7 @@ function resolvePlay(st: St, seat: Seat, card: Card, opts: PlayOpts): void {
       setTurn(st, next(st, seat));
       break;
     case 'skip':
-      skipNext(st, seat);
+      skipNext(st, seat, times);
       break;
     case 'skipAll': {
       for (let s = next(st, seat); s !== seat; s = next(st, s)) st.ev.push({ type: 'skip', seat: s });
@@ -825,10 +983,13 @@ function resolvePlay(st: St, seat: Seat, card: Card, opts: PlayOpts): void {
       break;
     }
     case 'reverse':
-      if (activeSeats(m, r).length === 2) skipNext(st, seat);
+      // two players: a reverse acts as a skip; else each one turns the direction (an even count keeps it)
+      if (activeSeats(m, r).length === 2) skipNext(st, seat, times);
       else {
-        r.direction = r.direction === 1 ? -1 : 1;
-        st.ev.push({ type: 'reverse', direction: r.direction });
+        for (let i = 0; i < times; i++) {
+          r.direction = r.direction === 1 ? -1 : 1;
+          st.ev.push({ type: 'reverse', direction: r.direction });
+        }
         setTurn(st, next(st, seat));
       }
       break;
@@ -849,7 +1010,11 @@ function resolvePlay(st: St, seat: Seat, card: Card, opts: PlayOpts): void {
       flipAll(st, seat);
       setTurn(st, next(st, seat));
       break;
-    // wild, sweep (cards already swept), shield / mirror on their turn: plain cards
+    case 'wildFlip':
+      flipAll(st, seat, flipColor);
+      setTurn(st, next(st, seat));
+      break;
+    // wild, sweep / sweepWild (cards already swept), shield / mirror on their turn: plain cards
     default:
       setTurn(st, next(st, seat));
       break;
@@ -915,6 +1080,8 @@ export function applyMove(match: MatchState, move: Move): { match: MatchState; e
       r.kuCalled[seat] = true;
       st.ev.push({ type: 'ku', seat });
       if (r.window?.reason === 'ku' && r.window.victim === seat) setWindow(st, null);
+      // multiPlay: called with more cards, ahead of a play that leaves one
+      if (r.hands[seat].length > 2) return finish(st, seat);
       break;
     case 'catchKu': {
       const target = move.target;

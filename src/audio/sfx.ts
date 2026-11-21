@@ -432,6 +432,15 @@ export function playSfx(name: SfxName): void {
       whoosh(t, 0.3, [600, 4200], 0.18, 2.2, [-0.8, 0.8]);
       whoosh(t + 0.07, 0.32, [4200, 600], 0.18, 2.2, [0.8, -0.8]);
       break;
+    case 'chalWin':
+      // the challenge's verdict, won: three quick bright notes
+      [7, 12, 19].forEach((s2, i) => mallet(t + 0.05 + i * 0.07, N(s2 + 12), 0.17, 0.32));
+      break;
+    case 'chalLose':
+      // ... lost: a sour two-step slide down
+      tone(t + 0.05, 0.16, { f0: N(3), f1: N(1), gain: 0.2, type: 'triangle' });
+      tone(t + 0.22, 0.34, { f0: N(-3), f1: N(-9), gain: 0.22, type: 'triangle', sweep: 0.3 });
+      break;
     case 'winHand':
       // rising arpeggio
       [0, 4, 7, 12, 16].forEach((s2, i) => mallet(t + i * 0.075, N(s2 + 12), 0.18, 0.45));

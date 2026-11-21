@@ -8,7 +8,7 @@ export { buildDeck, cardPoints, isWildKind, isPenaltyKind, PENALTY_DRAW } from '
 export {
   createMatch, startRound, matches, shuffle, legalMoves, applyMove, closeWindow, isLegal, sameMove,
   canPlay, canStack, identical, cardCount, handPoints, stepSeat, teamOf, opponents, activeSeats, topCard,
-  partnerOf, visibleHands, giveOptions, penaltyOf, timeUp, timeUpWinner,
+  partnerOf, visibleHands, giveOptions, multiPlayOptions, penaltyOf, timeUp, timeUpWinner,
 } from './game';
 export * from './clock';
 export { chooseMove, scoreMove, timeoutMove, afterAutoDraw, withAutoColor, AUTO_COLOR } from './ai';

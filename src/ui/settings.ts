@@ -15,7 +15,11 @@ import { h } from './dom';
 import { screenHeader } from './howto';
 import { enhanceHScroll } from './hscroll';
 import { loc, t, tMaybe, type Key } from './i18n';
-import { ICONS, segmented, toggle } from './overlay';
+import { btn, ICONS, segmented, toggle } from './overlay';
+import { modeSelect, builtInModeNames } from './modeSelect';
+import { customMode, deleteCustomMode, draftFrom } from '../app/customModes';
+import { BUILTIN_MODES, modeFromTemplate, type ModeDef } from '../engine/modes';
+import { modeView } from './modeView';
 
 /** up to 5 gestures for the in-game chat: tiles showing the player's face making each one */
 function gesturePicker(initial: ChatGesture[], face: FaceSpec | number, onChange: (v: ChatGesture[]) => void): HTMLElement {
@@ -56,6 +60,10 @@ export interface SettingsOpts {
   presets: RulePreset[];
   /** the mode the Reglas tab opens on */
   rulesMode?: GameMode;
+  /** open the mode editor (a new mode from a template, or a player-made one); main shows the screen */
+  editMode?(def: ModeDef, isNew: boolean): void;
+  /** open "Buscar modos" (the online catalog) */
+  browseModes?(): void;
   matchInProgress: boolean;
   confirm(o: { title: string; body: string; ok: string; cancel: string; danger?: boolean }): Promise<boolean>;
   /** called with the full new settings object after every change */
@@ -70,13 +78,16 @@ export interface SettingsOpts {
 
 let rowSeq = 0;
 
+/** the small ⓘ button that opens a rule's explanation in a floating tooltip (shared with the mode editor) */
+export function infoButton(label: string, help: string): HTMLButtonElement {
+  const info = h('button.info-btn', { type: 'button', 'aria-expanded': 'false', 'aria-label': `${t('settings.info')}: ${label}`, title: t('settings.info') }, 'i');
+  info.addEventListener('click', () => toggleTip(info, help));
+  return info;
+}
+
 /** a settings row; `help` sits behind a small ⓘ button that opens a floating tooltip */
 function row(label: string, control: Node, help?: string, stack = false): HTMLElement {
-  let info: HTMLButtonElement | null = null;
-  if (help) {
-    info = h('button.info-btn', { type: 'button', 'aria-expanded': 'false', 'aria-label': `${t('settings.info')}: ${label}`, title: t('settings.info') }, 'i');
-    info.addEventListener('click', () => toggleTip(info!, help));
-  }
+  const info = help ? infoButton(label, help) : null;
   return h('div.set-row', { class: stack ? 'stack' : '' }, h('div.set-text', h('div.set-label-line', h('span.set-label', label), info)), h('div.set-ctl', control));
 }
 
@@ -168,6 +179,14 @@ function faceEditor(value: number | FaceSpec, onChange: (v: FaceSpec) => void): 
   return box;
 }
 
+/** the name input at the top of the editor's Aleatorio / Restablecer column (falls back to before it) */
+function withName(editor: HTMLElement, name: HTMLElement): HTMLElement {
+  const col = editor.querySelector('.kua-actions');
+  if (col) col.prepend(name);
+  else editor.prepend(name);
+  return editor;
+}
+
 function swatchPicker<T extends string>(values: T[], value: T, art: (v: T) => string, name: (v: T) => string, label: string, onChange: (v: T) => void, kind: string): HTMLElement {
   const items = radioItems(values, value, (v) => [h('span.swatch-img', { html: art(v) }), h('span.swatch-name', name(v))], name, onChange, `swatch ${kind}`);
   return hscroll(items, values.indexOf(value), label);
@@ -236,6 +255,8 @@ function aboutRow(onClick: () => void): HTMLElement {
   return h('section.card.set-card.about-card', b);
 }
 
+const PENCIL_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19.5 8.5a2.8 2.8 0 0 0-4-4L4 16z M13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const SEARCH_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.6"/><path d="M15.5 15.5 20.5 20.5" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/></svg>';
 const PLUS_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>';
 const TRASH_SVG =
   '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 7h15M9.5 7V4.8h5V7M6.8 7l.9 12.2h8.6L17.2 7M10.2 10.5v5.5M13.8 10.5v5.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -245,6 +266,10 @@ export interface RuleSelectItem {
   on: boolean;
   /** "Personalizado": shown as the current value, not pickable */
   custom?: boolean;
+  /** pick() runs even when this item is already selected (e.g. Automática re-detects) */
+  repick?: boolean;
+  /** an inline SVG shown before the label (game-mode icons) */
+  icon?: string;
   pick?: () => void;
 }
 
@@ -254,16 +279,17 @@ export function ruleSelect(items: RuleSelectItem[], label: string, variant?: 'so
   const btnEl = h(
     'button.rsel-btn',
     { type: 'button', 'aria-haspopup': 'listbox', 'aria-expanded': 'false', 'aria-controls': listId, 'aria-label': `${label}: ${cur.label}` },
+    cur.icon ? h('span.rsel-ico', { 'aria-hidden': 'true', html: cur.icon }) : null,
     h('span.rsel-v', { class: cur.custom ? 'custom' : '' }, cur.label),
     h('span.rsel-chev', { 'aria-hidden': 'true' }),
   );
   const opts = items
     .filter((i) => !i.custom)
     .map((i) => {
-      const o = h('li.rsel-opt', { role: 'option', tabindex: -1, 'aria-selected': String(i.on) }, h('span.rsel-check', { 'aria-hidden': 'true' }), h('span', i.label));
+      const o = h('li.rsel-opt', { role: 'option', tabindex: -1, 'aria-selected': String(i.on) }, h('span.rsel-check', { 'aria-hidden': 'true' }), i.icon ? h('span.rsel-ico', { 'aria-hidden': 'true', html: i.icon }) : null, h('span', i.label));
       o.addEventListener('click', () => {
         close();
-        if (!i.on) i.pick?.();
+        if (!i.on || i.repick) i.pick?.();
       });
       return o;
     });
@@ -343,8 +369,8 @@ export function buildSettings(o: SettingsOpts): HTMLElement {
         ? h('section.card.set-card', h('p.warn', { role: 'note' }, t('settings.profileLocked')))
         : h(
             'section.card.set-card',
-            row(t('settings.name'), name),
-            row(t('settings.avatarFace'), faceEditor(s.avatarFace ?? 0, (v) => set('avatarFace', v)), undefined, true),
+            // the name field sits in the face editor's button column (same width, aligned with Aleatorio / Restablecer)
+            row(t('settings.avatarFace'), withName(faceEditor(s.avatarFace ?? 0, (v) => set('avatarFace', v)), name), undefined, true),
           ),
       // a preference like sound, not identity: editable mid-game
       h('section.card.set-card', row(t('settings.gestures'), gesturePicker(sanitizeGestures(s.gestures), s.avatarFace ?? 0, (v) => set('gestures', v)), t('settings.gesturesHelp'), true)),
@@ -359,35 +385,45 @@ export function buildSettings(o: SettingsOpts): HTMLElement {
   // ── Imagen y sonido ──
   type QChoice = 'auto' | AppSettings['quality'];
   const qualityCtl = () => {
-    const now = h('div.set-sub', { 'aria-live': 'polite' });
-    const showNow = () => {
-      const auto = s.qualityMode !== 'manual';
-      now.hidden = !auto;
-      if (auto) now.textContent = t('settings.quality.now', { q: t(`settings.quality.${o.resolvedQuality?.() ?? s.quality}` as Key) });
+    // one quiet dropdown on the label's line (Automática picks the level itself)
+    const box = h('div.set-ctl.quality-ctl');
+    const render = () => {
+      const cur: QChoice = s.qualityMode === 'manual' ? s.quality : 'auto';
+      box.replaceChildren(
+        ruleSelect(
+          (['auto', 'low', 'medium', 'high'] as QChoice[]).map((v) => ({
+            label: t(`settings.quality.${v}` as Key),
+            on: v === cur,
+            repick: v === 'auto',
+            pick: () => {
+              if (v === 'auto') {
+                s = { ...s, autoQuality: undefined };
+                set('qualityMode', 'auto');
+                // keep this panel's copy in step with the fresh detection (later changes save it)
+                const q = o.resolvedQuality?.();
+                if (q) s = { ...s, quality: q, autoQuality: q };
+              }
+              else {
+                s = { ...s, qualityMode: 'manual', quality: v };
+                o.onChange(s, 'quality');
+              }
+              render();
+            },
+          })),
+          t('settings.quality'),
+          'soft',
+        ),
+      );
     };
-    const ctl = segmented<QChoice>(
-      (['auto', 'low', 'medium', 'high'] as QChoice[]).map((v) => ({ value: v, label: t(`settings.quality.${v}` as Key) })),
-      s.qualityMode === 'manual' ? s.quality : 'auto',
-      (v) => {
-        if (v === 'auto') set('qualityMode', 'auto');
-        else {
-          s = { ...s, qualityMode: 'manual', quality: v };
-          o.onChange(s, 'quality');
-        }
-        showNow();
-      },
-      t('settings.quality'),
-    );
-    ctl.classList.add('seg-quality');
-    showNow();
-    return h('div.set-ctl-col', ctl, now);
+    render();
+    return box;
   };
   const tabAv = () =>
     h(
       'div.set-tab-body',
       h(
         'section.card.set-card',
-        row(t('settings.quality'), qualityCtl(), undefined, true),
+        row(t('settings.quality'), qualityCtl()),
         row(
           t('settings.tableStyle'),
           swatchPicker<TableStyle>(TABLE_STYLES, s.tableStyle ?? 'teal', (v) => tableSwatchSvg(v), (v) => t(`settings.table.${v}` as Key), t('settings.tableStyle'), (v) => set('tableStyle', v), 'table'),
@@ -416,6 +452,8 @@ export function buildSettings(o: SettingsOpts): HTMLElement {
   let openGroup: string | null = null;
   let naming = false;
   let rmode: GameMode = o.rulesMode ?? s.mode ?? 'classic';
+  // a player-made mode selected in the Reglas tab (null = the built-in rmode)
+  let rcustom: string | null = !o.rulesMode && s.customMode && customMode(s.customMode) ? s.customMode : null;
   const rulesWrap = h('div.set-tab-body');
   const renderRules = () => {
     const descriptors = descriptorsForMode(o.ruleDescriptors, rmode);
@@ -425,7 +463,9 @@ export function buildSettings(o: SettingsOpts): HTMLElement {
       groups.get(d.group)!.push(d);
     }
     const preset = o.presets.find((p) => p.id === rmode)!;
-    const cur: RuleSettings = { ...(s.rulesByMode?.[rmode] ?? preset.rules) };
+    const cdef = rcustom ? customMode(rcustom) : null;
+    if (cdef) rmode = cdef.base;
+    const cur: RuleSettings = cdef ? { ...preset.rules, ...cdef.rules } : { ...(s.rulesByMode?.[rmode] ?? preset.rules) };
     const isPreset = sameAs(cur, preset.rules, descriptors);
     const store = (rules: RuleSettings) => {
       const rulesByMode = { ...(s.rulesByMode ?? {}), [rmode]: rules };
@@ -525,47 +565,65 @@ export function buildSettings(o: SettingsOpts): HTMLElement {
           const val = cur[d.key] ?? d.default;
           const many = d.type === 'select' && (d.options?.length ?? 0) > 2;
           // three or more options: a quiet dropdown (the teal one is for the rule set)
-          const ctl =
-            d.type === 'toggle'
-              ? toggle(Boolean(val), (v) => setRule(d.key, v), loc(d.label))
-              : many
-                ? ruleSelect((d.options ?? []).map((op) => ({ label: optionLabel(op), on: op.value === val, pick: () => setRule(d.key, op.value) })), loc(d.label), 'soft')
-                : segmented(
-                  (d.options ?? []).map((op) => ({ value: op.value, label: optionLabel(op) })),
-                  val,
-                  (v) => setRule(d.key, v),
-                  loc(d.label),
-                );
-          const longOpts = d.type === 'select' && !many && ((d.options ?? []).some((op) => optionLabel(op).length > 9));
-          body.append(row(loc(d.label), ctl, d.help ? loc(d.help) : undefined, longOpts));
+          // read-only here: rules are changed in the mode editor (plus / pencil)
+          void many;
+          void setRule;
+          const op = (d.options ?? []).find((x) => x.value === val);
+          const text = d.type === 'toggle' ? (val ? t('modes.on') : t('modes.off')) : op ? optionLabel(op) : String(val);
+          body.append(row(loc(d.label), h('span.rule-ro', text), d.help ? loc(d.help) : undefined));
         }
       return h('section.card.rule-group-card', { class: open ? 'open' : '' }, head, body);
     });
 
+    // [mode dropdown] [plus: new from this built-in | pencil: edit this custom] [trash: custom only]
+    function modeRow(): HTMLElement {
+      const sel = modeSelect({
+        current: rcustom ?? rmode,
+        onPick: (id) => {
+          const c = customMode(id);
+          rcustom = c ? c.id : null;
+          if (!c) rmode = id as GameMode;
+          openGroup = null;
+          renderRules();
+        },
+      });
+      const baseDef = cdef ?? BUILTIN_MODES[rmode];
+      const editLabel = cdef ? t('modes.edit') : t('modes.new');
+      const act = h('button.icon-btn.rsel-act', { type: 'button', 'aria-label': editLabel, title: editLabel, html: cdef ? PENCIL_SVG : PLUS_SVG });
+      act.addEventListener('click', () => {
+        if (cdef) o.editMode?.(cdef, false);
+        else o.editMode?.(draftFrom(baseDef, cur, loc(preset.label), builtInModeNames()), true);
+      });
+      const delLabel = t('modes.delete');
+      const del = h('button.icon-btn.rsel-act.danger', { type: 'button', 'aria-label': delLabel, title: delLabel, html: TRASH_SVG, disabled: cdef ? undefined : true });
+      del.addEventListener('click', async () => {
+        if (!cdef) return;
+        const ok = await o.confirm({ title: t('modes.deleteTitle', { name: cdef.name }), body: t('modes.deleteBody'), ok: t('modes.delete'), cancel: t('common.cancel'), danger: true });
+        if (!ok) return;
+        deleteCustomMode(cdef.id);
+        if (s.customMode === cdef.id) {
+          s = { ...s, customMode: undefined };
+          o.onChange(s, 'mode');
+        }
+        rcustom = null;
+        renderRules();
+      });
+      // the online catalog: a magnifying glass after the trash
+      const findLabel = t('modes.browse');
+      const find = h('button.icon-btn.rsel-act', { type: 'button', 'aria-label': findLabel, title: findLabel, html: SEARCH_SVG });
+      find.addEventListener('click', () => o.browseModes?.());
+      return h('div.rsel-line.mode-row', h('div.rsel-slot', sel), act, del, find);
+    }
+
     rulesWrap.replaceChildren(
       h(
         'section.card.set-card.preset-card',
-        h('div.rsel-line', ruleSelect(
-          // every mode's rule sets in one list (no separate mode switch): another mode's set opens that mode
-          MODES.flatMap((m): RuleSelectItem[] => {
-            if (m === rmode)
-              return [
-                { label: loc(preset.label), on: isPreset, pick: restore },
-                ...mine.map((p) => ({ label: p.name, on: p === active, pick: () => applyProfile(p) })),
-                ...(!isPreset && !active ? [{ label: t('settings.preset.custom'), on: true, custom: true }] : []),
-              ];
-            const pm = o.presets.find((p) => p.id === m);
-            return [
-              ...(pm ? [{ label: loc(pm.label), on: false, pick: () => openMode(m, pm.rules) }] : []),
-              ...loadProfiles().filter((p) => p.mode === m).map((p) => ({ label: p.name, on: false, pick: () => openMode(m, p.rules) })),
-            ];
-          }),
-          t('settings.preset'),
-        ), profileAct),
-        profileCtl,
+        modeRow(),
       ),
-      ...groupEls,
+      // everything the editor has, read-only, in the same two-column layout
+      modeView(cdef ?? modeFromTemplate(BUILTIN_MODES[rmode], cur, rmode, loc(preset.label)), descriptorsForMode(o.ruleDescriptors, cdef?.base ?? rmode)),
     );
+    void groupEls;
   };
   renderRules();
 

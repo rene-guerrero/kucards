@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { GameEvent, GameMode, Move, Seat } from '../contracts';
-import { engine, giveOptions, RULE_PRESETS } from '../engine';
+import { engine, giveOptions, multiPlayOptions, RULE_PRESETS } from '../engine';
 import { setupOf } from '../engine/testutil';
 import { GameController, type GameHud, type GameUi, type GameView } from './controller';
 
 /** a table + HUD that answer at once: the human plays its first playable card (or taps the deck) */
-function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seating?: 'across' | 'side'; partnerSide?: 'after' | 'before'; tapKu?: boolean; partnerOpen?: boolean; clock?: { roundMin: number; moveSec: number; finalSec: number } } = {}) {
+function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seating?: 'across' | 'side'; partnerSide?: 'after' | 'before'; tapKu?: boolean; partnerOpen?: boolean; clock?: { roundMin: number; moveSec: number; finalSec: number }; multi?: boolean } = {}) {
   const preset = RULE_PRESETS.find((p) => p.id === mode)!;
-  const rules = { ...preset.rules, target: 200, jumpIn: true, sevenZero: !opts.seating && seed % 2 === 0, partnerPass: true, partnerShield: true, 'power.shield': true, 'power.mirror': true, 'power.swap': true, 'power.sweep': true, wild4Challenge: true, ...(opts.partnerOpen === false ? { partnerOpen: false } : {}) };
+  const rules = { ...preset.rules, target: 200, jumpIn: true, sevenZero: !opts.seating && seed % 2 === 0, partnerPass: true, partnerShield: true, 'power.shield': true, 'power.mirror': true, 'power.swap': true, 'power.sweep': true, wild4Challenge: true, ...(opts.partnerOpen === false ? { partnerOpen: false } : {}), ...(opts.multi ? { multiPlay: true, numberFinish: true } : {}) };
   const open: { seat: Seat; n: number | null; over: boolean }[] = [];
   // eslint-disable-next-line prefer-const
   let ctl: { match: { round?: { over?: boolean } | null } } | null = null;
@@ -33,6 +33,17 @@ function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seati
       if ((ctl?.match.round as { pendingDraw?: number } | null | undefined)?.pendingDraw) mustDrawPicks++;
       return canDraw ? 'draw' : new Promise<never>(() => {});
     },
+    // multiPlay: the human plays every card that may join its first joinable card
+    ...(opts.multi
+      ? {
+          requestHumanMultiPick: async (playable: number[], canDraw: boolean, joinable: Record<number, number[]>) => {
+            picks++;
+            const first = playable.find((id) => joinable[id]?.length);
+            if (first !== undefined) return { cardId: first, extra: joinable[first].slice() };
+            return playable.length ? playable[0] : canDraw ? ('draw' as const) : new Promise<never>(() => {});
+          },
+        }
+      : {}),
     cancelHumanPick: () => {},
     setOpenHand: (seat, cards) => {
       open.push({ seat, n: cards ? cards.length : null, over: !!ctl?.match.round?.over });
@@ -95,6 +106,7 @@ function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seati
     lineup: {},
     players: match.seats.map((seat, i) => ({ seat: seat as Seat, name: `P${seat}`, face: { iris: '#000' }, level: seat === 0 ? undefined : levels[i % 3] })),
     giveOptions,
+    multiPlayOptions,
     onExit: () => {
       exited = true;
     },
@@ -107,6 +119,14 @@ function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seati
 }
 
 describe('GameController (offline loop)', () => {
+  it('multiPlay: the human plays same numbers together through the view; numberFinish on', async () => {
+    const h = harness('classic', 4, 21, { multi: true, tapKu: true });
+    await h.c.run();
+    expect(h.c.match.over).toBe(true);
+    expect(h.events.some((e) => e.type === 'play' && e.seat === 0 && e.more)).toBe(true);
+    expect(h.events.some((e) => e.type === 'play' && e.seat !== 0 && e.more)).toBe(true);
+  });
+
   const setups: [GameMode, 2 | 3 | 4, ('across' | 'side')?][] = [
     ['classic', 2], ['classic', 3], ['classic', 4], ['action', 4], ['cyclone', 3], ['classic', 4, 'across'], ['sideBySide', 4, 'side'],
   ];

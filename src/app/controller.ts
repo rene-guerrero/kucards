@@ -49,6 +49,8 @@ export interface GameHud {
   pickTarget(seats: Seat[], title?: string): Promise<Seat>;
   kuPop(name?: string): Promise<void>;
   showResponse(o: ResponseOpts): Promise<ResponseChoice>;
+  /** a non-dismissable question in the response bar's place; resolves `onTimeout` when time runs out */
+  askChoice?<T extends string>(o: { title: string; options: { id: T; label: string; cls?: string }[]; ms: number; onTimeout: T }): Promise<T>;
   notice(text: string): void;
   closeAll(): void;
   /** the round countdown (ms left; null hides it); urgent = the final minute */
@@ -72,7 +74,7 @@ export interface GameUi {
   catchable?(seat: Seat | null, onCatch: () => void): void;
   roundSummary(ctx: RoundSummaryCtx): Promise<'next' | 'menu'>;
   matchEnd(ctx: MatchEndCtx): Promise<'rematch' | 'menu'>;
-  t(key: 'game.acceptHint' | 'game.autoDraw' | 'game.catchHint' | 'game.giveHint' | 'game.pickSwapColor' | 'hud.pickSwap' | 'team.a' | 'team.b', p?: Record<string, string | number>): string;
+  t(key: 'game.acceptHint' | 'game.autoDraw' | 'game.catchHint' | 'game.giveHint' | 'game.pickSwapColor' | 'hud.pickSwap' | 'hud.drawnPlayable' | 'hud.drawnPlay' | 'hud.drawnPass' | 'team.a' | 'team.b', p?: Record<string, string | number>): string;
 }
 
 export interface SeatInfo {
@@ -105,6 +107,8 @@ export interface ControllerOpts {
   save?(match: MatchState, lineup: Lineup): void;
   /** partnerPass: the cards seat may give its partner with this play (engine giveOptions) */
   giveOptions?(match: MatchState, move: Move): number[];
+  /** multiPlay: the cards that may join this play (engine multiPlayOptions) */
+  multiPlayOptions?(match: MatchState, move: Move): number[];
   clearSave?(): void;
   /** the player chose Menú at a summary, or the match was quit */
   onExit(): void;
@@ -120,6 +124,21 @@ export interface ControllerOpts {
 export const AUTO_DRAW_MS = 900;
 const TURN_KINDS = new Set(['play', 'draw', 'pass', 'acceptPenalty', 'respond', 'challenge']);
 const isTurnMove = (m: Move) => TURN_KINDS.has(m.kind);
+
+/** multiPlay: by playable card id, the cards that may go down with it (null when none may) */
+export function joinableFor(m: MatchState, plays: Extract<Move, { kind: 'play' }>[], options: (m: MatchState, mv: Move) => number[]): Record<number, number[]> | null {
+  const out: Record<number, number[]> = {};
+  let any = false;
+  for (const p of plays) {
+    if (p.cardId in out) continue;
+    const ids = options(m, p);
+    if (ids.length) {
+      out[p.cardId] = ids;
+      any = true;
+    }
+  }
+  return any ? out : null;
+}
 
 function sameMove(a: Move, b: Move): boolean {
   if (a.kind !== b.kind || a.seat !== b.seat) return false;
@@ -664,12 +683,36 @@ export class GameController {
     const drawLike = legal.find((x) => x.kind === 'draw' || x.kind === 'pass' || x.kind === 'acceptPenalty');
     // nothing playable: the pyramid over the deck is the only hint
     if (r.pendingDraw > 0 && playable.length) ui.hud.notice(ui.t('game.acceptHint', { n: r.pendingDraw }));
-    const pick = await view.requestHumanPick(playable, !!drawLike);
+    // multiPlay: cards that other cards of the same number may join (a tap selects, a drag plays the group)
+    const joinable = this.o.multiPlayOptions ? joinableFor(m, plays, this.o.multiPlayOptions) : null;
+    let choice: number | 'draw' | { cardId: number; extra: number[] };
+    const passMove = legal.find((x) => x.kind === 'pass');
+    if (r.drewThisTurn && playable.length && passMove && ui.hud.askChoice) {
+      // the drawn card can be played: it lifts and a question (no escape) asks; time up = it is played
+      view.markCard?.(playable[0]);
+      const ans = await ui.hud.askChoice({
+        title: ui.t('hud.drawnPlayable'),
+        options: [
+          { id: 'play', label: ui.t('hud.drawnPlay'), cls: 'primary' },
+          { id: 'pass', label: ui.t('hud.drawnPass'), cls: 'ghost' },
+        ],
+        ms: Math.max(3000, Math.min(this.moveTime() * 0.6, 10000)),
+        onTimeout: 'play',
+      });
+      view.markCard?.(null);
+      if (gone()) return;
+      if (ans === 'pass') return this.act(passMove);
+      choice = playable[0];
+    } else {
+      choice = joinable && view.requestHumanMultiPick ? await view.requestHumanMultiPick(playable, !!drawLike, joinable) : await view.requestHumanPick(playable, !!drawLike);
+    }
     if (gone()) return;
-    if (pick === 'draw') {
+    if (choice === 'draw') {
       if (drawLike) await this.act(drawLike);
       return;
     }
+    const pick = typeof choice === 'number' ? choice : choice.cardId;
+    const extra = typeof choice === 'number' ? [] : choice.extra;
     let variants = plays.filter((p) => p.cardId === pick);
     if (!variants.length) return;
     // swap: first the player, then the colour; wilds: the colour; 7-0: the player
@@ -691,7 +734,7 @@ export class GameController {
       variants = variants.filter((v) => v.color === color);
     }
     // partnerPass: on a 7 the human may give one card to the partner
-    let mv: Move | undefined = variants[0];
+    let mv: Move | undefined = variants[0] && extra.length ? { ...variants[0], extra } : variants[0];
     const giveIds = mv && this.o.giveOptions ? this.o.giveOptions(m, mv) : [];
     if (mv && giveIds.length) {
       ui.hud.notice(ui.t('game.giveHint'));

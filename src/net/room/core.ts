@@ -60,6 +60,7 @@ import {
   setMode,
   setClock,
   setRules,
+  setCustom,
   sit,
   type RoomData,
 } from './lobby';
@@ -310,6 +311,10 @@ export class RoomCore<S> {
         setRules(r, pid, msg.rules);
         this.broadcastRoom();
         return;
+      case 'setCustom':
+        setCustom(r, pid, msg.def, msg.playerCount, msg.teamPlay === true);
+        this.broadcastRoom();
+        return;
       case 'setClock':
         setClock(r, pid, msg.clock);
         this.broadcastRoom();
@@ -344,7 +349,7 @@ export class RoomCore<S> {
     if (humanCount(r) === 0 && seatOf(r, pid) === null) autoSeat(r, pid);
     fillSeats(r, () => this.io.random());
     const players = (r.mode === 'sideBySide' ? 4 : r.playerCount) as 2 | 3 | 4;
-    r.match = createMatch(r.rules, { mode: r.mode, players, teams: !!r.teamPlay, partnerSide: 'after' }, this.io.seed());
+    r.match = createMatch(r.rules, { mode: r.mode, players, teams: !!r.teamPlay, partnerSide: 'after', ...(r.custom ? { custom: r.custom } : {}) }, this.io.seed());
     if (r.clock) r.match.clock = { ...r.clock };
     r.phase = 'playing';
     r.win = null;

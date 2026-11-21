@@ -46,7 +46,10 @@ export type CardKind =
   | 'skipAll' // coloured: everyone else loses a turn, you play again
   | 'draw6' // coloured: next player draws 6 (stackable)
   | 'draw10' // wild: choose a colour, next player draws 10 (stackable)
-  | 'wildColor'; // wild "draw until the colour": next player draws until they get the colour you chose
+  | 'wildColor' // wild "draw until the colour": next player draws until they get the colour you chose
+  // player-made decks only (the editor offers them; no built-in deck holds them)
+  | 'wildFlip' // Eclipse comodín (two-sided decks): turns every card over, the player picks the new side's colour
+  | 'sweepWild'; // Barrida comodín: the player picks a colour and discards every card of it from their hand
 
 export const POWER_KINDS: readonly CardKind[] = ['swap', 'shield', 'sweep', 'mirror'];
 export const CYCLONE_KINDS: readonly CardKind[] = ['skipAll', 'draw6', 'draw10', 'wildColor'];
@@ -98,6 +101,12 @@ export interface MatchSetup {
    * [[0,1],[2,3]], default) or right BEFORE them (seat 3, teams [[0,3],[1,2]])? The app picks at random.
    */
   partnerSide?: 'after' | 'before';
+  /** a player-made mode's deck list (engine/modes: DeckSpec); built-in modes build theirs from the rules */
+  deck?: import('./engine/modes').DeckSpec;
+  /** a two-sided deck's night side (with `deck` as its day side) */
+  night?: import('./engine/modes').DeckSpec;
+  /** a player-made mode: its whole definition (seating, teams, deck, rules); `mode` is then its base */
+  custom?: import('./engine/modes').ModeDef;
 }
 
 // ───────────────────────── Moves ─────────────────────────
@@ -107,7 +116,12 @@ export type Move =
    * color: required for wild-type cards; target: required for swap (and 7 with the 7-0 rule).
    * give: partnerPass (Parejas, not with 7-0): with a 7, the id of one more card handed to the partner.
    */
-  | { kind: 'play'; seat: Seat; cardId: number; color?: Color; target?: Seat; ku?: boolean; give?: number }
+  /**
+   * extra: multiPlay rule, more number cards of the same value played with `cardId` in this order (card
+   * ids); multiDraw2 / multiReverse / multiSkip: more +2 / reverse / skip cards (one kind, never mixed).
+   * The last one lands on top and sets the colour (engine multiPlayOptions lists the candidates).
+   */
+  | { kind: 'play'; seat: Seat; cardId: number; color?: Color; target?: Seat; ku?: boolean; give?: number; extra?: number[] }
   | { kind: 'draw'; seat: Seat }
   /** after drawing a playable card the player may keep it (unless forcePlay) */
   | { kind: 'pass'; seat: Seat }
@@ -177,6 +191,12 @@ export interface RoundState {
 export interface MatchState {
   rules: RuleSettings;
   mode: GameMode;
+  /** a player-made mode's deck list (MatchSetup.deck; the day side of a two-sided deck); absent = built from the rules */
+  deckSpec?: import('./engine/modes').DeckSpec;
+  /** a player-made two-sided deck: the night side's list (MatchSetup.night); absent = the Día y Noche default */
+  nightSpec?: import('./engine/modes').DeckSpec;
+  /** a player-made mode being played (id, name, icon for the screens) */
+  custom?: { id: string; name: string; icon: string };
   /** seats in play, in turn order for direction 1 */
   seats: Seat[];
   /** by seat (partners: both partners carry the team score) */
@@ -201,14 +221,19 @@ export type GameEvent =
   /** hand: the viewer's own cards (seat 0 offline; the server fills each player's); deck: cards left in the deck */
   /** backs (Día y Noche): by seat, the backs of every hand (public); deckBack: the deck top's back */
   | { type: 'deal'; counts: number[]; starter: Seat; firstCard: Card; activeColor: Color; hand?: Card[]; deck?: number; backs?: CardFace[][]; deckBack?: CardFace | null }
-  | { type: 'play'; seat: Seat; card: Card; color?: Color }
+  /**
+   * more: a multi-play (rules multiPlay, multiDraw2, multiReverse, multiSkip) puts several cards down in one move, one 'play' event per card in
+   * order; every one but the last carries `more: true` (the renderer starts the next card's flight before
+   * this one lands). The colour in play follows the last one.
+   */
+  | { type: 'play'; seat: Seat; card: Card; color?: Color; more?: boolean }
   /** cards: the faces, only present for whoever may see them (the engine fills them; redaction strips them) */
   | { type: 'draw'; seat: Seat; count: number; cards?: Card[]; reason: 'turn' | 'penalty' | 'ku' | 'catch'; backs?: CardFace[]; deckBack?: CardFace | null }
   | { type: 'skip'; seat: Seat }
   | { type: 'reverse'; direction: Direction }
   | { type: 'stack'; total: number }
-  | { type: 'shield'; seat: Seat }
-  | { type: 'mirror'; from: Seat; to: Seat; total: number }
+  | { type: 'shield'; seat: Seat; card?: Card }
+  | { type: 'mirror'; from: Seat; to: Seat; total: number; card?: Card }
   /** cards: the viewer's new hand when it changed (seat 0 offline; the server fills it per player) */
   | { type: 'swapHands'; a: Seat; b: Seat; cards?: Card[] }
   | { type: 'rotateHands'; direction: Direction; cards?: Card[] }
@@ -216,7 +241,8 @@ export type GameEvent =
   | { type: 'ku'; seat: Seat }
   | { type: 'kuCaught'; by: Seat; target: Seat }
   /** a +4 / +10 challenge: `by` challenged `target` (who played it); caught = it was a bluff */
-  | { type: 'challenge'; by: Seat; target: Seat; caught: boolean }
+  /** hand: the target's whole hand, shown to everyone (public by the rule); proof: the cards in it that could have been played instead of the wild (empty = a fair play); draw: the cards the loser now draws */
+  | { type: 'challenge'; by: Seat; target: Seat; caught: boolean; hand?: Card[]; proof?: Card[]; draw?: number }
   | { type: 'window'; window: ResponseWindow | null }
   /**
    * Día y Noche: every card turned over (the engine has already swapped face / other on every card).
@@ -331,7 +357,10 @@ export type SfxName =
   | 'wild' // sparkle chord tinted by the chosen colour
   | 'sweep' // cascading shuffle-whoosh
   | 'flip' // Eclipse: a deep swell
-  | 'swap'; // two crossing whooshes
+  | 'swap' // two crossing whooshes
+  // the +4 challenge's verdict
+  | 'chalWin' // short bright rise
+  | 'chalLose'; // short sour fall
 
 export type Quality = 'low' | 'medium' | 'high';
 
@@ -388,14 +417,33 @@ export interface TableViewOptions {
   onPlates?: (plates: readonly SeatPlate[]) => void;
   /** a skip mark lands on a seat: the plates draw it over the avatar (img: data URL, tint: CSS colour) */
   onSeatMark?: (seat: Seat, img: string, tint: string) => void;
+  /** the +4 challenge sequence, step by step: the HTML layer draws the beam, the shown hand and the verdict stamp */
+  onChallenge?: (step: ChallengeStep) => void;
   onFrameStats?: (stats: FrameStats) => void;
   onError?: (err: unknown) => void;
 }
+
+/**
+ * The +4 challenge on screen (the renderer keeps the time, the plates layer draws): `call` = the beam from
+ * the challenger to the wild's player and the lettering; `reveal` = that player's hand face up (proof = the
+ * ids of the cards that could have been played instead), absent when the faces are unknown; `verdict` =
+ * the stamp on the loser. ms = how long the step stays up.
+ */
+export type ChallengeStep =
+  | { step: 'call'; by: Seat; target: Seat; ms: number }
+  | { step: 'reveal'; target: Seat; hand: Card[]; proof: number[]; ms: number }
+  | { step: 'verdict'; loser: Seat; winner: Seat; caught: boolean; draw: number; ms: number };
 
 /** Everything needed to put a saved round on the table in one frame. */
 export interface RestoreState {
   round: RoundState;
   seats: Seat[];
+}
+
+/** multiPlay: the human's group pick (the card that opens the play, then the others in the order picked) */
+export interface MultiPick {
+  cardId: number;
+  extra: number[];
 }
 
 /**
@@ -412,8 +460,16 @@ export interface TableView {
    * The controller turns the choice into a Move (asking the HUD for colour / target when needed).
    */
   requestHumanPick(playable: number[], canDraw: boolean): Promise<number | 'draw'>;
+  /**
+   * multiPlay: requestHumanPick where a tap selects a playable card that others may join (`joinable`: by
+   * card id, the ids that may go down with it, engine multiPlayOptions). Tapping those adds them in order;
+   * dragging any selected card to the pile resolves with the whole group. A plain drag resolves a number.
+   */
+  requestHumanMultiPick?(playable: number[], canDraw: boolean, joinable: Record<number, number[]>): Promise<number | 'draw' | MultiPick>;
   /** drop a pending requestHumanPick (its promise never resolves) */
   cancelHumanPick(): void;
+  /** lift one of the human's cards as if tapped (null = drop it): the drawn-card question points at it */
+  markCard?(cardId: number | null): void;
   setTurn(seat: Seat | null): void;
   /** clear the table (between rounds / back to menu); an idle attract animation is welcome */
   reset(): void;
@@ -446,6 +502,8 @@ export interface AppSettings {
   playerName: string;
   rules: RuleSettings;
   mode?: GameMode;
+  /** a player-made mode picked for new games (its id); `mode` is then its base */
+  customMode?: string;
   reducedMotion?: boolean;
   rulesVersion?: number;
   /** rules per mode (the Rules tab edits the selected mode's set) */

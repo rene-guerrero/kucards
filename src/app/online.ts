@@ -11,15 +11,15 @@
  * perspective (src/net/perspective.ts), so everything works as in a local match ("seat 0 = me").
  */
 import type { AppSettings, Card, GameEvent, GameMode, MatchState, Move, RuleSettings, Seat, SeatPlate } from '../contracts';
-import { COLORS, NIGHT_COLORS, isNightColor } from '../contracts';
+import { COLORS, NIGHT_COLORS, colorSlot, isNightColor } from '../contracts';
 import type { FaceSpec } from '../roster';
 import { character, ROSTER } from '../roster';
 import { sanitizeFace } from 'kuavatars/faces';
 import { createTableView, type TableViewExt } from '../render';
 import { buildDeck } from '../engine/cards';
-import { giveOptions } from '../engine/game';
+import { giveOptions, multiPlayOptions } from '../engine/game';
 import { AUTO_COLOR } from '../engine/ai';
-import { AUTO_DRAW_MS } from './controller';
+import { AUTO_DRAW_MS, joinableFor } from './controller';
 import { RULE_PRESETS, RULE_SETTINGS } from '../engine/rules';
 import { voiceForEvent, VOICE_DELAY_MS } from '../audio/voice';
 import { playSfx, powerSfxForEvent, setAudioPrefs, hapticTick, setMusicMode, setMusicScene } from '../audio/sfx';
@@ -34,6 +34,10 @@ import { applyEvent, applySnapshot, emptyMatch } from '../net/mirror';
 import { isHidden, withPlaceholders } from '../net/redact';
 import { CHAT_GESTURES, sanitizeGestures, TURN_TIMEOUT_MS, NEXT_ROUND_MS, type ChatGesture, type ErrorCode, type PublicRoom, type QuickPhraseId, type SeatView, type ServerMsg, type Snapshot } from '../net/protocol';
 import type { NearbyGame } from '../ui/online';
+import { copyMode, matchModeDef } from './customModes';
+import { rulesSheet } from '../ui/modeView';
+import { descriptorsForMode } from '../ui/settings';
+import { builtInModeNames } from '../ui/modeSelect';
 import { activeSeatsOf, buildLobby, buildQrCard, buildOnlineHome, buildOnlinePause, buildRulesSheet, buildSeatSheet, occupantName, ONLINE_ICONS, phraseText, type Lobby, type OnlineHome } from '../ui/online';
 import { AvatarController, humanFace, type AvatarExpr } from '../ui/avatarAdapter';
 import { Hud, type HudPlayer, type ScoreRow } from '../ui/hud';
@@ -44,7 +48,7 @@ import { presetName } from '../ui/settings';
 import { ChatButton } from '../ui/chat';
 import { allPresets, loadProfiles } from './ruleProfiles';
 import { h } from '../ui/dom';
-import { t } from '../ui/i18n';
+import { loc, t } from '../ui/i18n';
 import { cardPoints } from '../engine/cards';
 import { requireLandscape } from './orientation';
 import { rulesFor, sanitizeRules } from './settings';
@@ -64,6 +68,8 @@ export interface OnlineDeps {
   onTableStart(): void;
   /** back to the main menu */
   onExit(): void;
+  /** open the rule editor (Ajustes › Reglas) for a mode; done() when its back button is pressed */
+  editRules?(mode: GameMode, done: () => void): void;
 }
 
 interface Table {
@@ -468,7 +474,13 @@ export class OnlineController {
           this.client?.send({ t: 'setMode', mode, playerCount: count, teamPlay: !!teamPlay });
           if (changed) this.client?.send({ t: 'setRules', rules: { ...rulesFor(this.settings, mode) } });
         },
-        onRules: () => this.openRules(),
+        onRules: () => this.editRules(),
+        onCustom: (def) => this.client?.send({ t: 'setCustom', def, playerCount: this.room?.playerCount, teamPlay: this.room?.teamPlay }),
+        onShowRules: () => this.showRules(),
+        onCopyMode: (def) => {
+          copyMode(def, builtInModeNames());
+          if (this.room && this.lobby) this.lobby.update(this.room, { seat: this.mySeat, isHost: this.isHost });
+        },
         onClock: (c) => {
           this.deps.setSetting('clock', c);
           this.client?.send({ t: 'setClock', clock: c });
@@ -516,6 +528,32 @@ export class OnlineController {
     });
     this.closeSheet?.();
     this.closeSheet = this.deps.overlay.openModal(card);
+  }
+
+  /** the deck of the room's mode: its rules plus a player-made mode's lists (day and night when two-sided) */
+  private roomDeck(rules: RuleSettings) {
+    const c = this.room?.custom;
+    return buildDeck(rules, c?.deck, c?.twoSided ? c.night : undefined);
+  }
+
+  /** the room mode's rules, read-only (Sala and online pause menu) */
+  private showRules(): void {
+    const room = this.room;
+    if (!room) return;
+    const label = loc(RULE_PRESETS.find((p) => p.id === room.mode)?.label ?? { es: '', en: '' });
+    const def = room.custom ?? matchModeDef({ mode: room.mode, rules: room.rules }, label);
+    const close = this.deps.overlay.openModal(rulesSheet(def, room.custom?.name ?? label, descriptorsForMode(RULE_SETTINGS, def.base), () => close()));
+  }
+
+  /** host: edit the rules in the same editor as offline; back in the lobby the room takes them */
+  private editRules(): void {
+    const room = this.room;
+    if (!room || !this.deps.editRules || !this.lobby) return void this.openRules();
+    const mode = room.mode;
+    this.deps.editRules(mode, () => {
+      if (this.lobby) this.deps.overlay.showScreen(this.lobby.el);
+      this.client?.send({ t: 'setRules', rules: { ...rulesFor(this.settings, mode) } });
+    });
   }
 
   private openRules(): void {
@@ -839,6 +877,7 @@ export class OnlineController {
       seats: m.seats,
       onSfx: playSfx,
       onSeatMark: (s, img, tint) => plates.mark(s, img, tint),
+      onChallenge: (st) => plates.challenge(st),
       onPlates: (list: readonly SeatPlate[]) => {
         plates.update(list.map((p) => ({ ...p, team: this.teamOf(p.seat) })));
         hud.placeKu(list.find((p) => p.seat === 0), innerWidth, innerHeight);
@@ -1038,7 +1077,7 @@ export class OnlineController {
       this.closeSummary = null;
       this.closeMatchEnd?.();
       this.closeMatchEnd = null;
-      const deck = buildDeck(m0.rules);
+      const deck = this.roomDeck(m0.rules);
       this.deckFaces = new Map(deck.map((c) => [c.id, c]));
       view.setDeck(deck);
       const target = Number(m0.rules.target) || 0;
@@ -1402,12 +1441,37 @@ export class OnlineController {
     const drawLike = legal.find((x) => x.kind === 'draw' || x.kind === 'pass' || x.kind === 'acceptPenalty');
     // nothing playable: the pyramid over the deck is the only hint
     if (r.pendingDraw > 0 && playable.length) hud.notice(t('game.acceptHint', { n: r.pendingDraw }));
-    const pick = await view.requestHumanPick(playable, !!drawLike);
+    // multi-plays (only on a plain turn, where the server lists a draw, or on a pending penalty, multiDraw2:
+    // the copy does not track a draw kept)
+    const joinable = legal.some((x) => x.kind === 'draw' || x.kind === 'acceptPenalty') ? joinableFor(m, plays, multiPlayOptions) : null;
+    let choice: number | 'draw' | { cardId: number; extra: number[] };
+    const passMove = legal.find((x) => x.kind === 'pass');
+    if (passMove && playable.length && !legal.some((x) => x.kind === 'draw')) {
+      // the drawn card can be played: it lifts and a question (no escape) asks; time up = it is played
+      view.markCard?.(playable[0]);
+      const ans = await hud.askChoice({
+        title: t('hud.drawnPlayable'),
+        options: [
+          { id: 'play', label: t('hud.drawnPlay'), cls: 'primary' },
+          { id: 'pass', label: t('hud.drawnPass'), cls: 'ghost' },
+        ],
+        ms: 8000,
+        onTimeout: 'play',
+      });
+      view.markCard?.(null);
+      if (!this.live(id)) return;
+      if (ans === 'pass') return this.send(passMove);
+      choice = playable[0];
+    } else {
+      choice = joinable && view.requestHumanMultiPick ? await view.requestHumanMultiPick(playable, !!drawLike, joinable) : await view.requestHumanPick(playable, !!drawLike);
+    }
     if (!this.live(id)) return;
-    if (pick === 'draw') {
+    if (choice === 'draw') {
       if (drawLike) this.send(drawLike);
       return;
     }
+    const pick = typeof choice === 'number' ? choice : choice.cardId;
+    const extra = typeof choice === 'number' ? [] : choice.extra;
     let variants = plays.filter((p) => p.cardId === pick);
     if (!variants.length) return;
     if (variants.some((v) => v.target !== undefined)) {
@@ -1417,17 +1481,18 @@ export class OnlineController {
       variants = variants.filter((v) => v.target === target);
     }
     if (variants.some((v) => v.color) && r.hands[0].length === 1) {
-      // the winning last card: red, no colour pane
-      variants = variants.filter((v) => v.color === AUTO_COLOR);
+      // the winning last card: red (night side: the same slot), no colour pane
+      variants = variants.filter((v) => v.color === AUTO_COLOR || (!!v.color && colorSlot(v.color) === colorSlot(AUTO_COLOR)));
     } else if (variants.some((v) => v.color)) {
-      // the card lands on the pile first, then the colour is asked
+      // the card lands on the pile first, then the colour is asked (the colours the card offers: the night
+      // ones on the night side, the other side's for a wild Eclipse)
       await view.previewPlay(pick);
       if (!this.live(id)) return;
-      const color = await hud.pickColor();
+      const color = await hud.pickColor([...new Set(variants.map((v) => v.color!).filter(Boolean))]);
       if (!this.live(id)) return;
       variants = variants.filter((v) => v.color === color);
     }
-    let mv: Move | undefined = variants[0];
+    let mv: Move | undefined = variants[0] && extra.length ? { ...variants[0], extra } : variants[0];
     const giveIds = mv ? giveOptions(this.mirror!, mv) : [];
     if (mv && giveIds.length) {
       hud.notice(t('game.giveHint'));
@@ -1519,7 +1584,7 @@ export class OnlineController {
       this.buildTable();
     } else this.refreshNames();
     const tb = this.table!;
-    const deck = buildDeck(this.mirror.rules);
+    const deck = this.roomDeck(this.mirror.rules);
     this.deckFaces = new Map(deck.map((c) => [c.id, c]));
     tb.view.setDeck(deck);
     this.prevScores = this.mirror.scores.slice();
@@ -1552,6 +1617,7 @@ export class OnlineController {
     const s = this.settings;
     this.closeMenu = this.deps.overlay.openModal(
       buildOnlinePause({
+        onRules: () => this.showRules(),
         audio: { sound: s.sound, voice: s.voice, music: s.music, vibration: s.vibration },
         onAudio: (key, on) => {
           this.deps.setSetting(key, on);
