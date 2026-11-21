@@ -35,11 +35,17 @@ export class Overlay {
     if (old) {
       old.classList.add('leaving');
       old.setAttribute('inert', '');
-      const done = () => old.remove();
+      // a screen shown again before its exit finished (the Sala after the rules editor) stays
+      const done = () => {
+        if (this.current !== old) old.remove();
+      };
       old.addEventListener('animationend', done, { once: true });
       setTimeout(done, 400);
     }
     if (el) {
+      // re-shown: no longer leaving / inert
+      el.classList.remove('leaving');
+      el.removeAttribute('inert');
       el.classList.add('entering');
       // only the screen's own fade-in ends it (a child's animation bubbles up too); a timer backs it up, so
       // a paused animation (hidden tab, power saving) never leaves the screen half transparent

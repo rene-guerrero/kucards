@@ -366,7 +366,11 @@ export function occupantName(o: SeatOccupant): string {
   return t('lobby.free');
 }
 
-const teamOfSeat = (room: PublicRoom, s: Seat): 0 | 1 | null => (room.teams ? (room.teams[0].includes(s) ? 0 : 1) : null);
+// teams from the room itself (mode / player count / 2 vs 2 / custom mode): the same on every device
+const teamOfSeat = (room: PublicRoom, s: Seat): 0 | 1 | null => {
+  const tm = teamsFor(room);
+  return tm ? (tm[0].includes(s) ? 0 : 1) : null;
+};
 
 export function buildLobby(o: LobbyOpts): Lobby {
   const felt = h('div.ng-table.lobby-table', { role: 'group', 'aria-label': t('newgame.seats') });
@@ -488,7 +492,7 @@ export function buildLobby(o: LobbyOpts): Lobby {
       if (room.custom && !choices.some((c) => c.id === room.custom!.id)) choices.push({ id: room.custom.id, label: room.custom.name, icon: room.custom.icon, custom: true });
       const rules = modeSelect({
         current: room.custom?.id ?? room.mode,
-        currentLabel: room.custom ? room.custom.name : o.presetName(room.mode, room.rules),
+        currentLabel: room.custom ? room.custom.name : undefined,
         choices,
         onPick: (id) => {
           const own = customMode(id);
@@ -638,7 +642,8 @@ export function buildOnlinePause(o: { audio: Record<AudioKey, boolean>; onAudio(
     h(
       'div.stack',
       resume,
-      h('div.pause-row', audioToggle('sound', o.audio.sound, o.onAudio), audioToggle('voice', o.audio.voice, o.onAudio), audioToggle('music', o.audio.music, o.onAudio), canVibrate ? audioToggle('vibration', o.audio.vibration, o.onAudio) : null),
+      // equal icon toggles across the whole row (like the offline pause menu)
+      h('div.pause-grid.pause-icons', audioToggle('sound', o.audio.sound, o.onAudio), audioToggle('voice', o.audio.voice, o.onAudio), audioToggle('music', o.audio.music, o.onAudio), canVibrate ? audioToggle('vibration', o.audio.vibration, o.onAudio) : null),
       o.onRules ? btn(t('modes.rules'), o.onRules, 'secondary', icon(ICONS.book)) : null,
       btn(t('online.leave'), o.onLeave, 'ghost', icon(ONLINE_ICONS.exit)),
     ),

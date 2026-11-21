@@ -34,7 +34,7 @@ import { applyEvent, applySnapshot, emptyMatch } from '../net/mirror';
 import { isHidden, withPlaceholders } from '../net/redact';
 import { CHAT_GESTURES, sanitizeGestures, TURN_TIMEOUT_MS, NEXT_ROUND_MS, type ChatGesture, type ErrorCode, type PublicRoom, type QuickPhraseId, type SeatView, type ServerMsg, type Snapshot } from '../net/protocol';
 import type { NearbyGame } from '../ui/online';
-import { copyMode, matchModeDef } from './customModes';
+import { copyMode, customMode, matchModeDef } from './customModes';
 import { rulesSheet } from '../ui/modeView';
 import { descriptorsForMode } from '../ui/settings';
 import { builtInModeNames } from '../ui/modeSelect';
@@ -470,9 +470,8 @@ export class OnlineController {
         onShare: () => void this.share(),
         onSeat: (seat) => this.tapSeat(seat),
         onMode: (mode, count, teamPlay) => {
-          const changed = mode !== this.room?.mode;
+          // built-in modes play their standard rules (read-only now): the room sets them on a mode change
           this.client?.send({ t: 'setMode', mode, playerCount: count, teamPlay: !!teamPlay });
-          if (changed) this.client?.send({ t: 'setRules', rules: { ...rulesFor(this.settings, mode) } });
         },
         onRules: () => this.editRules(),
         onCustom: (def) => this.client?.send({ t: 'setCustom', def, playerCount: this.room?.playerCount, teamPlay: this.room?.teamPlay }),
@@ -552,7 +551,10 @@ export class OnlineController {
     const mode = room.mode;
     this.deps.editRules(mode, () => {
       if (this.lobby) this.deps.overlay.showScreen(this.lobby.el);
-      this.client?.send({ t: 'setRules', rules: { ...rulesFor(this.settings, mode) } });
+      // built-in rules are read-only; a mode made / picked in the editor is played as a custom mode
+      const own = this.settings.customMode ? customMode(this.settings.customMode) : null;
+      if (own) this.client?.send({ t: 'setCustom', def: own, playerCount: this.room?.playerCount, teamPlay: this.room?.teamPlay });
+      void mode;
     });
   }
 
@@ -716,8 +718,9 @@ export class OnlineController {
     if (this.mode === 'game' && prev) this.presenceNotices(prev, room);
     // the host's own rules are the room default (once, when the room is fresh)
     if (this.isHost && room.phase === 'lobby' && !prev) {
-      const mine = rulesFor(this.settings, room.mode);
-      if (JSON.stringify(sanitizeRules(mine, room.mode)) !== JSON.stringify(sanitizeRules(room.rules, room.mode))) this.client?.send({ t: 'setRules', rules: { ...mine } });
+      // the host's picked player-made mode opens the room (built-in modes keep their standard rules)
+      const own = this.settings.customMode ? customMode(this.settings.customMode) : null;
+      if (own) this.client?.send({ t: 'setCustom', def: own, playerCount: room.playerCount, teamPlay: room.teamPlay });
       // and so are the host's last clocks
       this.client?.send({ t: 'setClock', clock: sanitizeClock(this.settings.clock) });
     }
