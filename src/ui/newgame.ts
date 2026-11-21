@@ -148,17 +148,18 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
       h('span.mode-art', { html: MODE_ART[p.id] }),
       h('span.mode-text', h('span.mode-name', loc(p.label)), h('span.mode-blurb', loc(p.blurb))),
     );
-    b.addEventListener('click', () => {
-      if (mode === p.id) return;
-      mode = p.id;
-      modeCards.forEach((c, i) => c.setAttribute('aria-checked', String(o.presets[i].id === mode)));
-      o.onMode(mode);
-      if (!slots().includes(active)) active = slots()[0];
-      shown = lu[active];
-      applyMode();
-    });
+    b.addEventListener('click', () => setMode(p.id));
     return b;
   });
+  function setMode(id: GameMode): void {
+    if (mode === id) return;
+    mode = id;
+    modeCards.forEach((c, i) => c.setAttribute('aria-checked', String(o.presets[i].id === mode)));
+    o.onMode(mode);
+    if (!slots().includes(active)) active = slots()[0];
+    shown = lu[active];
+    applyMode();
+  }
   const modeGrid = h('div.mode-grid', { role: 'radiogroup', 'aria-label': t('newgame.mode') }, ...modeCards);
 
   // ── players / seating ──
@@ -342,7 +343,7 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
   const editLabel = t('newgame.editRules');
   const editBtn = h('button.icon-btn.rsel-act', { type: 'button', 'aria-label': editLabel, title: editLabel, html: ICONS.gear });
   editBtn.addEventListener('click', () => o.onRules(mode));
-  const rulesPick = h('div.rsel-line.ng-rsel', h('span.rsel-label', t('newgame.rules')), rulesSlot, editBtn);
+  const rulesPick = h('div.rsel-line.ng-rsel', rulesSlot, editBtn);
   // [TIEMPO] round limit · per move · final minute
   let clock = sanitizeClock(o.clock);
   const clockRow = clockPicker((c) => {
@@ -350,16 +351,24 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
     o.onClock({ ...c });
   });
   clockRow.render(clock);
-  const rulesLine = h('div.ng-rules-wrap', rulesPick, plainLine, clockRow.el);
+  const rulesLine = h('div.ng-rules-wrap', plainLine, clockRow.el);
   function renderRuleSelect(): void {
     // rule sets are picked here (Ajustes › Reglas only edits them): the dropdown always shows, even with
     // only the built-in rules; the plain line is a fallback for when no choices are provided at all
-    const items = o.ruleChoices?.(mode) ?? [];
+    // every mode's rule sets in one list: picking one of another mode switches to that mode first
+    const items: RuleSelectItem[] = [];
+    for (const p of o.presets) {
+      const list = o.ruleChoices?.(p.id) ?? [];
+      for (const i of list) {
+        if (p.id !== mode && (i.custom || !i.pick)) continue;
+        items.push({ ...i, on: p.id === mode && i.on, pick: () => (setMode(p.id), i.pick?.(), updateRules(), renderRuleSelect()) });
+      }
+    }
     const pickable = items.length > 0;
     rulesPick.hidden = !pickable;
     plainLine.hidden = pickable;
     if (!pickable) return;
-    rulesSlot.replaceChildren(ruleSelect(items.map((i) => ({ ...i, pick: () => (i.pick?.(), updateRules(), renderRuleSelect()) })), t('newgame.rules')));
+    rulesSlot.replaceChildren(ruleSelect(items, t('newgame.rules')));
   }
 
   const surprise = btn(
@@ -404,7 +413,7 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
       'div.scroll.ng-scroll',
       h(
         'div.ng-body',
-        h('div.ng-left', h('h3.ng-h', t('newgame.mode')), modeGrid, h('div.ng-lines', playersRow, seatingRow), h('div.ng-felt-box', felt, swapSide)),
+        h('div.ng-left', rulesPick, h('div.ng-lines', playersRow, seatingRow), h('div.ng-felt-box', felt, swapSide)),
         h('div.ng-right', h('section.ng-pick', pickTitle, grid, desc), sideFoot),
       ),
     ),

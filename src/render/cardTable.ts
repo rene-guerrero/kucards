@@ -326,6 +326,7 @@ void main() {
 }`;
 /** at most this many reflected cards (every opponent's hand together) */
 const REFL_MAX = 90;
+const reflNormal = new THREE.Vector3();
 const MIRROR_Y = new THREE.Matrix4().makeScale(1, -1, 1);
 
 interface CardObj {
@@ -619,6 +620,8 @@ export class CardTable implements TableView {
   private penMarkPop: Promise<void> | null = null;
   private skipStamps: THREE.Sprite[] = [];
   private skipTex!: THREE.CanvasTexture;
+  /** the skip mark as an image for the HTML plates (onSeatMark) */
+  private skipImg = '';
 
   // card state
   private pool: CardObj[] = [];
@@ -962,6 +965,7 @@ export class CardTable implements TableView {
     sc.width = sc.height = 256;
     drawSkipMark(sc.getContext('2d')!, 256);
     this.skipTex = A.makeTexture(sc, false);
+    this.skipImg = this.opts.onSeatMark ? sc.toDataURL() : '';
     const skipMat = new THREE.SpriteMaterial({ map: this.skipTex, depthTest: false, depthWrite: false, transparent: true });
     for (let i = 0; i < 6; i++) {
       const sp = new THREE.Sprite(skipMat.clone());
@@ -1051,7 +1055,7 @@ export class CardTable implements TableView {
     const W = this.W;
     const H = this.H;
     this.portrait = H > W * 1.05;
-    this.dims = L.tableDims(this.portrait, W, H);
+    this.dims = L.tableDims(this.portrait, W, H, L.codoTopSide(this.portrait, this.seats.map((s) => this.sides[s])));
     // the hands follow the screen too (tableFit): build them again
     for (const m of this.handMemo) m.key = '';
     this.fan = L.fanLayout(this.hands[0].length, { W, H });
@@ -1062,11 +1066,12 @@ export class CardTable implements TableView {
     this.pilePos.set(tune.pile.x, 0, tune.pile.z);
     this.glowRing.position.set(this.pilePos.x, 0.003, this.pilePos.z);
     if (this.turnArrow) this.aimTurnArrow();
-    const R = this.portrait ? Math.min(1.75, this.dims.A - 0.2) : 1.6;
+    // portrait outside Codo a codo: a tighter ring, inside the side seats' mini-fans and plates
+    const R = this.ringR();
     this.dirRing.scale.set(R * 2 * this.ringScaleSign(), 1, R * 2);
     // camera: the tilt, distance and fov tuned in the fan demo (pulled back on narrower screens)
     const cam = this.layoutCam;
-    const tc = L.tableCamera(W, H, this.portrait);
+    const tc = L.tableCamera(W, H, this.portrait, this.sideMode);
     cam.fov = tc.fov;
     cam.aspect = W / H;
     cam.updateProjectionMatrix();
@@ -1212,7 +1217,9 @@ export class CardTable implements TableView {
   /** a seat's hand with n cards (layout seatHand), memoised per layout */
   private handFor(seat: number, n: number): L.SeatHand {
     const side = this.sideOf(seat);
-    const open = !!this.openCards[seat];
+    // Codo a codo: the partner's cards take the open pose from the deal on (their faces arrive just
+    // after), so they fly straight to their spot instead of going to the closed one and turning
+    const open = !!this.openCards[seat] || (this.sideMode && !this.partnerClosed && seat === this.partnerSeat());
     const m = this.handMemo[seat];
     const key = `${side}:${n}:${+open}:${this.dims.A.toFixed(3)}:${this.dims.B.toFixed(3)}:${+this.portrait}`;
     if (m.key !== key || !m.hand) {
@@ -1237,6 +1244,9 @@ export class CardTable implements TableView {
     return true;
   }
 
+  /** the app turned the partner's hand face down (partnerOpen off): it keeps the closed pose */
+  private partnerClosed = false;
+
   private isOpen(seat: number): boolean {
     return seat !== 0 && !!this.openCards[seat];
   }
@@ -1247,6 +1257,11 @@ export class CardTable implements TableView {
 
   private sideOf(seat: number): L.SeatSide {
     return this.sides[seat] ?? L.SEAT_SIDE[seat];
+  }
+
+  /** the direction ring's radius (portrait outside Codo a codo: the tighter one inside the side mini-fans) */
+  private ringR(): number {
+    return this.portrait ? (this.sideMode ? Math.min(1.75, this.dims.A - 0.2) : L.PORTRAIT_RING_R) : 1.6;
   }
 
   private partnerSeat(): number {
@@ -1856,6 +1871,17 @@ export class CardTable implements TableView {
             if (tok !== this.skipTok) return;
             void this.shakeSeat(seat as Seat, 0.05);
             if (!low) this.sparkRing(to, 0.05, 10, col, 0.8, 0.6);
+            // the plates draw the landed mark over the avatar (the 3D one would sit behind it)
+            const hook = this.opts.onSeatMark;
+            if (hook && this.skipImg) {
+              sp.visible = false;
+              try {
+                hook(seat as Seat, this.skipImg, `#${col.getHexString()}`);
+              } catch (e) {
+                console.error('[render] onSeatMark failed', e);
+              }
+              return;
+            }
             // a little landing pop, then it fades
             return this.anim.tween(0.42, (_k, raw) => {
               if (tok !== this.skipTok) return;
@@ -2171,6 +2197,7 @@ export class CardTable implements TableView {
       case 'play':
         return this.onPlay(ev.seat, ev.card, ev.color, g);
       case 'draw':
+        if (ev.deckBack !== undefined) this.setBack(this.deckTop, ev.deckBack);
         return this.onDraw(ev.seat, ev.count, ev.cards, ev.reason, g, ev.backs);
       case 'skip':
         if (this.lastPlayKind === 'skipAll') {
@@ -2297,24 +2324,37 @@ export class CardTable implements TableView {
     };
     if (this.deckCount > 0) stack([this.deckTop]);
     stack(this.pile.filter((o) => o.vis).slice(-3));
-    // fans: each card slides out of the fan along its own up (a card height and a bit: clear of every resting
-    // card), spins there and slides back into its place. Cards spinning at the same time are at least a card
-    // width apart (every m-th card of the fan); the groups go one after the other.
+    // fans: the whole hand turns as one, a rigid half turn about its own up axis through its centre (lifted
+    // a little so nothing scrapes the felt); the cards keep their places in the fan the whole time
     for (const s of this.seats) {
       const hand = this.hands[s].filter((o) => o.vis);
       if (!hand.length) continue;
-      let sp = Infinity;
-      for (let i = 1; i < hand.length; i++) sp = Math.min(sp, hand[i].pos.distanceTo(hand[i - 1].pos));
-      const w = L.CARD_W * hand[0].s;
-      const m = Math.min(hand.length, Math.max(1, Math.ceil((1.12 * w) / Math.max(sp, 1e-4))));
-      const dur = Math.min(0.42, 1.9 / m); // a big hand keeps the whole flip under ~2 s
-      const a = 0.24;
-      hand.forEach((o, i) => {
-        const g = i % m;
-        const lift = new THREE.Vector3(0, 1, 0).applyQuaternion(o.quat).multiplyScalar(L.CARD_H * o.s * 1.22);
-        // the next group starts sliding out once this one has finished spinning (it is only sliding back then)
-        flip(o, lift, g * dur * (1 - a), dur);
-      });
+      const c = new THREE.Vector3();
+      for (const o of hand) c.add(o.pos);
+      c.multiplyScalar(1 / hand.length);
+      const mid = hand[Math.floor(hand.length / 2)];
+      const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(mid.quat).normalize();
+      const lift = new THREE.Vector3(0, L.CARD_H * mid.s * 0.35, 0);
+      const rest = hand.map((o) => ({ o, tok: ++o.token, q: o.quat.clone(), d: o.pos.clone().sub(c) }));
+      const rq = new THREE.Quaternion();
+      const dur = 0.62;
+      jobs.push(
+        this.anim.tween(
+          dur,
+          (_e, t) => {
+            const r = ease.inOutCubic(t);
+            const up = Math.sin(Math.PI * t);
+            rq.setFromAxisAngle(axis, Math.PI * (1 - r));
+            for (const x of rest) {
+              if (x.o.token !== x.tok) continue;
+              x.o.pos.copy(x.d).applyQuaternion(rq).add(c).addScaledVector(lift, up);
+              x.o.quat.copy(rq).multiply(x.q);
+            }
+          },
+          ease.linear,
+          0.08,
+        ),
+      );
     }
     await Promise.all(jobs);
     if (!this.live(g)) return;
@@ -2749,7 +2789,7 @@ export class CardTable implements TableView {
     this.direction = direction;
     const r = this.dirRing;
     const m = r.material as THREE.MeshBasicMaterial;
-    const B = 2 * (this.portrait ? Math.min(1.75, this.dims.A - 0.2) : 1.6);
+    const B = 2 * this.ringR();
     // mirror signs of the ring (which way the arrows point) and the spin that follows them (the opposite sign)
     const mOld = Math.sign(r.scale.x) || 1;
     const mNew = this.ringScaleSign(direction);
@@ -3893,6 +3933,8 @@ export class CardTable implements TableView {
     for (let s = 1; s < this.hands.length && k < REFL_MAX; s++) {
       for (const o of this.hands[s]) {
         if (!o.vis || k >= REFL_MAX) continue;
+        // a hand leaning back to face the camera (the Codo a codo partner) has no reflection
+        if (Math.abs(reflNormal.set(0, 0, 1).applyQuaternion(o.quat).y) > 0.5) continue;
         tmpS.set(o.s * o.sqx, o.s * o.sqy, o.s);
         tmpM.compose(o.pos, o.quat, tmpS).premultiply(MIRROR_Y);
         r.setMatrixAt(k, tmpM);
@@ -4055,6 +4097,14 @@ export class CardTable implements TableView {
   private applyOpen(seat: Seat, cards: Card[] | null): void {
     const h = this.hands[seat];
     const was = this.isOpen(seat);
+    if (seat === this.partnerSeat()) {
+      const closed = !cards;
+      if (closed !== this.partnerClosed) {
+        this.partnerClosed = closed;
+        this.handMemo[seat].key = '';
+        if (closed && !was) void this.relayout(seat, this.reduced ? 0.2 : 0.4, { arc: 0 });
+      }
+    }
     if (!cards) {
       if (!was) return;
       this.openCards[seat] = null;

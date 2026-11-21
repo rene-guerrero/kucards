@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import {
   fanLayout, hitFan, inSlot, separatePlates, seatSides, turnSpin, ringSign, seatAnchor, plateBox, projectCss, sortHand, tableDims,
   cameraTilt, cameraFov, fitTable, seatHand, fanSpread, seatHoldYaw, handCardCorners, handCardNormal, handFitPoints, layoutPlates,
-  CARD_W, SEAT_SIDE, HUD_TOP, OPEN_TOP_GROW, HAND_HIDDEN, tableTune, tableCamera, openHandScale, type FanLayout, type PlateSeat, type Box,
+  CARD_W, SEAT_SIDE, HUD_TOP, OPEN_TOP_GROW, PARTNER_FACE_SCALE, codoTopSide, TABLE_LAYOUT, HAND_HIDDEN, tableTune, tableCamera, openHandScale, type FanLayout, type PlateSeat, type Box,
 } from './layout';
 import type { Card, Seat } from '../contracts';
 
@@ -116,7 +116,9 @@ describe('hands of the other seats (tuned in fan-demo.html)', () => {
   const sides = ['top', 'left', 'right', 'lowerLeft', 'lowerRight'] as const;
   const tune = (portrait: boolean, side: (typeof sides)[number]) => {
     const T = tableTune(portrait);
-    return side === 'top' ? T.top : side === 'left' || side === 'lowerLeft' ? T.left : T.right;
+    // the Codo a codo partner keeps the original side tune (TABLE_LAYOUT), not the portrait side pose
+    const T0 = portrait ? TABLE_LAYOUT.port : TABLE_LAYOUT.land;
+    return side === 'top' ? T.top : side === 'left' ? T.left : side === 'right' ? T.right : side === 'lowerLeft' ? T0.left : T0.right;
   };
 
   it('stand where the demo put them, at the tuned size, above the felt', () => {
@@ -130,6 +132,11 @@ describe('hands of the other seats (tuned in fan-demo.html)', () => {
             expect(f.poses.length, tag).toBe(n);
             // portrait: the top partner's open hand is a little bigger and nearer (OPEN_TOP_GROW)
             const grown = portrait && open && side === 'top';
+            // portrait Codo a codo partner: its own corner pose (checked on screen by the whole-table tests)
+            if (portrait && open && (side === 'lowerLeft' || side === 'lowerRight')) {
+              expect(f.s, tag).toBeCloseTo(PARTNER_FACE_SCALE, 9);
+              continue;
+            }
             expect(f.s, tag).toBeCloseTo(F.scale * (grown ? OPEN_TOP_GROW : 1), 9);
             expect(f.ax, tag).toBeCloseTo(F.posX, 9);
             expect(f.az, tag).toBeCloseTo(F.posZ + (grown ? 0.18 : 0), 9);
@@ -151,6 +158,18 @@ describe('hands of the other seats (tuned in fan-demo.html)', () => {
           const nrm = handCardNormal(p);
           // the face normal points at the holder (away from the centre) unless the hand is open
           const toCentre = -(nrm[0] * p.x + nrm[2] * p.z);
+          // portrait Codo a codo: the partner's open hand lies on the camera side, its faces turned up at the camera
+          // portrait side seats hold their cards like the top seat: backs up at the camera
+          if (portrait && (side === 'left' || side === 'right')) {
+            const toCam = nrm[1] * 0.44 + nrm[2] * 0.9;
+            if (open) expect(toCam, side).toBeGreaterThan(0.5);
+            else expect(toCam, side).toBeLessThan(-0.5);
+            continue;
+          }
+          if (open && portrait && (side === 'lowerLeft' || side === 'lowerRight')) {
+            expect(nrm[1] * 0.44 + nrm[2] * 0.9, side).toBeGreaterThan(0.8);
+            continue;
+          }
           if (open) expect(toCentre, `${side} portrait=${portrait}`).toBeGreaterThan(0);
           else expect(toCentre, `${side} portrait=${portrait}`).toBeLessThan(0);
         }
@@ -171,8 +190,9 @@ describe('hands of the other seats (tuned in fan-demo.html)', () => {
   it("the partner's open hand is the size of the opponents' hands across the table", () => {
     for (const portrait of [false, true]) {
       expect(openHandScale(portrait, 'top')).toBeCloseTo(tableTune(portrait).top.scale * (portrait ? OPEN_TOP_GROW : 1), 9);
-      expect(openHandScale(portrait, 'lowerLeft')).toBeCloseTo(tableTune(portrait).left.scale, 9);
-      expect(openHandScale(portrait, 'lowerRight')).toBeCloseTo(tableTune(portrait).right.scale, 9);
+      // portrait: the partner's hand has its own pose in the lower corner (tunedHand)
+      expect(openHandScale(portrait, 'lowerLeft')).toBeCloseTo(portrait ? PARTNER_FACE_SCALE : tableTune(portrait).left.scale, 9);
+      expect(openHandScale(portrait, 'lowerRight')).toBeCloseTo(portrait ? PARTNER_FACE_SCALE : tableTune(portrait).right.scale, 9);
     }
   });
 });
@@ -309,14 +329,17 @@ describe('the whole table at phone and desktop sizes', () => {
   function table(m: Mode) {
     const { W, H } = m;
     const portrait = H > W * 1.05;
-    const tc = tableCamera(W, H, portrait);
+    const codo = m.seats.some((s) => { const sd = seatSides(m.seats, m.teams)[s]; return sd === 'lowerLeft' || sd === 'lowerRight'; });
+    const tc = tableCamera(W, H, portrait, codo);
     const cam = new THREE.PerspectiveCamera(tc.fov, W / H, 0.1, 100);
     cam.position.set(0, Math.cos(tc.tilt) * tc.dist, Math.sin(tc.tilt) * tc.dist);
     cam.lookAt(0, 0, 0);
     cam.updateMatrixWorld(true);
     const vp = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     const project = (x: number, y: number, z: number, out: { x: number; y: number }) => projectCss(vp.elements, x, y, z, W, H, out);
-    return { portrait, sides: seatSides(m.seats, m.teams), project, dims: tableDims(portrait, W, H) };
+    const sides = seatSides(m.seats, m.teams);
+    const codoTop = codoTopSide(portrait, m.seats.map((s) => sides[s]));
+    return { portrait, sides, codoTop, project, dims: tableDims(portrait, W, H, codoTop) };
   }
 
   for (const m of MODES)
@@ -335,8 +358,12 @@ describe('the whole table at phone and desktop sizes', () => {
             for (let k = 0; k < 12; k += 3) {
               t.project(cs[k], cs[k + 1], cs[k + 2], pt);
               const tag = `${m.name} n=${n} seat ${ps.seat}`;
-              expect(pt.x, tag).toBeGreaterThan(-m.W * 0.05);
-              expect(pt.x, tag).toBeLessThan(m.W * 1.05);
+              // Codo a codo's top row may run off the side edges (the other portrait side fans stay on screen)
+              const sideOk = t.portrait && !!t.codoTop && (ps.side === 'left' || ps.side === 'right' || ps.side === 'top');
+              if (!sideOk) {
+                expect(pt.x, tag).toBeGreaterThan(-m.W * 0.05);
+                expect(pt.x, tag).toBeLessThan(m.W * 1.05);
+              }
               expect(pt.y, tag).toBeGreaterThan(-m.H * 0.05);
               expect(pt.y, tag).toBeLessThan(m.H * 1.05);
             }
@@ -351,6 +378,49 @@ describe('the whole table at phone and desktop sizes', () => {
         }
       }
     });
+
+  // every width in 25 px steps, a few heights, every seating: no two plates overlap, all on screen
+  it('width sweep: plates never overlap', () => {
+    const SEATINGS: Pick<Mode, 'seats' | 'teams' | 'open'>[] = [
+      { seats: [0, 2], teams: null },
+      { seats: [0, 1, 3], teams: null },
+      { seats: [0, 1, 2], teams: null },
+      { seats: [0, 1, 2, 3], teams: null },
+      { seats: [0, 1, 2, 3], teams: [[0, 2], [1, 3]], open: 2 },
+      { seats: [0, 1, 2, 3], teams: [[0, 1], [2, 3]], open: 1 },
+      { seats: [0, 1, 2, 3], teams: [[0, 3], [1, 2]], open: 3 },
+    ];
+    const bad: string[] = [];
+    for (const H of [360, 412, 600, 720, 900, 1080])
+      for (let W = 320; W <= 2560; W += 25)
+        for (const s of SEATINGS) {
+          const m: Mode = { name: '', W, H, ...s };
+          const t = table(m);
+          for (const n of [7, 20]) {
+            const list: PlateSeat[] = m.seats.map((seat) => ({
+              seat, side: t.sides[seat], count: n, hand: seat === 0 ? null : seatHand(n, t.sides[seat], seat === m.open, t.dims, t.portrait),
+              active: false, winner: false, scale: 1, visible: true,
+            }));
+            const { plates, handBoxes } = layoutPlates(W, H, t.portrait, t.project, list, n, { x: W / 2, y: H / 2, w: 10, h: 10 });
+            // the top seat's plate sits right of its cards (the deck is on the left), never over the deck side
+            const ti = list.findIndex((p) => p.side === 'top');
+            const th = ti >= 0 ? handBoxes.find((b) => b.seat === list[ti].seat) : undefined;
+            // portrait outside Codo a codo: the two side plates sit level
+            const sideYs = t.portrait && !t.codoTop ? list.map((p, i) => (p.side === 'left' || p.side === 'right' ? plates[i].y : NaN)).filter((y) => !isNaN(y)) : [];
+            if (sideYs.length === 2 && Math.abs(sideYs[0] - sideYs[1]) > 2) bad.push(`${W}x${H} seats ${s.seats.join('')} n${n}: side plates not level ${sideYs.map(Math.round).join('/')}`);
+            if (th && !t.codoTop && plates[ti].x < th.x) bad.push(`${W}x${H} seats ${s.seats.join('')}${s.teams ? ' t' + s.open : ''} n${n}: top plate left of its hand`);
+            for (let i = 0; i < plates.length; i++)
+              for (let j = i + 1; j < plates.length; j++) {
+                const a = plates[i], b = plates[j];
+                const ox = Math.min(a.x + a.w / 2, b.x + b.w / 2) - Math.max(a.x - a.w / 2, b.x - b.w / 2);
+                const oy = Math.min(a.y + a.h / 2, b.y + b.h / 2) - Math.max(a.y - a.h / 2, b.y - b.h / 2);
+                if (ox > 2 && oy > 2) bad.push(`${W}x${H} seats ${s.seats.join('')}${s.teams ? ' t' + s.open : ''} n${n}: ${a.seat}/${b.seat} ${ox.toFixed(0)}x${oy.toFixed(0)}`);
+              }
+          }
+        }
+    if (bad.length) console.log(bad.join('\n'));
+    expect(bad.length).toBe(0);
+  });
 });
 
 describe('new-game preview = table (partner side)', () => {

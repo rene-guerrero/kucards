@@ -444,7 +444,8 @@ function drawCards(st: St, seat: Seat, n: number, reason: DrawReason, until?: (c
   const drawn: Card[] = [];
   let chunk: Card[] = [];
   const flush = () => {
-    if (chunk.length) st.ev.push({ type: 'draw', seat, count: chunk.length, cards: chunk, reason });
+    // Día y Noche: the deck's new top shows its other side at once (not only at the next turn)
+    if (chunk.length) st.ev.push(chunk[0].other ? { type: 'draw', seat, count: chunk.length, cards: chunk, reason, deckBack: deckBackOf(r.deck) } : { type: 'draw', seat, count: chunk.length, cards: chunk, reason });
     chunk = [];
   };
   while (until || drawn.length < n) {

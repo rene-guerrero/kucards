@@ -82,6 +82,7 @@ function mount() {
       playSfx(n);
     },
     onPlates: drawPlates,
+    onSeatMark: (s, img, tint) => realPlates.mark(s, img, tint),
     onError: (e) => console.error('[harness] fatal', e),
   });
   hud.colorAnchor = () => view.pileScreenPoint();
@@ -412,11 +413,7 @@ async function sideDeal() {
     mount();
   }
   sideFlip = !sideFlip;
-  // Codo a codo is landscape-only in the app
-  if (app.className !== 'phoneL' && !/[?&]frame=/.test(location.search)) {
-    app.className = 'phoneL';
-    $<HTMLSelectElement>('sFrame').value = 'phoneL';
-  }
+  // Codo a codo plays in any frame now: keep the one picked
   applyTeams(sideFlip ? 2 : 3);
   await deal();
   const p = partner();
@@ -826,6 +823,21 @@ on('bVoices', async () => {
     speak(p);
     await new Promise((r) => setTimeout(r, 1300));
   }
+});
+// Día y Noche flip ("eclipse"): every card turns to its other side; the harness invents a night face
+let nightSide = false;
+on('bFlip', () => {
+  if (!round) return log('deal first');
+  nightSide = !nightSide;
+  const NIGHT: Record<string, string> = { sol: 'naranja', mar: 'celeste', palma: 'morado', coral: 'rosa', naranja: 'sol', celeste: 'mar', morado: 'palma', rosa: 'coral' };
+  const other = (c: Card): Card => {
+    const o = c.other ?? ({ ...c.face, color: c.face.color ? NIGHT[c.face.color] ?? c.face.color : null } as Card['face']);
+    return { ...c, face: o, other: c.face };
+  };
+  round.hands[0] = round.hands[0].map(other);
+  const t = top();
+  void send({ type: 'flip', side: nightSide ? 'dark' : 'light', color: (other(t).face.color ?? 'naranja') as never, seat: 0, hand: round.hands[0].slice() });
+  log(`eclipse flip → ${nightSide ? 'night' : 'day'}`);
 });
 on('bHurry', () => {
   const onNow = !hurryEl.classList.contains('on');

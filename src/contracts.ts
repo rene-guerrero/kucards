@@ -203,7 +203,7 @@ export type GameEvent =
   | { type: 'deal'; counts: number[]; starter: Seat; firstCard: Card; activeColor: Color; hand?: Card[]; deck?: number; backs?: CardFace[][]; deckBack?: CardFace | null }
   | { type: 'play'; seat: Seat; card: Card; color?: Color }
   /** cards: the faces, only present for whoever may see them (the engine fills them; redaction strips them) */
-  | { type: 'draw'; seat: Seat; count: number; cards?: Card[]; reason: 'turn' | 'penalty' | 'ku' | 'catch'; backs?: CardFace[] }
+  | { type: 'draw'; seat: Seat; count: number; cards?: Card[]; reason: 'turn' | 'penalty' | 'ku' | 'catch'; backs?: CardFace[]; deckBack?: CardFace | null }
   | { type: 'skip'; seat: Seat }
   | { type: 'reverse'; direction: Direction }
   | { type: 'stack'; total: number }
@@ -386,6 +386,8 @@ export interface TableViewOptions {
   onSfx?: (name: SfxName) => void;
   /** every layout change / turn change: the HTML plates (avatars, names, counts) follow these boxes */
   onPlates?: (plates: readonly SeatPlate[]) => void;
+  /** a skip mark lands on a seat: the plates draw it over the avatar (img: data URL, tint: CSS colour) */
+  onSeatMark?: (seat: Seat, img: string, tint: string) => void;
   onFrameStats?: (stats: FrameStats) => void;
   onError?: (err: unknown) => void;
 }

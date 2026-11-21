@@ -118,7 +118,7 @@ export function buildRoundSummary(ctx: RoundSummaryCtx, onNext: () => void, onMe
   const card = h(
     'div.card.sheet.summary',
     { class: won ? 'tone-win' : 'tone-lose' },
-    h('header.sum-head', h('div.kicker', t('summary.round', { n: ctx.roundNo }), ctx.byTime ? ` · ${t('summary.byTime')}` : ''), h('h2.summary-title', title), h('p.summary-sub', ctx.byTime ? `${t('summary.byTimeWhy')} ${sub}` : sub)),
+    h('header.sum-head', h('div.kicker', t('summary.round', { n: ctx.roundNo })), h('h2.summary-title', title), h('p.summary-sub', sub)),
     body,
     h('footer.sum-foot', btn(t('match.menu'), onMenu, 'ghost lg', h('span.btn-icon', { html: ICONS.home })), next),
   );

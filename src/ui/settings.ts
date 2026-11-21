@@ -495,18 +495,15 @@ export function buildSettings(o: SettingsOpts): HTMLElement {
       }
     }
 
-    const modeSwitch = segmented<GameMode>(
-      MODES.map((m) => ({ value: m, label: t(`mode.${m}` as Key) })),
-      rmode,
-      (v) => {
-        rmode = v;
-        openGroup = null;
-        naming = false;
-        renderRules();
-      },
-      t('settings.rulesMode'),
-    );
-    modeSwitch.classList.add('seg-rules-mode');
+    const openMode = (m: GameMode, rules: RuleSettings) => {
+      rmode = m;
+      openGroup = null;
+      naming = false;
+      const rulesByMode = { ...(s.rulesByMode ?? {}), [m]: { ...rules } };
+      s = { ...s, rulesByMode, rules: m === (s.mode ?? 'classic') ? { ...rules } : s.rules };
+      o.onChange(s, 'rulesByMode');
+      renderRules();
+    };
 
     const groupEls = [...groups].map(([g, list]) => {
       const open = openGroup === g;
@@ -548,13 +545,21 @@ export function buildSettings(o: SettingsOpts): HTMLElement {
     rulesWrap.replaceChildren(
       h(
         'section.card.set-card.preset-card',
-        modeSwitch,
         h('div.rsel-line', ruleSelect(
-          [
-            { label: loc(preset.label), on: isPreset, pick: restore },
-            ...mine.map((p) => ({ label: p.name, on: p === active, pick: () => applyProfile(p) })),
-            ...(!isPreset && !active ? [{ label: t('settings.preset.custom'), on: true, custom: true }] : []),
-          ],
+          // every mode's rule sets in one list (no separate mode switch): another mode's set opens that mode
+          MODES.flatMap((m): RuleSelectItem[] => {
+            if (m === rmode)
+              return [
+                { label: loc(preset.label), on: isPreset, pick: restore },
+                ...mine.map((p) => ({ label: p.name, on: p === active, pick: () => applyProfile(p) })),
+                ...(!isPreset && !active ? [{ label: t('settings.preset.custom'), on: true, custom: true }] : []),
+              ];
+            const pm = o.presets.find((p) => p.id === m);
+            return [
+              ...(pm ? [{ label: loc(pm.label), on: false, pick: () => openMode(m, pm.rules) }] : []),
+              ...loadProfiles().filter((p) => p.mode === m).map((p) => ({ label: p.name, on: false, pick: () => openMode(m, p.rules) })),
+            ];
+          }),
           t('settings.preset'),
         ), profileAct),
         profileCtl,

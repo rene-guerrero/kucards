@@ -114,6 +114,7 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
     cardBack: s.cardBack,
     seats: match.seats,
     onSfx: playSfx,
+    onSeatMark: (s, img, tint) => plates.mark(s, img, tint),
     onPlates: (list: readonly SeatPlate[]) => {
       plates.update(list.map((p) => ({ ...p, team: teamOf(p.seat) })));
       hud.placeKu(list.find((p) => p.seat === 0), innerWidth, innerHeight);
@@ -133,7 +134,8 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
     onPhrase: (id) => plates.say(0, phraseText(id), false, 2400),
   });
   hud.colorAnchor = () => view.pileScreenPoint();
-  if (match.teams) view.setTeams(match.teams);
+  // always say it (null too): the table would otherwise read the round-end reveal as a partner
+  view.setTeams(match.teams ?? null);
   deps.container.classList.add('kc-ready');
   overlay.hudLayer.append(plates.el, hud.el);
   hud.show(true);

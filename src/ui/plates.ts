@@ -90,6 +90,29 @@ export class SeatPlates {
     );
   }
 
+  /**
+   * a mark (the skip sign) landing on a seat: drawn over the avatar so it never hides behind the plate.
+   * The 3D mark flies in; this takes over where it lands with a pop and a fade.
+   */
+  mark(seat: Seat, img: string, tint: string): void {
+    const av = this.p[seat]?.root.querySelector('.plate-av') as HTMLElement | null;
+    if (!av) return;
+    const el = document.createElement('div');
+    el.className = 'plate-mark';
+    el.style.backgroundImage = `url(${img})`;
+    el.style.setProperty('--tint', tint);
+    av.appendChild(el);
+    el.animate(
+      [
+        { transform: 'scale(.7)', opacity: 1 },
+        { transform: 'scale(1.18)', opacity: 1, offset: 0.25 },
+        { transform: 'scale(1)', opacity: 1, offset: 0.55 },
+        { transform: 'scale(1)', opacity: 0 },
+      ],
+      { duration: 620, easing: 'ease-out' },
+    ).onfinish = () => el.remove();
+  }
+
   private ranks: (number | null)[] = SEATS.map(() => null);
   private rankEls: (HTMLElement | null)[] = SEATS.map(() => null);
 
@@ -341,6 +364,14 @@ export class SeatPlates {
 
 /** One speech bubble a GameEvent calls for (null = none). The controller passes it to `say`. */
 export function bubbleFor(ev: GameEvent): { seat: Seat; text: string; strong: boolean } | null {
+  // the user asked for no event tooltips during play (chat phrases still show): see bubbleText
+  return EVENT_BUBBLES ? bubbleText(ev) : null;
+}
+
+/** speech bubbles for game events over the avatars (off: the table's animations and voices say it) */
+export const EVENT_BUBBLES = false;
+
+function bubbleText(ev: GameEvent): { seat: Seat; text: string; strong: boolean } | null {
   const say = (seat: Seat, key: Key, strong = false, params?: Record<string, string>) => ({ seat, text: t(key, params), strong });
   switch (ev.type) {
     case 'play': {

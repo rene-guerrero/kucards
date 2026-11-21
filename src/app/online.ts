@@ -636,6 +636,7 @@ export class OnlineController {
       cardBack: s.cardBack,
       seats: m.seats,
       onSfx: playSfx,
+      onSeatMark: (s, img, tint) => plates.mark(s, img, tint),
       onPlates: (list: readonly SeatPlate[]) => {
         plates.update(list.map((p) => ({ ...p, team: this.teamOf(p.seat) })));
         hud.placeKu(list.find((p) => p.seat === 0), innerWidth, innerHeight);

@@ -66,7 +66,16 @@ export class Hud {
 
   private roundEl = h('span.hud-round');
   private targetEl = h('span.hud-target');
-  private clockEl = h('span.hud-clock', { hidden: true, role: 'timer', 'aria-label': t('clock.left') });
+  private clockTxt = h('span.hud-clock-t');
+  private clockEl = h(
+    'span.hud-clock',
+    { hidden: true, role: 'timer', 'aria-label': t('clock.left') },
+    h('span.hud-clock-i', {
+      'aria-hidden': 'true',
+      html: '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4.2l2.6 1.6M9.5 2.5h5"/></svg>',
+    }),
+    this.clockTxt,
+  );
   private clockShown = '';
   /** the final-minute "hurry" glow around the screen edges (and a warmer table light) */
   private hurryEl = h('div.hurry-fx', { 'aria-hidden': 'true' });
@@ -83,8 +92,12 @@ export class Hud {
     const b = this.kuBtn;
     if (!plate) return;
     const size = b.offsetWidth || 72;
-    const handRight = W - (plate.x + plate.w / 2 + 10);
-    const x = Math.min(W - size / 2 - 8, handRight + 12 + size / 2);
+    // mirrored to the avatar: the plate on the right (partner on the right) puts ¡Ku! on the left
+    const right = plate.x > W / 2;
+    const px = right ? W - plate.x : plate.x;
+    const handRight = W - (px + plate.w / 2 + 10);
+    const x0 = Math.min(W - size / 2 - 8, handRight + 12 + size / 2);
+    const x = right ? W - x0 : x0;
     const y = Math.min(H - size / 2 - 8, Math.max(size / 2 + 8, plate.y));
     b.style.left = `${x - size / 2}px`;
     b.style.top = `${y - size / 2}px`;
@@ -163,9 +176,9 @@ export class Hud {
     const sec = Math.ceil(msLeft / 1000);
     const txt = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
     if (txt === this.clockShown) return;
-    if (sec === 0 && this.clockShown) this.notice(t('clock.timeUp'));
+    // no "time's up" notice: the clock at 0:00 and the round end say it
     this.clockShown = txt;
-    this.clockEl.textContent = txt;
+    this.clockTxt.textContent = txt;
     this.clockEl.classList.toggle('last10', urgent && sec <= 10);
     // the final minute ticks: a little kick on every second (harder in the last ten)
     if (urgent && sec > 0 && !prefersReducedMotion()) {

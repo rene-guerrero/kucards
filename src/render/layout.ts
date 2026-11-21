@@ -242,6 +242,19 @@ export interface TableDims {
   B: number;
   /** how the tuned table adapts to this screen (tableFit); none = as tuned */
   fit?: TableFit;
+  /** the screen width it was made for (CSS px), when known */
+  W?: number;
+  /**
+   * portrait Codo a codo: both opponents sit along the top facing the camera, the deck between them;
+   * the value is the side the side opponent would have had (it takes that half of the top row)
+   */
+  codoTop?: 'left' | 'right';
+}
+
+/** portrait Codo a codo: the side opponent's side (see TableDims.codoTop), else undefined */
+export function codoTopSide(portrait: boolean, sides: readonly (SeatSide | undefined)[]): 'left' | 'right' | undefined {
+  if (!portrait || !sides.some((x) => x === 'lowerLeft' || x === 'lowerRight')) return undefined;
+  return sides.includes('left') ? 'left' : sides.includes('right') ? 'right' : undefined;
 }
 
 /**
@@ -265,9 +278,11 @@ export function tableFit(W: number, H: number, portrait: boolean): TableFit {
 }
 
 /** the felt; with a screen size, the table adapted to it (tableFit) */
-export function tableDims(portrait: boolean, W?: number, H?: number): TableDims {
+export function tableDims(portrait: boolean, W?: number, H?: number, codoTop?: 'left' | 'right'): TableDims {
   const d: TableDims = portrait ? { A: 2.05, B: 2.9 } : { A: 3.9, B: 2.15 };
   if (W && H) d.fit = tableFit(W, H, portrait);
+  if (W) d.W = W;
+  if (portrait && codoTop) d.codoTop = codoTop;
   return d;
 }
 
@@ -409,7 +424,7 @@ export interface PlateEnv {
 export function plateDiameter(W: number, H: number): number {
   const m = Math.min(W, H);
   // bigger faces everywhere, and they keep growing on wide screens
-  return Math.round(H > W * 1.05 ? Math.max(48, Math.min(80, m * 0.15)) : Math.max(44, Math.min(88, m * 0.12)));
+  return Math.round(H > W * 1.05 ? Math.max(44, Math.min(70, m * 0.13)) : Math.max(40, Math.min(78, m * 0.105)));
 }
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
@@ -422,7 +437,7 @@ export function plateBox(p: PlateInput, env: PlateEnv): SeatPlate {
 
   const rowH = d;
   // every compact plate the same width, wide enough for a full name and the card count at its end
-  const stackW = Math.round(Math.min(d * 2.4, Math.max(100, d * 2.1)));
+  const stackW = Math.round(Math.max(96, d * 1.8));
   const stackH = Math.round(d * 1.36);
   // every seat uses the compact plate (the wide row plate is no longer used)
   let layout = 'stack' as 'row' | 'stack';
@@ -440,7 +455,9 @@ export function plateBox(p: PlateInput, env: PlateEnv): SeatPlate {
         x = env.handLeft - 10 - stackW / 2;
         y = env.H - stackH / 2 - 8;
       }
-      // always on the left of the hand (the ¡Ku! button takes the right), whatever the seating
+      // left of the hand (the ¡Ku! button takes the other side); Codo a codo with the partner on the left:
+      // on the right, away from the partner's cards
+      if (env.humanRight) x = env.W - x;
       bdir = 'up';
       break;
     case 'top':
@@ -717,7 +734,7 @@ export const TABLE_LAYOUT: { land: TableTune; port: TableTune } = {
     left: { rotX: -5, rotY: -110, rotZ: 0, posX: -3.2, posY: 0.28, posZ: 0.6, scale: 1.14, spacing: 0.36, angle: 3, arc: 0, curve: 0.02, fullCards: 7 },
     deck: { x: -2.1, z: -1.55, yaw: 45 },
     pile: { x: 0, z: -0.05 },
-    avatars: { me: [12, 88], top: [28, 15.5], left: [8, 22], right: [92, 22] },
+    avatars: { me: [12, 88], top: [72, 15.5], left: [8, 22], right: [92, 22] },
     aspect: 915 / 412,
   },
   port: {
@@ -735,6 +752,52 @@ export const TABLE_LAYOUT: { land: TableTune; port: TableTune } = {
 
 /** the tuned table; with `d.fit`, adapted to the screen (see TableFit) */
 export function tableTune(portrait: boolean, d?: TableDims): TableTune {
+  const T = fittedTune(portrait, d);
+  const side = portrait ? d?.codoTop : undefined;
+  if (!side) return portrait ? portraitSides(T, d) : T;
+  // portrait Codo a codo: both opponents along the top, facing the camera like the top seat, each in its
+  // own half (the outer ends may run off screen), the deck turned crosswise between them
+  const c = CODO_TOP;
+  const at = (x: number): FanTune => ({ ...T.top, posX: x, posZ: T.top.posZ + c.dz, scale: T.top.scale * c.scale, spacing: c.spacing, fullCards: c.fullCards });
+  const sx = side === 'left' ? -1 : 1;
+  const sideFan = at(sx * c.x);
+  return {
+    ...T,
+    top: at(-sx * c.x),
+    left: side === 'left' ? sideFan : T.left,
+    right: side === 'right' ? sideFan : T.right,
+    deck: { x: 0, z: T.top.posZ + c.deckDz, yaw: 45 },
+    avatars: { ...T.avatars, top: [50 - sx * c.avX, c.avY], [side]: [50 + sx * c.avX, c.avY] },
+  };
+}
+
+/** portrait camera distance outside Codo a codo (Codo a codo keeps TABLE_LAYOUT.port.camera.dist) */
+export const PORTRAIT_CAM_DIST = 9.8;
+/** portrait direction ring radius outside Codo a codo (inside the side mini-fans) */
+export const PORTRAIT_RING_R = 1.05;
+
+export const PORTRAIT_SIDE = { rotX: 32, turn: 12, x: 1.33, z: 0.45, scale: 0.6, spacing: 0.11, angle: 7, arc: 0.02, fullCards: 5 };
+
+/**
+ * portrait (every mode but Codo a codo): each side seat holds a small tight fan of backs under its plate,
+ * tilted up at the camera like the top seat; past fullCards it only packs tighter (the plate has the count)
+ */
+function portraitSides(T: TableTune, d?: TableDims): TableTune {
+  const c = PORTRAIT_SIDE;
+  const f = d?.fit;
+  const sx = f?.sx ?? 1;
+  const fs = f?.s ?? 1;
+  const fan = (s: -1 | 1): FanTune => ({
+    ...T.top, rotX: c.rotX, rotY: 180 - s * c.turn, rotZ: 0, posX: s * c.x * sx, posY: 0.05, posZ: c.z,
+    scale: c.scale * fs, spacing: c.spacing, angle: c.angle, arc: c.arc, curve: 0, fullCards: c.fullCards,
+  });
+  return { ...T, left: fan(-1), right: fan(1) };
+}
+
+/** portrait Codo a codo's top row (see tableTune) */
+export const CODO_TOP = { x: 1.42, dz: 0.05, scale: 0.92, spacing: 0.2, fullCards: 7, deckDz: 0.1, avX: 38, avY: 22 };
+
+function fittedTune(portrait: boolean, d?: TableDims): TableTune {
   const T = portrait ? TABLE_LAYOUT.port : TABLE_LAYOUT.land;
   const f = d?.fit;
   if (!f || (f.sx === 1 && f.sz === 1 && f.s === 1)) return T;
@@ -756,12 +819,14 @@ const D2R = Math.PI / 180;
  * back part of the way when the screen is narrower than the one it was tuned on (tableFit: the table's
  * spots close in the rest of the way).
  */
-export function tableCamera(W: number, H: number, portrait: boolean): { tilt: number; fov: number; dist: number } {
+export function tableCamera(W: number, H: number, portrait: boolean, codo = false): { tilt: number; fov: number; dist: number } {
   const T = tableTune(portrait);
+  // portrait outside Codo a codo: a little closer to the pile (the side hands run off the edges)
+  const dist = portrait && !codo ? PORTRAIT_CAM_DIST : T.camera.dist;
   return {
     tilt: (T.camera.tilt - T.tableRotX) * D2R,
     fov: T.camera.fov,
-    dist: T.camera.dist * tableFit(W, H, portrait).c,
+    dist: dist * tableFit(W, H, portrait).c,
   };
 }
 
@@ -794,12 +859,28 @@ function qRotate(q: Q, x: number, y: number, z: number, out: number[], o: number
  * past `fullCards`; then the whole fan is turned (Euler YXZ) and placed. An open hand (the partner
  * showing their cards) is turned around so its faces show on the far side, as the demo's face-up flag.
  */
+/** the Codo a codo partner's open hand faces the camera in portrait and on screens up to this wide */
+export const PARTNER_FACE_MAX_W = 1000;
+/** its size in portrait */
+export const PARTNER_FACE_SCALE = 0.9;
+
 function tunedHand(n: number, side: SeatSide, open: boolean, portrait: boolean, d?: TableDims): SeatHand {
   const T = tableTune(portrait, d);
-  let F = side === 'top' ? T.top : side === 'left' || side === 'lowerLeft' ? T.left : T.right;
+  // the Codo a codo partner keeps the original side tune (the portrait side pose is for opponents only)
+  const T0 = side === 'lowerLeft' || side === 'lowerRight' ? fittedTune(portrait, d) : T;
+  let F = side === 'top' ? T.top : side === 'left' ? T.left : side === 'lowerLeft' ? T0.left : side === 'right' ? T.right : T0.right;
   // portrait: the partner's open hand across the table is a little bigger so its faces can be read (same
   // row length, a touch nearer the middle, clear of the HUD)
   if (portrait && open && side === 'top') F = { ...F, scale: F.scale * OPEN_TOP_GROW, spacing: F.spacing / OPEN_TOP_GROW, posZ: F.posZ + 0.18 };
+  // portrait Codo a codo: the partner's open hand sits in the lower corner beside the human, turned toward
+  // the camera so the faces read (the side seat's upright pose is nearly edge-on there)
+  // (also landscape up to 1000 px wide, where the upright side pose is too small to read)
+  if (open && (side === 'lowerLeft' || side === 'lowerRight') && (portrait || (d?.W ?? Infinity) <= PARTNER_FACE_MAX_W)) {
+    const m = side === 'lowerLeft' ? 1 : -1;
+    F = portrait
+      ? { ...F, rotX: 40, rotY: -168 * m, rotZ: 0, posX: -0.74 * m, posY: 0.05, posZ: 2.3, scale: PARTNER_FACE_SCALE, spacing: 0.22, angle: 2.5, curve: 0 }
+      : { ...F, rotX: 42, rotY: -165 * m, rotZ: 0, posX: -2.45 * m, posY: 0.05, posZ: 1.15, scale: 1.05, spacing: 0.26, angle: 4, curve: 0 };
+  }
   const full = Math.max(2, F.fullCards);
   const sq = n > full ? (full - 1) / (n - 1) : 1;
   const sp0 = F.spacing;
@@ -918,6 +999,7 @@ export function layoutPlates(
   list: readonly PlateSeat[], n0: number, pile: Box,
 ): { plates: SeatPlate[]; handBoxes: Box[]; avoid: Box[] } {
   const hf = fanLayout(Math.max(7, n0), { W, H });
+  const codoTop = codoTopSide(portrait, list.map((p) => p.side));
   const ps = list.find((p) => p.side === 'lowerLeft' || p.side === 'lowerRight');
   const env: PlateEnv = {
     W, H, hudTop: HUD_TOP, handTop: hf.top, handLeft: fanLeft(hf), portrait,
@@ -972,7 +1054,7 @@ export function layoutPlates(
   void order;
   // every plate starts where the fan demo put that seat's avatar (% of the screen), then is drawn in
   // towards its own cards until it sits just beside them (on big screens the % spot drifts away)
-  const av = tableTune(portrait).avatars;
+  const av = tableTune(portrait, tableDims(portrait, W, H, codoTop)).avatars;
   const pt = { x: 0, y: 0 };
   plates.forEach((pl, i) => {
     const ps = list[i];
@@ -1017,9 +1099,28 @@ export function layoutPlates(
     pl.x = x;
     pl.y = y;
   });
+  // portrait outside Codo a codo: the left and right plates sit level, just above their own cards at the
+  // screen edges (never over them)
+  if (portrait && !codoTop) {
+    const idx = list.map((p, i) => (p.side === 'left' || p.side === 'right') && boxes[i] ? i : -1).filter((i) => i >= 0);
+    if (idx.length) {
+      const top = Math.min(...idx.map((i) => boxes[i]!.y - boxes[i]!.h / 2));
+      for (const i of idx) {
+        const pl = plates[i];
+        const x = list[i].side === 'left' ? pl.w / 2 + 6 : W - pl.w / 2 - 6;
+        const y = Math.max(pl.h / 2 + 4, top - pl.h / 2 - 4);
+        if (pl.bubble) {
+          pl.bubble.x += x - pl.x;
+          pl.bubble.y += y - pl.y;
+        }
+        pl.x = x;
+        pl.y = y;
+      }
+    }
+  }
   // no plate over the deck or the pile: step it just clear (the shortest way that stays on screen and
   // off the other seats' hands)
-  const tt = tableTune(portrait, tableDims(portrait, W, H));
+  const tt = tableTune(portrait, tableDims(portrait, W, H, codoTop));
   const spot = (cx: number, cz: number, r: number): Box => {
     let x0 = Infinity;
     let x1 = -Infinity;
@@ -1062,7 +1163,63 @@ export function layoutPlates(
     pl.x = b.x;
     pl.y = b.y;
   }
+  unoverlapPlates(plates, list, W, H);
+  if (portrait && !codoTop) {
+    // the steps above may have nudged one side plate: both go to the lower of the two (still level)
+    const idx = list.map((p, i) => (p.side === 'left' || p.side === 'right' ? i : -1)).filter((i) => i >= 0);
+    if (idx.length === 2) {
+      const y = Math.max(plates[idx[0]].y, plates[idx[1]].y);
+      for (const i of idx) {
+        const pl = plates[i];
+        if (pl.bubble) pl.bubble.y += y - pl.y;
+        pl.y = y;
+      }
+    }
+  }
   return { plates, handBoxes, avoid };
+}
+
+/**
+ * last pass: no two plates overlap (near-square screens put the top and a side plate on the same spot).
+ * The pair is pushed apart along its shallower overlap; the side plate gives way first, the top one only
+ * for what the screen edge leaves over.
+ */
+function unoverlapPlates(plates: SeatPlate[], list: readonly PlateSeat[], W: number, H: number): void {
+  const g = 6;
+  const move = (p: SeatPlate, dx: number, dy: number) => {
+    const x = clamp(p.x + dx, p.w / 2 + 4, W - p.w / 2 - 4);
+    const y = clamp(p.y + dy, p.h / 2 + 4, H - p.h / 2 - 4);
+    if (p.bubble) {
+      p.bubble.x += x - p.x;
+      p.bubble.y += y - p.y;
+    }
+    const done = Math.abs(x - p.x) + Math.abs(y - p.y);
+    p.x = x;
+    p.y = y;
+    return done;
+  };
+  for (let pass = 0; pass < 4; pass++) {
+    let moved = false;
+    for (let i = 0; i < plates.length; i++)
+      for (let j = i + 1; j < plates.length; j++) {
+        const a = plates[i];
+        const b = plates[j];
+        if (!a.visible || !b.visible) continue;
+        const ox = Math.min(a.x + a.w / 2, b.x + b.w / 2) - Math.max(a.x - a.w / 2, b.x - b.w / 2) + g;
+        const oy = Math.min(a.y + a.h / 2, b.y + b.h / 2) - Math.max(a.y - a.h / 2, b.y - b.h / 2) + g;
+        if (ox <= g || oy <= g) continue;
+        // the one that gives way: never the human, else not the top seat
+        const aFixed = a.seat === 0 || (list[i].side === 'top' && b.seat !== 0);
+        const [mv, st] = aFixed ? [b, a] : [a, b];
+        const alongX = ox < oy;
+        const s = alongX ? Math.sign(mv.x - st.x || (mv.x < W / 2 ? -1 : 1)) : Math.sign(mv.y - st.y || 1);
+        const need = alongX ? ox : oy;
+        const got = move(mv, alongX ? s * need : 0, alongX ? 0 : s * need);
+        if (got < need - 0.5 && st.seat !== 0) move(st, alongX ? -s * (need - got) : 0, alongX ? 0 : -s * (need - got));
+        moved = true;
+      }
+    if (!moved) break;
+  }
 }
 
 /** what the camera framing needs (see fitTable) */
