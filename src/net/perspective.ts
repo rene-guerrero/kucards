@@ -85,7 +85,10 @@ export class Perspective {
   event(ev: GameEvent): GameEvent {
     switch (ev.type) {
       case 'deal':
-        return { ...ev, counts: this.perSeat(ev.counts), starter: this.seat(ev.starter) };
+        return { ...ev, counts: this.perSeat(ev.counts), starter: this.seat(ev.starter), ...(ev.backs ? { backs: this.perSeat(ev.backs) } : {}) };
+      case 'flip':
+        // Día y Noche: whose Eclipse, and every seat's card backs, in this player's view
+        return { ...ev, seat: this.seat(ev.seat), ...(ev.backs ? { backs: this.perSeat(ev.backs) } : {}) };
       case 'play':
       case 'draw':
       case 'skip':

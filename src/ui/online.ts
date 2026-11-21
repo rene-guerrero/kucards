@@ -358,7 +358,7 @@ export interface Lobby {
 }
 
 const POS = ['bottom', 'right', 'top', 'left'] as const;
-const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'sideBySide'];
+const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'sideBySide', 'dayNight'];
 
 export function occupantName(o: SeatOccupant): string {
   if (o.kind === 'human') return o.name || t('seat.player');

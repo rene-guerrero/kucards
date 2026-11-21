@@ -57,6 +57,11 @@ export function redactEvents(events: readonly GameEvent[], seat: Seat | null, af
         const { hand: _h, ...rest } = ev;
         return seat === null ? rest : { ...rest, hand: hand() };
       }
+      case 'flip': {
+        // Día y Noche: each player gets their own hand, turned over (the engine's event carries seat 0's)
+        const { hand: _h, ...rest } = ev;
+        return seat === null ? rest : { ...rest, hand: hand() };
+      }
       case 'draw': {
         const { cards, ...rest } = ev;
         return cards && seen.includes(ev.seat) ? { ...rest, cards: copyCards(cards) } : rest;

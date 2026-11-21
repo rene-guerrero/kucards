@@ -150,7 +150,11 @@ export function applyEvent(m: MatchState, ev: GameEvent, faceOf: (id: number) =>
       r.window = ev.window;
       break;
     case 'flip':
+      // everything turns over: my hand (sent turned), the discard pile, the colour in play
       r.side = ev.side;
+      r.activeColor = ev.color;
+      if (ev.hand) r.hands[0] = ev.hand.slice();
+      r.discard = r.discard.map((c) => (c.other ? { ...c, face: c.other, other: c.face } : c));
       break;
     case 'eliminated': {
       r.eliminated[ev.seat] = true;

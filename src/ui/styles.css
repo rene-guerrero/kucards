@@ -6564,3 +6564,9 @@ button.ng-seat:hover {
   .mode-row > .rsel-slot { flex: 1 1 100%; }
   .mode-row > .rsel-act { flex: 1 1 0; width: auto; }
 }
+/* Sala: the same seat map on every device (the room's first seat at the bottom): order by position only,
+   never "me first" (that moved the guest to a different spot on their own phone) */
+.lobby.lb .ng-table .ng-seat.ng-seat.pos-bottom { order: 0; }
+.lobby.lb .ng-table .ng-seat.ng-seat.pos-top { order: 1; }
+.lobby.lb .ng-table .ng-seat.ng-seat.pos-right { order: 2; }
+.lobby.lb .ng-table .ng-seat.ng-seat.pos-left { order: 3; }

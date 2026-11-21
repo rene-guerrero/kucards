@@ -69,7 +69,7 @@ export interface RoomData {
 }
 
 export const MAX_MEMBERS = 8;
-export const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'sideBySide'];
+export const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'sideBySide', 'dayNight'];
 
 export class LobbyError extends Error {
   constructor(

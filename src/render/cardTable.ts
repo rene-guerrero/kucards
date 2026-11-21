@@ -1408,12 +1408,19 @@ export class CardTable implements TableView {
     this.pileBox.position.set(this.pilePos.x, 0, this.pilePos.z);
     const top = this.deckTop;
     top.vis = this.deckCount > 0;
+    const p = this.deckTopPose(this.scratch);
     if (top.token === 0 || !this.anim.active) {
-      const p = this.deckTopPose(this.scratch);
       top.pos.copy(p.pos);
       top.quat.copy(p.quat);
       top.s = 1;
-    } else top.pos.y = h + 0.004;
+    } else {
+      // mid-animation (a turn arrow or flip runs most of the time): it still follows the deck's spot, which
+      // moves on a resize / rotation (else the stack's blank top showed where the card had been)
+      top.pos.x = p.pos.x;
+      top.pos.z = p.pos.z;
+      top.pos.y = h + 0.004;
+      top.quat.copy(p.quat);
+    }
   }
   private scratch = newPose();
 
