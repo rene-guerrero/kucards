@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ATLAS_CELLS, ATLAS_COLS, ATLAS_ROWS, CELL_SU, CELL_SV, COLOR_DEEP, COLOR_GLOW, COLOR_HEX, FaceMap, NIGHT_COLORS, baseFaces, cellPx, cellUv, faceKey, isNightFace, nightFace, playedFace } from './cardAtlas';
-import { buildDeck } from '../engine/cards';
+import { buildDeck, dayFaces, nightFaces } from '../engine/cards';
 import { DEFAULT_RULES } from '../engine/rules';
 
 describe('card atlas mapping', () => {
@@ -88,12 +88,8 @@ describe('atlas: Ciclón faces', () => {
   it('covers the cyclone deck when the engine builds one', () => {
     const map = new FaceMap();
     const rules = { ...DEFAULT_RULES, deck: 'cyclone', 'power.swap': true, 'power.shield': true, 'power.sweep': true, 'power.mirror': true };
-    let deck: { face: Parameters<typeof faceKey>[0] }[] = [];
-    try {
-      deck = buildDeck(rules);
-    } catch {
-      return; // engine work in progress
-    }
+    const deck = buildDeck(rules);
+    expect(deck.length).toBeGreaterThan(0);
     for (const c of deck) expect(map.index(c.face).added, faceKey(c.face)).toBe(false);
   });
 });
@@ -162,11 +158,13 @@ describe('atlas: night side (Día y Noche)', () => {
     expect(cells.size).toBe(6);
   });
 
-  it('covers both sides of the Día y Noche deck when the engine builds one', async () => {
-    const cards = (await import('../engine/cards')) as unknown as { nightFaces?: () => Parameters<typeof faceKey>[0][]; dayFaces?: () => Parameters<typeof faceKey>[0][] };
-    if (!cards.nightFaces || !cards.dayFaces) return; // engine work in progress
+  it('covers both sides of the Día y Noche deck', () => {
     const map = new FaceMap();
-    for (const f of cards.dayFaces()) expect(map.index(f).added, faceKey(f)).toBe(false);
-    for (const f of cards.nightFaces()) expect(map.index(nightFace(f)).added, faceKey(f)).toBe(false);
+    const day = dayFaces();
+    const night = nightFaces();
+    expect(day.length).toBeGreaterThan(0);
+    expect(night.length).toBeGreaterThan(0);
+    for (const f of day) expect(map.index(f).added, faceKey(f)).toBe(false);
+    for (const f of night) expect(map.index(nightFace(f)).added, faceKey(f)).toBe(false);
   });
 });

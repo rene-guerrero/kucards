@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from '../../src/net/protocol';
-import { RULE_PRESETS } from '../../src/engine/rules';
 import {
   autoSeat,
+  dropUnseatedMembers,
   ensureHost,
   fillSeats,
   freeSeats,
@@ -126,6 +126,39 @@ describe('seats, modes, rules, host', () => {
     expect(rules.deck).toBe('classic');
     expect(rules.handSize).toBe(7);
     expect('evil' in rules).toBe(false);
+  });
+
+  it('start seats unseated members in empty or CPU seats, then drops the rest', () => {
+    const r = newRoom('ABCD', 0);
+    join(r, 'p1');
+    join(r, 'p2');
+    setMode(r, 'p1', 'classic', 2); // p2 moves from seat 1 to 2; active seats are 0 and 2
+    sit(r, 'p2', null);
+    setCpu(r, 'p1', 2, 'lola');
+    fillSeats(r, () => 0.3);
+    expect(seatOf(r, 'p2')).toBe(2);
+    expect(dropUnseatedMembers(r)).toEqual([]);
+
+    const r2 = newRoom('WXYZ', 0);
+    join(r2, 'p1');
+    join(r2, 'p2');
+    join(r2, 'p3');
+    setMode(r2, 'p1', 'classic', 2);
+    sit(r2, 'p3', null);
+    expect(dropUnseatedMembers(r2)).toEqual(['p2', 'p3']);
+    expect(r2.members.p2).toBeUndefined();
+  });
+
+  it('changing mode after a match drops its stale teams', () => {
+    const r = newRoom('ABCD', 0);
+    join(r, 'p1');
+    setMode(r, 'p1', 'sideBySide', 2);
+    r.phase = 'finished';
+    r.match = { teams: [[0, 3], [1, 2]], scores: [10, 20] } as unknown as RoomData['match'];
+    expect(publicRoom(r).teams).toEqual([[0, 3], [1, 2]]);
+    setMode(r, 'p1', 'classic', 2);
+    expect(r.match).toBeNull();
+    expect(publicRoom(r).teams).toBeNull();
   });
 
   it('host-only CPU seats, distinct characters', () => {

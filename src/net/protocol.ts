@@ -27,8 +27,8 @@ import type { ClockSettings } from '../engine/clock';
 import type { ModeDef } from '../engine/modes';
 import { sideSeating } from '../modes/core';
 
-/** KuCards speaks its own protocol (Kudominoes is v1) */
-export const PROTOCOL_VERSION = 2;
+/** KuCards speaks its own protocol (Kudominoes is v1); v3 adds setSwappedSeats */
+export const PROTOCOL_VERSION = 3;
 /** room codes: 4 chars from an unambiguous alphabet (no 0/O/1/I), shown as KUCA-XXXX */
 export const ROOM_CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 export const ROOM_CODE_LENGTH = 4;

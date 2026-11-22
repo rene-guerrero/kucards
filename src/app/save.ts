@@ -6,7 +6,8 @@ import type { Lineup, MatchState } from '../contracts';
 import { modeRules } from '../engine/rules';
 
 const KEY = 'kucards.save.v1';
-const VERSION = 1;
+// v2 invalidates saves from before the fixed side seating / swappedSeats rework
+const VERSION = 2;
 
 export interface SavedGame {
   v: number;

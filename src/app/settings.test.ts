@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { RULE_PRESETS, RULES_VERSION } from '../engine/rules';
 import { DEFAULT_LINEUP } from '../roster';
 import { defaultSettings, descriptorsFor, migrateSettings, rulesFor, sanitizeLineupSetting, sanitizeRules, withMode, withRules } from './settings';
-import { migrateSave, type SavedGame } from './save';
+import { loadSave, migrateSave, type SavedGame } from './save';
 import { createMatch } from '../engine/game';
 
 describe('settings', () => {
@@ -91,6 +91,29 @@ describe('settings', () => {
     expect(other.mode).toBe('action');
     expect(other.teamPlay).toBe(false);
     expect(other.rulesByMode!.classic!.jumpIn).toBe(true);
+  });
+
+  it('drops saves from before the fixed side seating', () => {
+    const store = new Map<string, string>();
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+      } as Storage,
+    });
+    try {
+      const match = createMatch(RULE_PRESETS[0].rules, { mode: 'classic', players: 4 });
+      store.set('kucards.save.v1', JSON.stringify({ v: 1, match, lineup: {} }));
+      expect(loadSave()).toBeNull();
+      store.set('kucards.save.v1', JSON.stringify({ v: 2, match, lineup: {} }));
+      expect(loadSave()?.match.round).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(globalThis, 'localStorage', original);
+      else delete (globalThis as { localStorage?: Storage }).localStorage;
+    }
   });
 
   it('migrates old Parejas saves', () => {

@@ -4,7 +4,7 @@
  * Offline it plays on the player's own avatar / plate; online the caller sends it to the room.
  */
 import type { FaceSpec } from 'kuavatars';
-import { CHAT_GESTURES, type ChatGesture, type QuickPhraseId } from '../net/protocol';
+import type { ChatGesture, QuickPhraseId } from '../net/protocol';
 import { staticFace } from './avatarAdapter';
 import { h } from './dom';
 import { t, type Key } from './i18n';

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Card, CardKind, GameEvent } from '../contracts';
-import { drawPhrase, phraseFor } from './voice';
+import { cancelVoice, drawPhrase, phraseFor, setVoiceHook, voiceForEvent } from './voice';
 
 const play = (kind: CardKind, draw?: number): GameEvent => ({ type: 'play', seat: 0, card: { id: 1, face: { kind, color: 'sol', draw } } as Card });
 
@@ -33,5 +33,20 @@ describe('voice phrases', () => {
     expect(phraseFor(multi('skip', true, 2))).toBeNull();
     expect(phraseFor(multi('skip', true, 3))).toBeNull();
     expect(phraseFor(multi('skip', false, 4))).toBe('Skip!');
+  });
+
+  it('cancels delayed callouts when the game is left', () => {
+    vi.useFakeTimers();
+    let spoken = 0;
+    setVoiceHook(() => spoken++);
+    try {
+      voiceForEvent(play('skip'), 140);
+      cancelVoice();
+      vi.advanceTimersByTime(500);
+      expect(spoken).toBe(0);
+    } finally {
+      setVoiceHook(null);
+      vi.useRealTimers();
+    }
   });
 });

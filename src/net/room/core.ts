@@ -42,6 +42,7 @@ import { cpuDecide, cpuTurnMove, isTurnMove, reactDelay, thinkDelay, validMove }
 import {
   autoSeat,
   connectedHumans,
+  dropUnseatedMembers,
   ensureHost,
   fillSeats,
   freeSeats,
@@ -262,6 +263,13 @@ export class RoomCore<S> {
         this.io.close(s, 4003, 'room_full');
         return;
       }
+    } else if (r.phase === 'playing' && seatOf(r, pid) === null) {
+      // a legacy unseated member reconnecting mid-match: take over a CPU or stay out
+      if (freeSeats(r) === 0 || autoSeat(r, pid) === null) {
+        this.err(s, 'room_full');
+        this.io.close(s, 4003, 'room_full');
+        return;
+      }
     }
     m.name = sanitizeName(msg.name);
     m.face = sanitizeFace(msg.face);
@@ -353,6 +361,16 @@ export class RoomCore<S> {
     // the host stood up and nobody sits: put the host back at the table
     if (humanCount(r) === 0 && seatOf(r, pid) === null) autoSeat(r, pid);
     fillSeats(r, () => this.io.random());
+    // no spectators: a connected member who could not be seated is told why and disconnected
+    const dropped = dropUnseatedMembers(r);
+    for (const s of this.io.sockets()) {
+      const a = this.io.attachment(s);
+      if (a?.hello && a.pid && dropped.includes(a.pid)) {
+        this.io.setAttachment(s, { pid: a.pid, hello: false });
+        this.err(s, 'room_full');
+        this.io.close(s, 4003, 'room_full');
+      }
+    }
     const players = (r.mode === 'sideBySide' ? 4 : r.playerCount) as 2 | 3 | 4;
     r.match = createMatch(r.rules, { mode: r.mode, players, teams: !!r.teamPlay, swappedSeats: !!r.swappedSeats, ...(r.custom ? { custom: r.custom } : {}) }, this.io.seed());
     if (r.clock) r.match.clock = { ...r.clock };

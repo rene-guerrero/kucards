@@ -110,9 +110,9 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
   },
   { key: 'power.swap', group: 'power', type: 'toggle', default: false, modes: ['classic', 'cyclone', 'sideBySide'], label: { es: 'Cambio', en: 'Swap' }, help: { es: 'Comodín: cambias tu mano con otro jugador.', en: 'Wild: swap hands with another player.' }, options: [on, off] },
   { key: 'power.sweep', group: 'power', type: 'toggle', default: false, modes: ['classic', 'cyclone'], label: { es: 'Barrida', en: 'Sweep' }, help: { es: 'Descartas todas tus cartas de ese color.', en: 'Discard all your cards of that colour.' }, options: [on, off] },
-  // Escudo (power.shield), Espejo (power.mirror) and partnerShield: retired from every mode. The engine,
-  // art and sounds still handle them, but no descriptor, preset or deck turns them on, so stored
-  // settings / profiles / room rules that had them on simply lose them (sanitizeRules, normalizeRules).
+  // Escudo (power.shield), Espejo (power.mirror) and partnerShield have no descriptor, preset or default
+  // deck, but player-made modes can still put their cards in a deck. The engine, renderer and network
+  // mirror keep supporting them; sanitizeRules/normalizeRules only drop the obsolete rule toggles.
   { key: 'partnerOpen', group: 'partners', type: 'toggle', default: true, label: { es: 'Cartas del compañero a la vista', en: 'Partner cards face up' }, help: { es: 'Ves las cartas de tu compañero y él ve las tuyas.', en: 'You see your partner’s cards and they see yours.' }, options: [on, off] },
   { key: 'partnerPass', group: 'partners', type: 'toggle', default: false, label: { es: 'Pasar carta al compañero', en: 'Pass a card to your partner' }, help: { es: 'Con un 7 puedes darle una carta a tu compañero.', en: 'On a 7 you may give one card to your partner.' }, options: [on, off] },
 ];

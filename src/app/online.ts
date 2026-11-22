@@ -38,7 +38,7 @@ import { copyMode, customMode, matchModeDef } from './customModes';
 import { rulesSheet } from '../ui/modeView';
 import { descriptorsForMode } from '../ui/settings';
 import { builtInModeNames } from '../ui/modeSelect';
-import { activeSeatsOf, buildLobby, buildQrCard, buildOnlineHome, buildOnlinePause, buildRulesSheet, buildSeatSheet, occupantName, ONLINE_ICONS, phraseText, type Lobby, type OnlineHome } from '../ui/online';
+import { activeSeatsOf, buildLobby, buildQrCard, buildOnlineHome, buildOnlinePause, buildRulesSheet, buildSeatSheet, occupantName, phraseText, type Lobby, type OnlineHome } from '../ui/online';
 import { AvatarController, humanFace, type AvatarExpr } from '../ui/avatarAdapter';
 import { Hud, type HudPlayer, type ScoreRow } from '../ui/hud';
 import { bubbleFor, SeatPlates } from '../ui/plates';

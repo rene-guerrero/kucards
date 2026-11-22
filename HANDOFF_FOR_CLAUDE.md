@@ -2,7 +2,7 @@
 
 ## Context
 
-These changes were uncommitted at the start of this handoff. They are now committed locally in one commit; nothing was pushed.
+The seating/UI/voice work was committed locally as `1fd2a3c`; the final code-review fixes below are uncommitted on top. Nothing was pushed. Unrelated icon/PNG changes in the working tree were left untouched.
 
 ## Goal
 
@@ -76,7 +76,7 @@ Finish the side-by-side seating swap so the offline preview, match start, online
 
 ---
 
-## Files changed (31)
+## Files changed in the seating work (31)
 
 - Docs: `PLAN.md`
 - Contracts/engine/modes: `src/contracts.ts`, `src/engine/game.ts`, `src/engine/testutil.ts`, `src/engine/cards.test.ts`, `src/engine/power.test.ts`, `src/modes/core.ts`
@@ -87,14 +87,54 @@ Finish the side-by-side seating swap so the offline preview, match start, online
 
 ---
 
+## 6. Code-review fixes (final pass)
+
+All confirmed findings from the full review are fixed:
+
+- **Hidden information:** `seatView()` now deletes `round.seed` as well as `rng`; the server core leak test
+  asserts it (`src/net/redact.ts`, `server/test/core.test.ts`).
+- **Old offline saves:** `save.VERSION` is 2, so pre-swap side saves cannot load with obsolete teams
+  (`src/app/save.ts`, `src/app/settings.test.ts`).
+- **Unseated online members:** `fillSeats()` now prioritizes the host and can replace CPUs; the room removes
+  any still-seatless connected members at start, closes their sockets with `room_full`, and a seatless
+  reconnect either takes a CPU seat or is rejected (`src/net/room/lobby.ts`, `src/net/room/core.ts`,
+  `server/test/lobby.test.ts`, `server/test/core.test.ts`).
+- **Settings persistence:** catalog save and mode-editor back now go through `update()`, so localStorage and
+  reapply stay in sync, including Android/Escape back (`src/main.ts`).
+- **Escape bubbling:** the global back handler ignores handled Escape, and the rule dropdown / info tooltip
+  stop propagation (`src/main.ts`, `src/ui/settings.ts`).
+- **Protocol compatibility:** `PROTOCOL_VERSION` is 3 for `setSwappedSeats`; old clients now fail fast with
+  `version_mismatch` instead of silently missing the message (`src/net/protocol.ts`).
+- **Docs:** root README now describes the shipped app, own icons and `kuavatars#v0.3.1`; server README uses
+  the real Worker URL, v3 and the no-spectator / seed-redaction rules (`README.md`, `server/README.md`).
+- **Stale finished-match teams:** mode/custom changes clear `r.match` (`src/net/room/lobby.ts`).
+- **Voice timers:** delayed callouts are tracked and cleared by `cancelVoice()`; added a regression test
+  (`src/audio/voice.ts`, `src/audio/voice.test.ts`).
+- **Dead imports:** removed unused specifiers from main, online, settings, chat and the two test files.
+- **Atlas tests:** removed the silent `try/catch` and dynamic-import guard; they now assert real deck faces
+  (`src/render/cardAtlas.test.ts`).
+- **Unused i18n keys:** removed obsolete ES/EN pairs (`menu.soon*`, `howto.rule.partnerShield`,
+  `summary.byTime*`, `newgame.seating`, `lobby.players*`) from `src/ui/i18n.ts`.
+- **Rules comment:** the shield/mirror/partnerShield note now says custom-mode decks can still include them
+  (`src/engine/rules.ts`).
+
+Additional files in the final pass: `README.md`, `server/README.md`, `src/app/save.ts`,
+`src/app/settings.test.ts`, `src/audio/voice.ts`, `src/audio/voice.test.ts`, `src/engine/rules.ts`,
+`src/net/protocol.ts`, `src/net/redact.ts`, `src/net/room/core.ts`, `src/net/room/lobby.ts`,
+`src/render/cardAtlas.test.ts`, `src/render/layout.test.ts`, `src/ui/chat.ts`, `src/ui/i18n.ts`,
+`src/ui/settings.ts`, `server/test/core.test.ts`, `server/test/lobby.test.ts`.
+
+---
+
 ## Verification
 
-- Root `npm test` → **371 passed**
+- Root `npm test` → **373 passed**
 - Root `npm run typecheck` → passed
 - Root `npm run build` → passed
-- Server `npm test` → **32 passed**
+- Server `npm test` → **37 passed**
 - Server `npm run typecheck` → passed
 
 ## Note
 
-`PROTOCOL_VERSION` was not bumped. Older clients will ignore the new `setSwappedSeats` message; both client and server in this repo are updated together.
+`PROTOCOL_VERSION` is now 3. Client and Worker must still be deployed together; a mismatch fails on `hello`
+with `version_mismatch`. Offline saves from v1 are intentionally invalidated by the v2 save format.

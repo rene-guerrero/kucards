@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import {
   fanLayout, hitFan, inSlot, separatePlates, seatSides, turnSpin, ringSign, seatAnchor, plateBox, projectCss, sortHand, tableDims,
-  cameraTilt, cameraFov, fitTable, seatHand, fanSpread, seatHoldYaw, handCardCorners, handCardNormal, handFitPoints, layoutPlates,
-  CARD_W, SEAT_SIDE, HUD_TOP, OPEN_TOP_GROW, PARTNER_FACE_SCALE, codoTopSide, TABLE_LAYOUT, HAND_HIDDEN, tableTune, tableCamera, openHandScale, type FanLayout, type PlateSeat, type Box,
+  seatHand, seatHoldYaw, handCardCorners, handCardNormal, layoutPlates,
+  SEAT_SIDE, OPEN_TOP_GROW, PARTNER_FACE_SCALE, codoTopSide, TABLE_LAYOUT, HAND_HIDDEN, tableTune, tableCamera, openHandScale, type FanLayout, type PlateSeat,
 } from './layout';
 import type { Card, Seat } from '../contracts';
 
@@ -110,7 +110,6 @@ describe('sortHand', () => {
 // ───────── the other seats' hands: the human's fan, held at each seat (3D) ─────────
 
 const DEG = Math.PI / 180;
-const DIMS = [tableDims(false), tableDims(true), { A: 4.6, B: 2.6 }, { A: 2.05, B: 4.2 }];
 
 describe('hands of the other seats (tuned in fan-demo.html)', () => {
   const sides = ['top', 'left', 'right', 'lowerLeft', 'lowerRight'] as const;
@@ -256,8 +255,6 @@ describe('Codo a codo (side-seating partners)', () => {
     { teams: [[0, 1], [2, 3]], partner: 1, side: 'lowerRight' as const, other: 3, otherSide: 'left' },
     { teams: [[0, 3], [1, 2]], partner: 3, side: 'lowerLeft' as const, other: 1, otherSide: 'right' },
   ];
-  // landscape tables the camera fit produces (844x390 .. 1280x720): A ~ 3.9-4.6, B ~ 2.15-2.6
-  const DIMS = [tableDims(false), { A: 4.3, B: 2.4 }, { A: 4.6, B: 2.6 }];
 
   it('puts the partner on their side edge, opponents top and the other side', () => {
     for (const c of CASES) {

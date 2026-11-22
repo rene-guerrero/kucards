@@ -75,12 +75,13 @@ function checkNoLeak(msg: ServerMsg, seat: Seat, seen: Seat[], roundOverHands: b
   }
   if (msg.t === 'turn') for (const m of msg.legal) expect(m.seat).toBe(seat);
   if ((msg.t === 'welcome' || msg.t === 'sync') && msg.view) {
-    const m = msg.view.match as { rng: number; round: { hands: Card[][]; deck: Card[]; challenge?: unknown; outPoints?: unknown } | null };
+    const m = msg.view.match as { rng: number; round: { hands: Card[][]; deck: Card[]; challenge?: unknown; outPoints?: unknown; seed?: unknown } | null };
     expect(m.rng).toBe(0);
     if (m.round) {
       expect(m.round.deck).toEqual([]);
       expect(m.round.challenge).toBeUndefined();
       expect(m.round.outPoints).toBeUndefined();
+      expect(m.round.seed).toBeUndefined();
       m.round.hands.forEach((h, s) => {
         if (!seen.includes(s as Seat)) expect(h).toEqual([]);
       });
@@ -226,6 +227,48 @@ describe('room core: side seating', () => {
     const room = t.socks[0].inbox.filter((m) => m.t === 'room').pop() as Extract<ServerMsg, { t: 'room' }>;
     expect(room.room.teams).toEqual([[0, 1], [2, 3]]);
     expect(room.room.swappedSeats).toBe(true);
+  });
+});
+
+describe('room core: unseated members', () => {
+  it('start drops connected members who cannot be seated', () => {
+    const t = rig(11);
+    const a = t.join('pid-1');
+    const b = t.join('pid-2');
+    t.join('pid-3');
+    t.send(a, { t: 'setMode', mode: 'classic', playerCount: 2 });
+    t.send(a, { t: 'start' });
+    expect(t.core.data!.phase).toBe('playing');
+    expect(t.core.data!.members['pid-2']).toBeUndefined();
+    expect(b.open).toBe(false);
+    expect(b.inbox.at(-1)).toMatchObject({ t: 'error', code: 'room_full' });
+  });
+
+  it('a seatless reconnect takes over a CPU when one is free', () => {
+    const t = rig(12);
+    const a = t.join('pid-1');
+    t.join('pid-2');
+    t.send(a, { t: 'start' });
+    t.core.data!.members['pid-3'] = { playerId: 'pid-3', name: 'P3', face: 0, connected: false, cpuCovering: false, joinedAt: 0 };
+    const c = t.join('pid-3');
+    const seat = seatOfPid(t.core, 'pid-3');
+    expect(seat).not.toBeNull();
+    const w = c.inbox.find((m) => m.t === 'welcome') as Extract<ServerMsg, { t: 'welcome' }>;
+    expect(w.you.seat).toBe(seat);
+    expect(w.view).not.toBeNull();
+  });
+
+  it('a seatless reconnect is rejected when every seat is taken', () => {
+    const t = rig(13);
+    const a = t.join('pid-1');
+    t.join('pid-2');
+    t.send(a, { t: 'setMode', mode: 'classic', playerCount: 2 });
+    t.send(a, { t: 'start' });
+    t.core.data!.members['pid-3'] = { playerId: 'pid-3', name: 'P3', face: 0, connected: false, cpuCovering: false, joinedAt: 0 };
+    const c = t.join('pid-3');
+    expect(seatOfPid(t.core, 'pid-3')).toBeNull();
+    expect(c.open).toBe(false);
+    expect(c.inbox.at(-1)).toMatchObject({ t: 'error', code: 'room_full' });
   });
 });
 

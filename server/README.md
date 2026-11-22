@@ -25,10 +25,11 @@ wraps it with WebSockets, storage and the alarm, and the client's dev mock (`../
 `?mpmock=1`) wraps the very same code with BroadcastChannel and `setTimeout`.
 
 - **Lobby.** Arriving players sit in the first empty seat, or take over a CPU seat if none is empty.
-  `sit` moves a player or makes them stand. The host picks the mode (Clásico / Pura acción / Ciclón with
-  2–4 players, Parejas with 4 and its seating), the rules and the CPU seats. `start` (host) seats anyone
-  still standing, then fills empty seats with distinct roster CPUs. Online, Codo a codo pairs seats 0+1
-  and 2+3.
+  `sit` moves a player or makes them stand. The host picks the mode (Clásico / Pura acción / Ciclón /
+  Día y Noche with 2–4 players, Codo a codo with 4, plus player-made modes), the rules, the side-seating
+  avatar swap and the CPU seats. `start` (host) seats anyone still standing, fills the rest with distinct
+  roster CPUs, and disconnects members who cannot be seated (there are no spectators). Online, Codo a
+  codo pairs seats 0+1 and 2+3; the swap is display-only.
 - **Playing.** The server holds the MatchState and checks every move against `legalMoves` for the
   sender's seat. After every change each player gets a `turn` message with their own legal moves (turn
   moves on their turn, out-of-turn moves any time: jump-in, ¡Ku! call or catch, shield). Out-of-turn moves
@@ -55,7 +56,7 @@ sits in a small schedule; the single alarm is always set to the earliest entry.
 the partner's in Parejas with `partnerOpen`), the other players' card **counts**, never the deck. Card ids
 index the deterministic deck, so hidden cards never carry an id. `draw` events carry `cards` only for a
 seat the receiver may see; `deal` / `swapHands` / `rotateHands` carry the receiver's own cards. A
-`SeatView` drops the deck, `rng`, the +4 challenge flag, `outPoints` and other seats' `drawnCardId`;
+`SeatView` drops the deck, `rng`, `round.seed`, the +4 challenge flag, `outPoints` and other seats' `drawnCardId`;
 the response window lists only the receiver. Every `events` batch comes with a `snap` (counts, deck,
 pending penalty, visible hands; every hand once the round is over).
 
@@ -96,12 +97,13 @@ npx wrangler login      # opens the browser once; credentials are stored under X
 npx wrangler deploy
 ```
 
-The Worker is served at `https://kucards-rooms.<your-subdomain>.workers.dev`. Put that URL in
-`MP_SERVER_URL` (`../src/net/config.ts`): while it holds the `<your-subdomain>` placeholder, production
-builds hide "Jugar en línea". The client uses:
+The production Worker is deployed at `https://kucards-rooms.renegue1256.workers.dev` and that URL is
+already set in `MP_SERVER_URL` (`../src/net/config.ts`), so production builds show "Jugar en línea".
+A different deployment must update that constant, rebuild the client and redeploy together: the client
+and Worker negotiate `PROTOCOL_VERSION` (currently 3) on `hello`. The client uses:
 
-- `POST https://kucards-rooms.<sub>.workers.dev/api/rooms`
-- `wss://kucards-rooms.<sub>.workers.dev/api/rooms/<CODE>/ws?pid=<playerId>`
+- `POST https://kucards-rooms.renegue1256.workers.dev/api/rooms`
+- `wss://kucards-rooms.renegue1256.workers.dev/api/rooms/<CODE>/ws?pid=<playerId>`
 
 ### GitHub Actions option
 

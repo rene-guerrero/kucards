@@ -44,6 +44,8 @@ export function setVoiceEnabled(on: boolean): void {
 }
 
 export function cancelVoice(): void {
+  for (const t of pending) clearTimeout(t);
+  pending.clear();
   try {
     clip?.pause();
     synth()?.cancel();
@@ -91,6 +93,8 @@ export function voiceSlug(text: string): string {
 }
 const missing = new Set<string>();
 let clip: HTMLAudioElement | null = null;
+/** pending delayed callouts, so leaving/resetting a game can silence them all */
+const pending = new Set<ReturnType<typeof setTimeout>>();
 
 function playFile(text: string, fallback: () => void): void {
   const slug = voiceSlug(text);
@@ -158,8 +162,13 @@ const VOICE_VOLUME = 0.38;
 export function voiceForEvent(ev: GameEvent, delayMs = 0): void {
   const p = enabled ? phraseFor(ev) : null;
   if (!p) return;
-  if (delayMs > 0) setTimeout(() => speak(p), delayMs);
-  else speak(p);
+  if (delayMs > 0) {
+    const timer = setTimeout(() => {
+      pending.delete(timer);
+      if (enabled) speak(p);
+    }, delayMs);
+    pending.add(timer);
+  } else speak(p);
 }
 
 if (typeof window !== 'undefined' && 'speechSynthesis' in window) {

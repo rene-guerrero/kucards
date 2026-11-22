@@ -29,7 +29,7 @@ import { buildModeEditor } from './ui/modeEditor';
 import { buildModeCatalog } from './ui/modeCatalog';
 import { builtInModeNames } from './ui/modeSelect';
 import type { ModeDef } from './engine/modes';
-import { btn, confirmDialog, Overlay } from './ui/overlay';
+import { confirmDialog, Overlay } from './ui/overlay';
 import { allPresets, loadProfiles } from './app/ruleProfiles';
 import { buildSettings, type RuleSelectItem, descriptorsForMode, presetName, rulesSummary, sameAs } from './ui/settings';
 
@@ -232,7 +232,7 @@ function openModeCatalog(): void {
     buildModeCatalog({
       onSave: (def) => {
         const saved = copyMode(def, builtInModeNames());
-        settings = { ...settings, customMode: saved.id, mode: saved.base };
+        update({ ...settings, customMode: saved.id, mode: saved.base }, 'mode');
       },
       onBack: () => {
         update({ ...settings, settingsTab: 'rules' }, 'mode');
@@ -245,7 +245,7 @@ function openModeCatalog(): void {
 /** the game-mode editor over Ajustes › Reglas; saving selects the mode and goes back there */
 function openModeEditor(draft: ModeDef, isNew: boolean): void {
   const back = () => {
-    settings = { ...settings, settingsTab: 'rules' };
+    update({ ...settings, settingsTab: 'rules' }, 'settingsTab');
     show('settings');
   };
   overlay.showScreen(
@@ -300,7 +300,8 @@ function show(id: ScreenId, animate = true): void {
   return true;
 };
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') (window as { __kucaBack?: () => boolean }).__kucaBack?.();
+  // dropdowns and tooltips mark Escape as handled; don't leave the screen as well
+  if (e.key === 'Escape' && !e.defaultPrevented) (window as { __kucaBack?: () => boolean }).__kucaBack?.();
 });
 
 const preview = import.meta.env.DEV && new URLSearchParams(location.search).has('hud');

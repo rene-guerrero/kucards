@@ -237,6 +237,7 @@ export function setMode(r: RoomData, playerId: string, mode: GameMode, playerCou
   if (count !== 2 && count !== 3 && count !== 4) throw new LobbyError('bad_request', 'bad player count');
   if (mode !== r.mode || r.custom) r.rules = normalizeRules({}, mode);
   delete r.custom;
+  r.match = null; // a finished match's teams/scores no longer describe the new mode
   r.mode = mode;
   r.playerCount = count;
   r.teamPlay = mode !== 'sideBySide' && count === 4 && teamPlay === true;
@@ -267,6 +268,7 @@ export function setCustom(r: RoomData, playerId: string, raw: unknown, playerCou
   if (!isLobbyLike(r)) throw new LobbyError('bad_request', 'not in the lobby');
   if (raw === null) {
     delete r.custom;
+    r.match = null;
     r.rules = normalizeRules({}, r.mode);
     return;
   }
@@ -295,18 +297,29 @@ export function setClock(r: RoomData, playerId: string, clock: unknown): void {
   r.clock = sanitizeClock(clock);
 }
 
-/** start: unseated members sit down first, then empty seats get distinct random roster CPUs */
+/** connected members who are in the room but not at the table (e.g. after the player count shrank) */
+export function unseatedConnected(r: RoomData): Member[] {
+  return Object.values(r.members).filter((m) => m.connected && seatOf(r, m.playerId) === null);
+}
+
+/** start: unseated members sit down first (host first), then empty seats get distinct random roster CPUs */
 export function fillSeats(r: RoomData, rnd: () => number = Math.random): void {
   const act = roomSeats(r);
-  const unseated = Object.values(r.members)
-    .filter((m) => m.connected && seatOf(r, m.playerId) === null)
-    .sort((a, b) => a.joinedAt - b.joinedAt);
+  const unseated = unseatedConnected(r).sort((a, b) => Number(b.playerId === r.hostId) - Number(a.playerId === r.hostId) || a.joinedAt - b.joinedAt);
   for (const m of unseated) {
-    const s = act.find((x) => r.seats[x].kind === 'empty');
+    // freeSeatList includes CPU seats in the lobby: a host/member who stood up still gets back in
+    const s = freeSeatList(r)[0];
     if (s === undefined) break;
     r.seats[s] = { kind: 'human', playerId: m.playerId };
   }
   for (const s of act) if (r.seats[s].kind === 'empty') r.seats[s] = { kind: 'cpu', characterId: pickCharacter(r, rnd) };
+}
+
+/** start: anyone still without a seat cannot play; remove them (and hand over the host if needed) */
+export function dropUnseatedMembers(r: RoomData): string[] {
+  const gone = unseatedConnected(r).map((m) => m.playerId);
+  for (const pid of gone) removeMember(r, pid);
+  return gone;
 }
 
 /** a roster character nobody at the table is (optionally of one level) */

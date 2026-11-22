@@ -15,7 +15,7 @@ import { h } from './dom';
 import { screenHeader } from './howto';
 import { enhanceHScroll } from './hscroll';
 import { loc, t, tMaybe, type Key } from './i18n';
-import { btn, ICONS, segmented, toggle } from './overlay';
+import { ICONS, segmented, toggle } from './overlay';
 import { modeSelect, builtInModeNames } from './modeSelect';
 import { customMode, deleteCustomMode, draftFrom } from '../app/customModes';
 import { BUILTIN_MODES, modeFromTemplate, type ModeDef } from '../engine/modes';
@@ -97,6 +97,10 @@ let tipFor: HTMLElement | null = null;
 const tipOff = (e: Event) => {
   if (e.type === 'keydown' && (e as KeyboardEvent).key !== 'Escape') return;
   if (e.type === 'pointerdown' && (tipEl?.contains(e.target as Node) || tipFor?.contains(e.target as Node))) return;
+  if (e.type === 'keydown') {
+    e.preventDefault();
+    e.stopPropagation();
+  }
   closeTip();
 };
 function closeTip(): void {
@@ -334,6 +338,7 @@ export function ruleSelect(items: RuleSelectItem[], label: string, variant?: 'so
       (document.activeElement as HTMLElement)?.click();
     } else if (e.key === 'Escape' || e.key === 'Tab') {
       e.preventDefault();
+      if (e.key === 'Escape') e.stopPropagation();
       close(true);
     }
   });

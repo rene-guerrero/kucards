@@ -6,7 +6,8 @@
  * Server side (what one seat may see):
  *  - hands: its own, plus the ones engine `visibleHands` allows (Parejas with partnerOpen: the partner's);
  *    every other hand only as a COUNT. Once the round is over every hand is public (cards are counted).
- *  - the deck: only its size. MatchState.rng is replaced by 0 (the deal is a deterministic function of it).
+ *  - the deck: only its size. MatchState.rng and round.seed are removed (both are the deterministic
+ *    source of the deal).
  *  - card ids are an index into the deterministic deck (buildDeck), so an id reveals the face: hidden
  *    cards never carry their id (placeholders have negative ids), and `drawnCardId` of a seat the
  *    receiver may not see is dropped.
@@ -116,6 +117,8 @@ export function seatView(match: MatchState, seat: Seat, legal: Move[], turnDeadl
     };
     delete out.outPoints;
     delete out.challenge;
+    // the pre-deal RNG state, with the deck spec and rules, reconstructs every hidden hand
+    delete out.seed;
     round = JSON.parse(JSON.stringify(out));
   }
   const m = JSON.parse(JSON.stringify({ ...match, round: null })) as Record<string, unknown>;
