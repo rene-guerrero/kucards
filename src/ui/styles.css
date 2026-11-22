@@ -2836,6 +2836,29 @@ button.ng-seat:hover {
 .menu-actions .row.menu-row > .btn {
   min-width: 0;
 }
+/* only the icon row (Ajustes · Cómo jugar · Acerca de · pantalla completa) gets the Pause look;
+   the Jugar en línea / Jugar con amigos row above keeps its own styles */
+.menu-actions .row.menu-row:not(.menu-net) > .btn {
+  /* the in-game Pause button's look (icon-btn), without changing each button's width */
+  height: 46px;
+  min-height: 46px;
+  border: 0;
+  border-radius: 16px;
+  background: rgba(10, 21, 28, 0.72);
+  color: var(--cream);
+  box-shadow:
+    0 3px 0 rgba(0, 0, 0, 0.45),
+    inset 0 0 0 2px rgba(255, 246, 230, 0.14);
+}
+.menu-actions .row.menu-row:not(.menu-net) > .btn:hover {
+  filter: none;
+}
+.menu-actions .row.menu-row:not(.menu-net) > .btn:active {
+  transform: translateY(2px) scale(0.94);
+  box-shadow:
+    0 3px 0 rgba(0, 0, 0, 0.45),
+    inset 0 0 0 2px rgba(255, 246, 230, 0.14);
+}
 .menu-actions .row.menu-row > .btn.about-btn {
   flex: 0 0 auto;
   width: 52px;
@@ -3837,6 +3860,7 @@ button.ng-seat:hover {
 }
 .resp-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .resp-row .btn {

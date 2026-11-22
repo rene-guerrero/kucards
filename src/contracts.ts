@@ -97,10 +97,11 @@ export interface MatchSetup {
   /** 2 vs 2 with partners across (4 players; Codo a codo is always 2 vs 2 side by side) */
   teams?: boolean;
   /**
-   * Codo a codo only: is the human's partner the neighbour who plays right AFTER them (seat 1, teams
-   * [[0,1],[2,3]], default) or right BEFORE them (seat 3, teams [[0,3],[1,2]])? The app picks at random.
+   * Side seating only: "Cambiar de lado" swaps the human's seat with their partner's. Teams stay
+   * [[0,1],[2,3]] (the partner is always the next seat); only the two avatars/identities change places,
+   * so the rivals keep their seats. Picked in the lobby and kept for the rematch.
    */
-  partnerSide?: 'after' | 'before';
+  swappedSeats?: boolean;
   /** a player-made mode's deck list (engine/modes: DeckSpec); built-in modes build theirs from the rules */
   deck?: import('./engine/modes').DeckSpec;
   /** a two-sided deck's night side (with `deck` as its day side) */
@@ -190,6 +191,8 @@ export interface RoundState {
 
 export interface MatchState {
   rules: RuleSettings;
+  /** the setup that created the match, kept so a rematch keeps the same mode, seating, seat swap and deck */
+  setup?: MatchSetup;
   mode: GameMode;
   /** a player-made mode's deck list (MatchSetup.deck; the day side of a two-sided deck); absent = built from the rules */
   deckSpec?: import('./engine/modes').DeckSpec;

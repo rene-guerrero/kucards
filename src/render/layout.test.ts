@@ -423,16 +423,16 @@ describe('the whole table at phone and desktop sizes', () => {
   });
 });
 
-describe('new-game preview = table (partner side)', () => {
-  it('Codo a codo partnerSide after = right, before = left; 2 vs 2 Enfrente partner on top', async () => {
+describe('new-game preview = table (partner seating)', () => {
+  it('Codo a codo partner on the right (even after the avatar swap); 2 vs 2 Enfrente partner on top', async () => {
     const { createMatch, DEFAULT_RULES } = await import('../engine');
     const sideOf = (m: { seats: number[]; teams?: number[][] | null }) => {
       const s = seatSides(m.seats, m.teams);
       const partner = m.teams!.find((t) => t.includes(0))!.find((x) => x !== 0)!;
       return s[partner];
     };
-    expect(sideOf(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 4, partnerSide: 'after' }, 1))).toBe('lowerRight');
-    expect(sideOf(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 4, partnerSide: 'before' }, 1))).toBe('lowerLeft');
+    expect(sideOf(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 4 }, 1))).toBe('lowerRight');
+    expect(sideOf(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 4, swappedSeats: true }, 1))).toBe('lowerRight');
     expect(sideOf(createMatch(DEFAULT_RULES, { mode: 'classic', players: 4, teams: true }, 1))).toBe('top');
   });
 });

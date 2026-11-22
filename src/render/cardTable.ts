@@ -3058,10 +3058,10 @@ export class CardTable implements TableView {
     if (!w) this.hidePenBadge();
   }
 
-  /** a translucent shield dome pops over the victim's seat */
   /**
-   * an Escudo / Espejo answering a penalty: the card leaves its player's hand and lands on the pile, then
-   * tucks just under the top card (the engine puts it there: the pile's top and colour don't change)
+   * an Escudo / Espejo answering a penalty: the card leaves its player's hand and lands on the pile.
+   * A shield becomes the new top card (and sets the colour in play); a mirror tucks just under the top
+   * card, leaving the top and colour unchanged (as the engine does).
    */
   private async respondCard(seat: Seat, card: Card, g: number): Promise<void> {
     this.remember(card);
@@ -3084,21 +3084,26 @@ export class CardTable implements TableView {
     await this.flyToPile(seat, o, true, dragged, h.length === 0, g);
     if (!this.live(g)) return;
     this.land(o, false);
-    // under the top card: swap it with the one below and settle both
-    const n = this.pile.length;
-    if (n >= 2) {
-      const top = this.pile[n - 2];
-      this.pile[n - 2] = o;
-      this.pile[n - 1] = top;
-      const job = (x: CardObj, k: number) => {
-        const pose = this.pilePose(k, x, newPose());
-        x.pos.copy(pose.pos);
-        x.quat.copy(pose.quat);
-        x.s = pose.s;
-      };
-      job(o, n - 2);
-      job(top, n - 1);
-      this.kick();
+    if (card.face.kind === 'shield') {
+      // the shield is the new top card: it sets the colour in play, like any other card played on the pile
+      this.setActiveColor(card.face.color);
+    } else {
+      // under the top card: swap it with the one below and settle both
+      const n = this.pile.length;
+      if (n >= 2) {
+        const top = this.pile[n - 2];
+        this.pile[n - 2] = o;
+        this.pile[n - 1] = top;
+        const job = (x: CardObj, k: number) => {
+          const pose = this.pilePose(k, x, newPose());
+          x.pos.copy(pose.pos);
+          x.quat.copy(pose.quat);
+          x.s = pose.s;
+        };
+        job(o, n - 2);
+        job(top, n - 1);
+        this.kick();
+      }
     }
     this.trimPile();
     this.platesDirty();

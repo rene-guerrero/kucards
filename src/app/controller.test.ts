@@ -2,16 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { GameEvent, GameMode, Move, Seat } from '../contracts';
 import { engine, giveOptions, multiPlayOptions, RULE_PRESETS } from '../engine';
 import { setupOf } from '../engine/testutil';
+import { sanitizeModeDef, type ModeDef } from '../engine/modes';
 import { GameController, type GameHud, type GameUi, type GameView } from './controller';
 
 /** a table + HUD that answer at once: the human plays its first playable card (or taps the deck) */
-function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seating?: 'across' | 'side'; partnerSide?: 'after' | 'before'; tapKu?: boolean; partnerOpen?: boolean; clock?: { roundMin: number; moveSec: number; finalSec: number }; multi?: boolean } = {}) {
+function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seating?: 'across' | 'side'; swappedSeats?: boolean; tapKu?: boolean; partnerOpen?: boolean; clock?: { roundMin: number; moveSec: number; finalSec: number }; multi?: boolean; target?: number; rematch?: boolean; custom?: ModeDef } = {}) {
   const preset = RULE_PRESETS.find((p) => p.id === mode)!;
-  const rules = { ...preset.rules, target: 200, jumpIn: true, sevenZero: !opts.seating && seed % 2 === 0, partnerPass: true, partnerShield: true, 'power.shield': true, 'power.mirror': true, 'power.swap': true, 'power.sweep': true, wild4Challenge: true, ...(opts.partnerOpen === false ? { partnerOpen: false } : {}), ...(opts.multi ? { multiPlay: true, numberFinish: true } : {}) };
+  const rules = { ...preset.rules, target: opts.target ?? 200, jumpIn: true, sevenZero: !opts.seating && seed % 2 === 0, partnerPass: true, partnerShield: true, 'power.shield': true, 'power.mirror': true, 'power.swap': true, 'power.sweep': true, wild4Challenge: true, ...(opts.partnerOpen === false ? { partnerOpen: false } : {}), ...(opts.multi ? { multiPlay: true, numberFinish: true } : {}) };
   const open: { seat: Seat; n: number | null; over: boolean }[] = [];
   // eslint-disable-next-line prefer-const
   let ctl: { match: { round?: { over?: boolean } | null } } | null = null;
-  const match = engine.createMatch(rules, setupOf(mode, players, opts.seating, opts.partnerSide), seed);
+  const match = engine.createMatch(rules, { ...setupOf(mode, players, opts.seating, opts.swappedSeats), ...(opts.seating ? { teams: true } : {}), ...(opts.custom ? { custom: opts.custom } : {}) }, seed);
   const events: GameEvent[] = [];
   let picks = 0;
   /** prompts that only offered the deck while a penalty was pending (should be auto-drawn instead) */
@@ -74,7 +75,7 @@ function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seati
     },
     pickTarget: async (seats) => seats[0],
     kuPop: async () => {},
-    showResponse: async (o) => (o.canShield ? 'shield' : o.canMirror ? 'mirror' : 'accept'),
+    showResponse: async (o) => (opts.multi ? 'accept' : o.canShield ? 'shield' : o.canMirror ? 'mirror' : o.stacks?.length ? { stack: o.stacks[0].cardId } : 'accept'),
     notice: () => {},
     closeAll: () => {},
     setClock: (ms, urgent) => void clocks.push([ms, urgent]),
@@ -82,6 +83,7 @@ function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seati
   let summaries = 0;
   let ended = false;
   let exited = false;
+  let rematches = 0;
   const ui: GameUi = {
     hud,
     say: () => {},
@@ -94,6 +96,10 @@ function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seati
     },
     matchEnd: async () => {
       ended = true;
+      if (opts.rematch && rematches === 0) {
+        rematches++;
+        return 'rematch';
+      }
       return 'menu';
     },
     t: (k) => k,
@@ -115,7 +121,7 @@ function harness(mode: GameMode, players: 2 | 3 | 4, seed: number, opts: { seati
     clock: opts.clock,
   });
   ctl = c as unknown as typeof ctl;
-  return { c, events, open, flow, music, clocks, get summaries() { return summaries; }, get mustDrawPicks() { return mustDrawPicks; }, get ended() { return ended; }, get exited() { return exited; }, get kuState() { return kuState; } };
+  return { c, events, open, flow, music, clocks, get summaries() { return summaries; }, get mustDrawPicks() { return mustDrawPicks; }, get ended() { return ended; }, get exited() { return exited; }, get kuState() { return kuState; }, get rematches() { return rematches; } };
 }
 
 describe('GameController (offline loop)', () => {
@@ -158,10 +164,25 @@ describe('GameController (offline loop)', () => {
     const side = harness('sideBySide', 4, 12, { seating: 'side' });
     await side.c.run();
     expect(side.open.some((o) => o.seat === 1 && o.n !== null)).toBe(true);
-    const before = harness('sideBySide', 4, 14, { seating: 'side', partnerSide: 'before' });
-    await before.c.run();
-    expect(before.open.some((o) => o.seat === 3 && o.n !== null)).toBe(true);
-    expect(before.c.match.over).toBe(true);
+    const swapped = harness('sideBySide', 4, 14, { seating: 'side', swappedSeats: true });
+    await swapped.c.run();
+    // the avatar swap is display-only: the partner is still seat 1 to the engine
+    expect(swapped.open.some((o) => o.seat === 1 && o.n !== null)).toBe(true);
+    expect(swapped.c.match.over).toBe(true);
+  }, 20_000);
+
+  it('a rematch keeps a custom side-by-side setup and the seat swap', async () => {
+    const custom = sanitizeModeDef({
+      id: 'custom-side', name: 'Duetos', icon: 'users', base: 'classic', teams: 'optional', seating: 'side',
+      deck: { numbers: { zero: 1, each: 2, minValue: 1 }, perColor: [], wild: [] }, rules: { target: 1 },
+    });
+    const h = harness('classic', 4, 17, { seating: 'side', swappedSeats: true, custom, target: 1, rematch: true });
+    await h.c.run();
+    expect(h.rematches).toBe(1);
+    expect(h.c.match.teams).toEqual([[0, 1], [2, 3]]);
+    expect(h.c.match.custom?.id).toBe('custom-side');
+    expect(h.c.match.setup?.swappedSeats).toBe(true);
+    expect(h.c.match.setup?.custom?.id).toBe('custom-side');
   }, 20_000);
 
   it('keeps the partner hand hidden when partnerOpen is off', async () => {

@@ -64,6 +64,16 @@ export function sanitizeModeBase(raw: unknown, isBuiltIn: (id: string) => boolea
   };
 }
 
+/**
+ * Are partners sitting side by side? A mode may allow side seating yet have no teams in play (2–3
+ * players, or the host chose Individual), so the seating and the 2 vs 2 teams must both be checked.
+ * The engine, both lobby previews and the online protocol share this so they always agree on who the
+ * human's partner is.
+ */
+export function sideSeating(def: ModeBase, players: number, teamsOn: boolean): boolean {
+  return def.seating === 'side' && def.teams !== 'off' && players === 4 && teamsOn;
+}
+
 /** the rules a mode plays with: the player's settings, then what the mode always enforces */
 export function applyForced<R extends ModeRules>(mode: Pick<ModeBase, 'forced'>, rules: R): R {
   return mode.forced ? ({ ...rules, ...mode.forced } as R) : ({ ...rules } as R);

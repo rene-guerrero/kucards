@@ -137,7 +137,10 @@ export function startHudPreview(overlay: Overlay, s: AppSettings): void {
     'div.hud-preview-bar',
     btn('Color', async () => say(await hud.pickColor()), 'secondary'),
     btn('Target', async () => say(String(await hud.pickTarget(seats.filter((x) => x !== 0), t('hud.pickSwap')))), 'secondary'),
-    btn('Resp', async () => say(await hud.showResponse({ total: 4, canShield: true, canMirror: true, ms: 5000 })), 'secondary'),
+    btn('Resp', async () => {
+      const choice = await hud.showResponse({ total: 4, canShield: true, canMirror: true, stacks: [{ cardId: 1, label: '+2 Sol' }, { cardId: 2, label: '+4' }], canAccept: false, ms: 5000 });
+      say(typeof choice === 'object' ? `stack ${choice.stack}` : choice);
+    }, 'secondary'),
     btn('¡KU!', () => void hud.kuPop(players[1].name), 'secondary'),
     btn('Event', () => {
       const ev = fakeEvents[evI++ % fakeEvents.length];

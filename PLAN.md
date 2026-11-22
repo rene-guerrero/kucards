@@ -77,10 +77,12 @@ and **+2**. Plus 4 **Comodín** (wild) and 4 **Comodín +4**.
 | swap | Cambio / Swap | wild: choose a player and swap hands, then pick a colour | 2 |
 | shield | Escudo / Shield | played **in response** to a draw penalty: you draw nothing and the stack is cleared | 1 per colour |
 | sweep | Barrida / Sweep | coloured: discard every other card of that colour from your hand | 1 per colour |
-| mirror | Espejo / Mirror | played **in response** to a draw penalty: the whole stack goes back to whoever played the last card | 1 per colour |
+| mirror | Espejo / Mirror | played **in response** to a draw penalty: the whole stack goes back to whoever played the last card and the play direction reverses | 1 per colour |
 
 Shield and mirror can be played on top of a matching colour like normal cards (no effect then), or out of
-turn during a **response window** (see §3).
+turn during a **response window** (see §3). A shield played in response becomes the new top card and sets
+the colour in play; a mirror stays tucked under the top card. The bounced player then gets the same answer
+options (shield, another mirror, or, when stacking is enabled, a playable +N card).
 
 ---
 
@@ -184,6 +186,13 @@ Presets (the `RulePreset` mechanism), each fully data-driven:
   A1 → A2 → B1 → B2. A +2 or a skip aimed at the next player can land on your own partner, and a Vuelta
   decides which team gets hit. The CPU has to account for this: it holds penalties until the next seat is
   an opponent, and uses Vuelta to turn a penalty away from its partner.
+
+The neighbour after seat 0 (right) is always the partner. "Cambiar de lado" / "Switch sides" is a
+display-only swap: my avatar/name appears at the partner's seat and my partner's avatar/name appears at
+the bottom seat; the rivals keep their seats and the teams stay `A A B B`. The new-game preview, the
+offline table, the online lobby and the online table apply the same swap, and the flag is kept in the
+match setup so a rematch repeats the same mode, seating, seat swap and deck instead of falling back to
+across seating.
 
 "Side 2 Side" is the name of a mode in the official mobile app of a branded card game. **We do not use
 that name**, only the generic mechanic (partners seated side by side), under our own name *Codo a codo*.

@@ -27,18 +27,21 @@
  *    (offender draws 2). The offender may still `callKu` to close it. It also closes when the seat on
  *    turn plays / draws / passes / accepts / responds / challenges, when anybody jumps in, or on
  *    `closeWindow`.
- *  - 'penalty': a pending penalty whose victim holds a shield or mirror, or (rule `partnerShield`) whose
- *    victim's partner holds a shield (`penaltyResponders()`). `seats` = who may `respond`, `victim` = the
- *    seat on turn that draws if nobody does; `closeWindow` = the victim accepts.
+ *  - 'penalty': a pending penalty whose victim can answer (shield, mirror, challenge or, when stacking is
+ *    on, a playable +N), plus (rule `partnerShield`) a partner holding a shield (`penaltyResponders()`).
+ *    `seats` = who may `respond`, `victim` = the seat on turn; `closeWindow` = the victim accepts when no
+ *    stack is possible.
  *  Only one window exists at a time (a ¡Ku! slip while a penalty window opens is forgiven).
  *
- * Shield (respond): the stack is cancelled, the shield goes UNDER the top card (top card and active
- *   colour unchanged), 'shield' event. The victim then keeps the turn as if no penalty had been played.
+ * Shield (respond): the stack is cancelled, the shield is played ON TOP of the pile and becomes the new
+ *   top card (setting the colour in play), 'shield' event. The victim then keeps the turn as if no
+ *   penalty had been played.
  * Mirror (respond, victim only): the whole stack goes back to `pendingFrom` ('mirror' event; the mirror
- *   goes under the top card); the mirroring seat becomes `pendingFrom`, so the new victim may mirror it
- *   back or shield it (no stacking, no challenge after a mirror), else draws at once. Once a penalty has
- *   been mirrored, whatever ends it (draw or shield), play resumes with the seat AFTER the original
- *   victim (`mirrorVictim`, engine-internal): the mirror used that seat's turn.
+ *   goes under the top card) and the direction reverses ('reverse' event). The mirroring seat becomes
+ *   `pendingFrom`, so the new victim may answer with a shield, another mirror or (if stacking is on) a
+ *   playable +N, else draws at once (no challenge after a mirror). Whatever ends it (draw or shield),
+ *   play resumes with the seat AFTER the original victim (`mirrorVictim`, engine-internal) in the NEW
+ *   direction: the mirror used that seat's turn.
  * A response card that empties the responder's hand wins the round (a mirrored stack is drawn first).
  *
  * Challenge (always on, every mode; wild4 and draw10): the victim of a pending wild penalty may
@@ -101,6 +104,7 @@ import { cardPoints, isWildKind, matchDeck, otherSideColor, PENALTY_DRAW, turnOv
 import { Rng } from './rng';
 import { modeRules } from './rules';
 import { modeDef } from './modes';
+import { sideSeating } from '../modes/core';
 
 const SEATS_FOR: Record<2 | 3 | 4, Seat[]> = { 2: [0, 2], 3: [0, 1, 3], 4: [0, 1, 2, 3] };
 
@@ -113,10 +117,8 @@ export function createMatch(rules: RuleSettings, setup: MatchSetup, seed = Date.
   const teamsOn = players === 4 && (md.teams === 'always' || (md.teams === 'optional' && !!setup.teams));
   const teams: MatchState['teams'] = !teamsOn
     ? undefined
-    : md.seating === 'side'
-      ? setup.partnerSide === 'before'
-        ? [[0, 3], [1, 2]] // side by side, partner plays just before the human
-        : [[0, 1], [2, 3]] // side by side: A A B B, partner plays just after the human
+    : sideSeating(md, players, teamsOn)
+      ? [[0, 1], [2, 3]] // side by side: A A B B, the partner is always the next seat
       : [[0, 2], [1, 3]]; // across: A B A B
   // a player-made mode plays its own rules (nothing forced on top) and its own deck (two-sided: its day
   // list `deck` and its night list `night`)
@@ -126,6 +128,7 @@ export function createMatch(rules: RuleSettings, setup: MatchSetup, seed = Date.
   const night = c ? (c.twoSided ? c.night : undefined) : setup.night;
   return {
     rules: mrules,
+    setup: { ...setup },
     mode: c ? c.base : setup.mode,
     ...(deck ? { deckSpec: deck } : {}),
     ...(night ? { nightSpec: night } : {}),
@@ -248,7 +251,6 @@ export const penaltyOf = (face: CardFace): number => face.draw ?? PENALTY_DRAW[f
 export function canStack(card: Card, r: RoundState, rules: RuleSettings): boolean {
   const mode = rules.stacking;
   if (mode !== 'same' && mode !== 'any') return false;
-  if (er(r).mirrorVictim != null) return false; // a mirrored stack can only be answered with shield / mirror
   const top = topCard(r).face;
   const d = penaltyOf(card.face);
   const td = penaltyOf(top);
@@ -730,17 +732,22 @@ function penaltyResponders(st: St, victim: Seat): Seat[] {
   return out;
 }
 
-/** the pending penalty now targets `victim`: it waits on them (window if someone may respond) or is drawn */
+/** the pending penalty now targets `victim`: it waits on them (window if they can answer) or is drawn */
 function aimPenalty(st: St, victim: Seat, keep: boolean): void {
-  const { r } = st;
+  const { m, r } = st;
   const responders = penaltyResponders(st, victim);
-  if (!responders.length && !keep) {
-    takePenalty(st, victim);
+  const canAnswer = responders.length > 0 || r.hands[victim].some((c) => canStack(c, r, m.rules)) || canChallenge(m, r, victim);
+  if (!canAnswer) {
+    if (!keep) takePenalty(st, victim);
+    else {
+      setTurn(st, victim);
+      if (r.window) setWindow(st, null);
+    }
     return;
   }
   setTurn(st, victim);
-  const w: ResponseWindow | null = responders.length ? { reason: 'penalty', seats: responders, victim } : null;
-  if (w || r.window) setWindow(st, w);
+  const w: ResponseWindow = { reason: 'penalty', seats: responders.length ? responders : [victim], victim };
+  setWindow(st, w);
 }
 
 function penalty(st: St, from: Seat, n: number, challenge: { illegal: boolean; proof?: number[] } | null): void {
@@ -781,9 +788,15 @@ function takePenalty(st: St, seat: Seat): void {
 function respond(st: St, seat: Seat, card: Card): void {
   const { r } = st;
   const hand = r.hands[seat];
+  const shield = card.face.kind === 'shield';
   hand.splice(hand.indexOf(card), 1);
-  r.discard.splice(r.discard.length - 1, 0, card); // under the top card: pile and active colour unchanged
-  if (card.face.kind === 'shield') {
+  if (shield) {
+    r.discard.push(card); // the shield is the new top card and sets the colour in play
+    r.activeColor = card.face.color ?? r.activeColor;
+  } else {
+    r.discard.splice(r.discard.length - 1, 0, card); // mirror: under the top card, colour unchanged
+  }
+  if (shield) {
     const mv = er(r).mirrorVictim;
     st.ev.push({ type: 'shield', seat, card });
     clearPenalty(st);
@@ -800,6 +813,9 @@ function respond(st: St, seat: Seat, card: Card): void {
     er(r).challenge = null;
     r.pendingFrom = seat;
     st.ev.push({ type: 'mirror', from: seat, to, total, card });
+    // a mirror turns the table around as well as bouncing the penalty back
+    r.direction = r.direction === 1 ? -1 : 1;
+    st.ev.push({ type: 'reverse', direction: r.direction });
     if (hand.length === 0) {
       drawCards(st, to, total, 'penalty');
       endRound(st, seat);

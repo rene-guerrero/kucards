@@ -31,8 +31,10 @@ export interface Scenario {
 }
 
 /** test shorthand for team seating: 'side' = the Codo a codo mode, 'across' = 2 vs 2 Enfrente in `mode` */
-export function setupOf(mode: GameMode, players: 2 | 3 | 4, seating?: Seating, partnerSide?: 'after' | 'before'): MatchSetup {
-  return seating === 'side' ? { mode: 'sideBySide', players: 4, partnerSide } : { mode, players, teams: seating === 'across' || undefined };
+export function setupOf(mode: GameMode, players: 2 | 3 | 4, seating?: Seating, swappedSeats?: boolean): MatchSetup {
+  return seating === 'side'
+    ? { mode: 'sideBySide', players: 4, ...(swappedSeats ? { swappedSeats: true } : {}) }
+    : { mode, players, teams: seating === 'across' || undefined };
 }
 
 /** a match mid-round with exactly these hands / pile / deck */

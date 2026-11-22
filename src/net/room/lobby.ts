@@ -49,6 +49,8 @@ export interface RoomData {
   playerCount: number;
   /** 2 vs 2 Enfrente (4 players, not Codo a codo) */
   teamPlay?: boolean;
+  /** side seating: each player's avatar/name is swapped with their partner's (rivals stay put) */
+  swappedSeats?: boolean;
   seats: SeatSlot[];
   members: Record<string, Member>;
   rules: RuleSettings;
@@ -252,6 +254,13 @@ export function setMode(r: RoomData, playerId: string, mode: GameMode, playerCou
   }
 }
 
+/** lobby, host only (side seating): swap each player's avatar/name with their partner's */
+export function setSwappedSeats(r: RoomData, playerId: string, swapped: boolean): void {
+  requireHost(r, playerId);
+  if (!isLobbyLike(r)) throw new LobbyError('bad_request', 'not in the lobby');
+  r.swappedSeats = swapped === true;
+}
+
 /** lobby, host only: play a player-made mode (null = back to the built-in mode) */
 export function setCustom(r: RoomData, playerId: string, raw: unknown, playerCount?: number, teamPlay = false): void {
   requireHost(r, playerId);
@@ -381,6 +390,7 @@ export function publicRoom(r: RoomData): PublicRoom {
     mode: r.mode,
     playerCount: r.playerCount,
     teamPlay: !!r.teamPlay,
+    swappedSeats: !!r.swappedSeats,
     ...(r.custom ? { custom: r.custom } : {}),
     seats,
     rules: { ...r.rules },

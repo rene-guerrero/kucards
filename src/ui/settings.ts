@@ -1,5 +1,5 @@
 /**
- * Ajustes: three tabs (Juego · Reglas · Imagen y sonido), ported from Kudominoes. The rule list is
+ * Ajustes: three tabs (Juego · Imagen y sonido · Reglas), ported from Kudominoes. The rule list is
  * rendered generically from the engine's RULE_SETTINGS descriptors, filtered by mode and grouped by
  * `group`, so new variants need no UI work.
  */
@@ -51,7 +51,7 @@ function gesturePicker(initial: ChatGesture[], face: FaceSpec | number, onChange
 }
 
 export type SettingsTab = 'game' | 'rules' | 'av';
-const ALL_TABS: SettingsTab[] = ['game', 'rules', 'av'];
+const ALL_TABS: SettingsTab[] = ['game', 'av', 'rules'];
 const MODES: GameMode[] = ['classic', 'action', 'cyclone', 'sideBySide'];
 
 export interface SettingsOpts {

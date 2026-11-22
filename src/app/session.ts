@@ -51,6 +51,17 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
     const c = character(lineup[seat as 1 | 2 | 3] ?? DEFAULT_LINEUP[seat as 1 | 2 | 3] ?? DEFAULT_LINEUP[1]);
     return { seat, name: c.name, face: c.face, level: c.level, style: c.style };
   });
+  // "Cambiar de lado": the two teammates exchange identities, not seats. The engine still has the human
+  // at seat 0, but the partner's avatar/name are shown there and the human's at the partner's seat.
+  const partnerSeat = match.teams?.find((t) => t.includes(0))?.find((s) => s !== 0);
+  if (match.setup?.swappedSeats && partnerSeat !== undefined) {
+    const me = players[0];
+    const partner = players[partnerSeat];
+    const mine = { name: me.name, face: me.face, level: me.level, style: me.style };
+    const theirs = { name: partner.name, face: partner.face, level: partner.level, style: partner.style };
+    players[0] = { ...me, ...theirs };
+    players[partnerSeat] = { ...partner, ...mine };
+  }
   const teamOf = (seat: Seat): 0 | 1 | undefined => (match.teams ? (match.teams[0].includes(seat) ? 0 : 1) : undefined);
 
   const avatars = new AvatarController();

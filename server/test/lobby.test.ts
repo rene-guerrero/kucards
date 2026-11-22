@@ -18,6 +18,7 @@ import {
   seatOf,
   setCpu,
   setMode,
+  setSwappedSeats,
   setRules,
   sit,
   type RoomData,
@@ -104,6 +105,18 @@ describe('seats, modes, rules, host', () => {
     expect(publicRoom(r).teams).toEqual([[0, 2], [1, 3]]);
     setMode(r, 'p1', 'classic', 3, true);
     expect(publicRoom(r).teams).toBeNull();
+  });
+
+  it('the host can swap the side-seating avatars and every client sees it, without moving teams', () => {
+    const r = newRoom('ABCD', 0);
+    join(r, 'p1');
+    setMode(r, 'p1', 'sideBySide', 2);
+    expect(publicRoom(r).swappedSeats).toBe(false);
+    expect(publicRoom(r).teams).toEqual([[0, 1], [2, 3]]);
+    expect(() => setSwappedSeats(r, 'p2', true)).toThrow(LobbyError);
+    setSwappedSeats(r, 'p1', true);
+    expect(publicRoom(r).swappedSeats).toBe(true);
+    expect(publicRoom(r).teams).toEqual([[0, 1], [2, 3]]);
   });
 
   it('rules are normalized on top of the preset', () => {

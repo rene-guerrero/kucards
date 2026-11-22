@@ -22,4 +22,16 @@ describe('voice phrases', () => {
     expect(phraseFor(wild('wild4', 'mar'))).toBe('Blue!');
     expect(phraseFor(play('number'))).toBeNull();
   });
+
+  it('calls out a multi-play once, on its last card', () => {
+    const multi = (kind: CardKind, more: boolean, id = 1): GameEvent => ({ type: 'play', seat: 0, more, card: { id, face: { kind, color: 'sol' } } as Card });
+    for (const kind of ['skip', 'reverse'] as CardKind[]) {
+      expect(phraseFor(multi(kind, true))).toBeNull();
+      expect(phraseFor(multi(kind, false))).toBe(kind === 'skip' ? 'Skip!' : 'Reverse!');
+    }
+    // intermediate and final cards of a longer run: still only one callout
+    expect(phraseFor(multi('skip', true, 2))).toBeNull();
+    expect(phraseFor(multi('skip', true, 3))).toBeNull();
+    expect(phraseFor(multi('skip', false, 4))).toBe('Skip!');
+  });
 });

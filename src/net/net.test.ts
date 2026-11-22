@@ -9,13 +9,14 @@ import { Perspective } from './perspective';
 import { isHidden, redactEvents, seatView, snapshotFor, withPlaceholders } from './redact';
 import { activeSeatsOf, teamsFor } from './protocol';
 import { setupOf } from '../engine/testutil';
+import { sanitizeModeDef } from '../engine/modes';
 import { displayCode, filterCodeChars, normalizeCode } from './identity';
 
 const rulesOf = (mode: GameMode, over: Partial<RuleSettings> = {}): RuleSettings => ({ ...RULE_PRESETS.find((p) => p.id === mode)!.rules, ...over } as RuleSettings);
 
 /** a random game driven by the engine: every batch of events with the state right after it */
 function* randomGame(mode: GameMode, players: 2 | 3 | 4, over: Partial<RuleSettings>, seed: number, seating?: 'across' | 'side'): Generator<{ events: GameEvent[]; after: MatchState }> {
-  let m = createMatch(rulesOf(mode, over), setupOf(mode, players, seating, 'after'), seed);
+  let m = createMatch(rulesOf(mode, over), setupOf(mode, players, seating), seed);
   const rng = new Rng(seed ^ 0x5bd1e995);
   for (let round = 0; round < 2 && !m.over; round++) {
     const st = startRound(m);
@@ -185,6 +186,20 @@ describe('room helpers and codes', () => {
     expect(teamsFor({ mode: 'classic', playerCount: 4, teamPlay: true })).toEqual([[0, 2], [1, 3]]);
     expect(teamsFor({ mode: 'classic', playerCount: 3, teamPlay: true })).toBeNull();
     expect(teamsFor({ mode: 'classic', playerCount: 4 })).toBeNull();
+  });
+  it('the lobby preview and the engine agree on a custom side mode, with or without the avatar swap', () => {
+    const custom = sanitizeModeDef({
+      id: 'custom-side', name: 'Duetos', icon: 'users', base: 'classic', teams: 'optional', seating: 'side',
+      deck: { numbers: { zero: 1, each: 2, minValue: 1 }, perColor: [], wild: [] }, rules: {},
+    });
+    for (const swappedSeats of [false, true]) {
+      const room = { mode: 'classic' as const, playerCount: 4, teamPlay: true, custom, swappedSeats };
+      const preview = teamsFor(room);
+      const engineTeams = createMatch(rulesOf('classic'), { mode: 'classic', players: 4, teams: true, swappedSeats, custom }, 1).teams;
+      expect(preview).toEqual(engineTeams);
+      expect(preview).toEqual([[0, 1], [2, 3]]);
+    }
+    expect(teamsFor({ mode: 'sideBySide', playerCount: 4, swappedSeats: true })).toEqual([[0, 1], [2, 3]]);
   });
   it('codes display as KUCA-XXXX and parse back', () => {
     expect(displayCode('7KQM')).toBe('KUCA-7KQM');

@@ -182,6 +182,16 @@ describe('penalty response window', () => {
     expect(r.hands[1]).toHaveLength(3);
   });
 
+  it('only a playable +N: a window opens so the dialog can offer the stack, never the draw', () => {
+    const d2 = card('draw2', 'sol');
+    const stack = card('draw2', 'mar');
+    const m = scenario({ rules: { ...rules, stacking: 'any' }, hands: { 0: [d2, num('mar', 1)], 1: [stack, num('mar', 3)] }, top: num('sol', 5) });
+    const a = play(m, { kind: 'play', seat: 0, cardId: d2.id }).match;
+    expect(a.round!.window).toEqual({ reason: 'penalty', seats: [1], victim: 1 });
+    expect(a.round!.turn).toBe(1);
+    expect(kinds(a)).toEqual(['play']); // no acceptPenalty while stacking is possible
+  });
+
   it('shield: the victim discards it, draws nothing and keeps the turn', () => {
     const d2 = card('draw2', 'sol');
     const sh = card('shield', 'coral');
@@ -201,9 +211,9 @@ describe('penalty response window', () => {
     expect(rb.window).toBeNull();
     expect(rb.turn).toBe(1);
     expect(rb.hands[1]).toHaveLength(1);
-    expect(rb.discard.at(-1)).toBe(d2); // the shield goes under the top card
-    expect(rb.discard.at(-2)).toBe(sh);
-    expect(rb.activeColor).toBe('sol');
+    expect(rb.discard.at(-1)).toBe(sh); // the shield is the new top card
+    expect(rb.discard.at(-2)).toBe(d2);
+    expect(rb.activeColor).toBe('coral'); // and it sets the colour in play
     expect(legalMoves(b.match).some((x) => x.kind === 'draw')).toBe(true); // a normal turn
   });
 
@@ -219,50 +229,77 @@ describe('penalty response window', () => {
     }
   });
 
-  it('mirror: the stack goes back to its player; play continues after the victim', () => {
+  it('mirror: the stack goes back to its player, the direction turns and play continues after the victim', () => {
     const d2 = card('draw2', 'sol');
     const mi = card('mirror', 'mar');
     const m = scenario({ rules, hands: { 0: [d2, num('mar', 1)], 1: [mi, num('mar', 3)], 2: [num('palma', 1)] }, top: num('sol', 5) });
     const a = play(m, { kind: 'play', seat: 0, cardId: d2.id }).match;
     const { match, events } = play(a, { kind: 'respond', seat: 1, cardId: mi.id });
     expect(events).toContainEqual(expect.objectContaining({ type: 'mirror', from: 1, to: 0, total: 2 }));
+    expect(events).toContainEqual({ type: 'reverse', direction: -1 });
     const r = match.round!;
     expect(r.hands[0]).toHaveLength(3);
     expect(r.hands[1]).toHaveLength(1);
     expect(r.window).toBeNull();
     expect(r.pendingDraw).toBe(0);
-    expect(r.turn).toBe(2);
+    expect(r.direction).toBe(-1);
+    expect(r.turn).toBe(0); // next after the original victim, in the new direction
+    expect(r.discard.at(-1)).toBe(d2); // the mirror stays under the top card
+    expect(r.discard.at(-2)).toBe(mi);
+    expect(r.activeColor).toBe('sol'); // the top card and colour are unchanged
   });
 
-  it('mirror chain: the bounced player may mirror back; no stacking after a mirror', () => {
+  it('mirror chain: the bounced player may mirror back or stack, and each mirror turns the table', () => {
     const d2 = card('draw2', 'sol');
     const mi0 = card('mirror', 'palma');
     const mi1 = card('mirror', 'mar');
     const m = scenario({ rules: { ...rules, stacking: 'any' }, hands: { 0: [d2, mi0, card('draw2', 'mar'), num('mar', 1)], 1: [mi1, num('mar', 3)], 2: [num('palma', 1)] }, top: num('sol', 5) });
     const a = play(m, { kind: 'play', seat: 0, cardId: d2.id }).match;
-    const b = play(a, { kind: 'respond', seat: 1, cardId: mi1.id }).match;
-    expect(b.round!.window).toEqual({ reason: 'penalty', seats: [0], victim: 0 });
-    expect(b.round!.turn).toBe(0);
-    expect(b.round!.pendingFrom).toBe(1);
-    expect(kinds(b)).toEqual(['respond', 'acceptPenalty']); // the +2 cannot be stacked on a mirrored stack
-    const c = play(b, { kind: 'respond', seat: 0, cardId: mi0.id });
+    const b = play(a, { kind: 'respond', seat: 1, cardId: mi1.id });
+    expect(b.match.round!.window).toEqual({ reason: 'penalty', seats: [0], victim: 0 });
+    expect(b.match.round!.turn).toBe(0);
+    expect(b.match.round!.direction).toBe(-1);
+    expect(b.match.round!.pendingFrom).toBe(1);
+    expect(kinds(b.match)).toEqual(['play', 'respond']); // stack the +2 or mirror back, never draw
+    const c = play(b.match, { kind: 'respond', seat: 0, cardId: mi0.id });
     expect(c.events).toContainEqual(expect.objectContaining({ type: 'mirror', from: 0, to: 1, total: 2 }));
+    expect(c.events).toContainEqual({ type: 'reverse', direction: 1 });
     const r = c.match.round!;
     expect(r.hands[1]).toHaveLength(3); // no response left: drawn at once
+    expect(r.direction).toBe(1);
     expect(r.turn).toBe(2); // play resumes after the original victim
   });
 
-  it('a shield ending a mirrored penalty also resumes after the original victim', () => {
+  it('the bounced player may stack a +N instead of drawing, keeping the reversed direction', () => {
+    const d2 = card('draw2', 'sol');
+    const mi = card('mirror', 'mar');
+    const stack = card('draw2', 'coral');
+    const m = scenario({ players: 3, rules: { ...rules, stacking: 'any' }, hands: { 0: [d2, stack, num('mar', 1)], 1: [mi, num('mar', 3)], 2: [num('palma', 1)] }, top: num('sol', 5) });
+    const a = play(m, { kind: 'play', seat: 0, cardId: d2.id }).match;
+    const b = play(a, { kind: 'respond', seat: 1, cardId: mi.id });
+    expect(b.match.round!.window).toEqual({ reason: 'penalty', seats: [0], victim: 0 });
+    expect(b.match.round!.direction).toBe(-1);
+    expect(kinds(b.match)).toEqual(['play']); // only the stack: no shield, no mirror, no draw
+    const c = play(b.match, { kind: 'play', seat: 0, cardId: stack.id });
+    expect(c.match.round!.pendingDraw).toBe(4);
+    expect(c.match.round!.pendingFrom).toBe(0);
+    expect(c.match.round!.turn).toBe(3); // 3-player seats are 0/1/3: next after the stacker, reversed
+    expect(c.match.round!.direction).toBe(-1);
+    expect(c.match.round!.window).toBeNull();
+  });
+
+  it('a shield ending a mirrored penalty also resumes after the original victim in the new direction', () => {
     const d2 = card('draw2', 'sol');
     const sh = card('shield', 'palma');
     const mi = card('mirror', 'mar');
     const m = scenario({ rules, hands: { 0: [d2, sh, num('mar', 1)], 1: [mi, num('mar', 3)] }, top: num('sol', 5) });
     const a = play(m, { kind: 'play', seat: 0, cardId: d2.id }).match;
     const b = play(a, { kind: 'respond', seat: 1, cardId: mi.id }).match;
+    expect(b.round!.direction).toBe(-1);
     const r = play(b, { kind: 'respond', seat: 0, cardId: sh.id }).match.round!;
     expect(r.hands[0]).toHaveLength(1);
     expect(r.pendingDraw).toBe(0);
-    expect(r.turn).toBe(2);
+    expect(r.turn).toBe(0);
   });
 
   it('with stacking the victim may also stack, which moves the window on', () => {

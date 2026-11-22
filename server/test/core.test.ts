@@ -214,6 +214,21 @@ describe('room core: Parejas visibility', () => {
   }
 });
 
+describe('room core: side seating', () => {
+  it('start keeps the avatar swap chosen in the lobby, without changing teams', () => {
+    const t = rig(5);
+    const a = t.join('pid-1');
+    t.send(a, { t: 'setMode', mode: 'sideBySide', playerCount: 4 });
+    t.send(a, { t: 'setSwappedSeats', swapped: true });
+    t.send(a, { t: 'start' });
+    expect(t.core.data!.match!.teams).toEqual([[0, 1], [2, 3]]);
+    expect(t.core.data!.match!.setup?.swappedSeats).toBe(true);
+    const room = t.socks[0].inbox.filter((m) => m.t === 'room').pop() as Extract<ServerMsg, { t: 'room' }>;
+    expect(room.room.teams).toEqual([[0, 1], [2, 3]]);
+    expect(room.room.swappedSeats).toBe(true);
+  });
+});
+
 describe('room core: moves', () => {
   it('rejects a move for another seat and a late out-of-turn move', () => {
     const t = rig(4);

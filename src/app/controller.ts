@@ -20,18 +20,19 @@
  *   At zero the round ends at once: every hand is shown face up for a beat, then the engine's `timeUp`
  *   verdict (fewest card points wins) is scored as any round end.
  */
-import type { Card, Color, Difficulty, EngineApi, GameEvent, Lineup, MatchState, Move, PlayStyle, Seat, TableView } from '../contracts';
+import type { Card, Color, Difficulty, EngineApi, GameEvent, Lineup, MatchSetup, MatchState, Move, PlayStyle, Seat, TableView } from '../contracts';
 import { colorSlot, COLORS, NIGHT_COLORS, isNightColor } from '../contracts';
 import type { RoundSummaryCtx, MatchEndCtx } from '../ui/summary';
 import type { HudPlayer, KuState, ResponseChoice, ResponseOpts, ScoreRow } from '../ui/hud';
 import type { FaceSpec } from '../roster';
 import { cardPoints } from '../engine/cards';
-import { timeUpWinner } from '../engine/game';
+import { penaltyOf, timeUpWinner } from '../engine/game';
 import { finalRanks } from '../engine/ranks';
 import { afterAutoDraw, AUTO_COLOR, timeoutMove } from '../engine/ai';
 import { DEFAULT_CLOCK, fitThink, inFinalMinute, moveMs, sanitizeClock, type ClockSettings } from '../engine/clock';
 import { voiceForEvent, VOICE_DELAY_MS } from '../audio/voice';
 import { powerSfxForEvent } from '../audio/sfx';
+import { t, type Key } from '../ui/i18n';
 
 /** what the controller needs from the HUD (src/ui/hud.ts Hud implements it) */
 export interface GameHud {
@@ -539,12 +540,16 @@ export class GameController {
       });
       this.o.clearSave?.();
       if (end === 'rematch' && !this.stopped) {
-        const side = !!m.teams && (m.teams[0].includes(1) || m.teams[0].includes(3));
-        this.match = this.o.engine.createMatch(
-          m.rules,
-          { mode: m.mode, players: m.seats.length as 2 | 3 | 4, teams: !!m.teams, partnerSide: side ? (m.teams![0].includes(3) ? 'before' : 'after') : undefined },
-          Date.now(),
-        );
+        // Reuse the original setup: rebuilding it from m.mode (the custom mode's *base*) would turn a
+        // custom side-by-side match into across seating and hand the human a different partner.
+        const setup: MatchSetup = m.setup ?? {
+          mode: m.mode,
+          players: m.seats.length as 2 | 3 | 4,
+          teams: !!m.teams,
+          swappedSeats: false,
+        };
+        this.match = this.o.engine.createMatch(m.rules, setup, Date.now());
+        if (m.clock) this.match.clock = { ...m.clock };
         this.o.view.reset();
         return true;
       }
@@ -657,20 +662,31 @@ export class GameController {
     const r = m.round!;
     const gone = () => this.stopped || this.match !== m || this.gen !== g;
     const legal = engine.legalMoves(m, 0).filter(isTurnMove);
-    // a penalty aimed at the human that can be answered: shield / mirror / challenge bar
+    // a penalty aimed at the human that can be answered: shield / mirror / challenge / stack bar
     const responds = legal.filter((x): x is Extract<Move, { kind: 'respond' }> => x.kind === 'respond');
     const challenge = legal.find((x) => x.kind === 'challenge');
-    if (responds.length || challenge) {
+    const stackMoves = r.pendingDraw > 0 ? legal.filter((x): x is Extract<Move, { kind: 'play' }> => x.kind === 'play') : [];
+    const stacks = [...new Set(stackMoves.map((p) => p.cardId))].map((cardId) => {
+      const c = r.hands[0].find((x) => x.id === cardId)!;
+      const color = c.face.color ? ` ${t(`color.${c.face.color}` as Key)}` : '';
+      return { cardId, label: t('hud.stack', { card: `+${penaltyOf(c.face)}${color}` }) };
+    });
+    let forcedStack: number | null = null;
+    if (responds.length || challenge || stacks.length) {
       const kindOf = (id: number) => r.hands[0].find((c) => c.id === id)?.face.kind;
       const shield = responds.find((x) => kindOf(x.cardId) === 'shield');
       const mirror = responds.find((x) => kindOf(x.cardId) === 'mirror');
-      // stacking is mandatory: when a stack is possible there is no accept, the hand is the answer
+      // stacking is mandatory: when a stack is possible there is no draw button
       const acc = legal.find((x) => x.kind === 'acceptPenalty');
-      const choice = await ui.hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, canChallenge: !!challenge, canStack: !acc, canAccept: !!acc, ms: 8000 });
+      const choice = await ui.hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, canChallenge: !!challenge, stacks, canAccept: !!acc, ms: 8000 });
       if (gone()) return;
-      const mv = choice === 'shield' ? shield : choice === 'mirror' ? mirror : choice === 'challenge' ? challenge : undefined;
-      if (mv) return this.act(mv);
-      if (acc) return this.act(acc);
+      if (typeof choice === 'object') {
+        if (stacks.some((x) => x.cardId === choice.stack)) forcedStack = choice.stack;
+      } else {
+        const mv = choice === 'shield' ? shield : choice === 'mirror' ? mirror : choice === 'challenge' ? challenge : undefined;
+        if (mv) return this.act(mv);
+      }
+      if (forcedStack === null && acc) return this.act(acc);
     }
     // a penalty the human cannot stack, challenge or answer: drawn for them after a short beat
     if (legal.length === 1 && legal[0].kind === 'acceptPenalty') {
@@ -682,12 +698,15 @@ export class GameController {
     const playable = [...new Set(plays.map((p) => p.cardId))];
     const drawLike = legal.find((x) => x.kind === 'draw' || x.kind === 'pass' || x.kind === 'acceptPenalty');
     // nothing playable: the pyramid over the deck is the only hint
-    if (r.pendingDraw > 0 && playable.length) ui.hud.notice(ui.t('game.acceptHint', { n: r.pendingDraw }));
+    if (forcedStack === null && r.pendingDraw > 0 && playable.length) ui.hud.notice(ui.t('game.acceptHint', { n: r.pendingDraw }));
     // multiPlay: cards that other cards of the same number may join (a tap selects, a drag plays the group)
     const joinable = this.o.multiPlayOptions ? joinableFor(m, plays, this.o.multiPlayOptions) : null;
     let choice: number | 'draw' | { cardId: number; extra: number[] };
     const passMove = legal.find((x) => x.kind === 'pass');
-    if (r.drewThisTurn && playable.length && passMove && ui.hud.askChoice) {
+    if (forcedStack !== null && playable.includes(forcedStack)) {
+      // picked from the response bar: keep the colour/target prompts below
+      choice = forcedStack;
+    } else if (r.drewThisTurn && playable.length && passMove && ui.hud.askChoice) {
       // the drawn card can be played: it lifts and a question (no escape) asks; time up = it is played
       view.markCard?.(playable[0]);
       const ans = await ui.hud.askChoice({
@@ -761,7 +780,7 @@ export class GameController {
       const shield = myResponds.find((x) => kindOf(x.cardId) === 'shield');
       const mirror = myResponds.find((x) => kindOf(x.cardId) === 'mirror');
       const aborted = new Promise<null>((res) => this.abortWaiters.push(() => res(null)));
-      const choice = await Promise.race([this.o.ui.hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, ms: Math.min(4000 * pace, this.moveTime() * 0.5) }), aborted]);
+      const choice = await Promise.race([this.o.ui.hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, canAccept: false, ms: Math.min(4000 * pace, this.moveTime() * 0.5) }), aborted]);
       const mv = choice === 'shield' ? shield : choice === 'mirror' ? mirror : undefined;
       if (mv && this.match === m) return this.act(mv);
     }

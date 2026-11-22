@@ -16,6 +16,7 @@ import { btn, ICONS, segmented } from './overlay';
 import { ruleSelect, type RuleSelectItem } from './settings';
 import { modeSelect } from './modeSelect';
 import { customMode } from '../app/customModes';
+import { sideSeating } from '../modes/core';
 import { isBuiltInMode, modeDef, type ModeDef } from '../engine/modes';
 
 type Slot = 1 | 2 | 3;
@@ -60,8 +61,8 @@ export interface NewGameStart {
   /** the characters in seats 1..3 (seats not in play hold unused characters) */
   lineup: Required<Lineup>;
   clock: ClockSettings;
-  /** Codo a codo: 'after' = partner on my right (seat 1), 'before' = on my left (seat 3) */
-  partnerSide?: 'after' | 'before';
+  /** Codo a codo: "Cambiar de lado" swapped the human and their partner's seats */
+  swappedSeats?: boolean;
 }
 
 export interface NewGameOpts {
@@ -71,9 +72,9 @@ export interface NewGameOpts {
   /** 2 vs 2 Enfrente picked (used with 4 players outside Codo a codo) */
   teams?: boolean;
   lineup: Lineup;
-  /** Codo a codo: which side the partner sits on (default 'after' = right) */
-  partnerSide?: 'after' | 'before';
-  onPartnerSide?(side: 'after' | 'before'): void;
+  /** Codo a codo: whether the human and their partner swapped seats (default false) */
+  swappedSeats?: boolean;
+  onSwappedSeats?(swapped: boolean): void;
   avatars: boolean;
   humanFace: number | import('kuavatars').FaceSpec;
   humanName: string;
@@ -149,21 +150,28 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
   let customId: string | null = o.customMode && customMode(o.customMode) ? o.customMode : null;
   let players: 2 | 3 | 4 = o.players;
   let teams2v2 = !!o.teams;
-  let partnerLeft = o.partnerSide === 'before';
+  let swappedSeats = !!o.swappedSeats;
   /** the mode being set up (a player-made one, or the built-in) */
   const def = (): ModeDef => (customId ? (customMode(customId) ?? modeDef(mode)) : modeDef(mode));
-  /** side by side (Codo a codo seating): always 4 players, 2 vs 2 */
-  const side = () => def().teams === 'always' && def().seating === 'side';
   /** 2 vs 2 forced (any seating) */
   const forcedTeams = () => def().teams === 'always';
   const count = () => (forcedTeams() ? 4 : players);
   /** team play: forced by the mode, or chosen (4 players) when the mode allows it */
   const isTeams = () => forcedTeams() || (def().teams === 'optional' && teams2v2 && players === 4);
+  /** the mode asks for side seating AND 2 vs 2 is really in play — the same test the engine uses */
+  const side = () => sideSeating(def(), count(), isTeams());
   const slots = () => CPU_SEATS[count()];
   let active: Slot = slots()[0];
   let shown = lu[active];
-  /** partners: team of a seat */
-  const teamOf = (s: Seat): 0 | 1 => (side() ? (s === 0 || s === (partnerLeft ? 3 : 1) ? 0 : 1) : ((s % 2) as 0 | 1));
+  /** partners: team of a seat. Side seating is always A A B B; swapping seats only moves the avatars. */
+  const teamOf = (s: Seat): 0 | 1 => (side() ? (s === 0 || s === 1 ? 0 : 1) : ((s % 2) as 0 | 1));
+  /** the seat the human's partner occupies (the next seat, right) */
+  const PARTNER_SLOT: Slot = 1;
+  /** the occupant shown at a slot after "Cambiar de lado" */
+  const shownAt = (s: Slot): { char: Character | null; mine: boolean } => {
+    if (side() && swappedSeats && s === PARTNER_SLOT) return { char: null, mine: true };
+    return { char: character(lu[s]), mine: false };
+  };
 
   // ── mode cards ──
   const modeCards = o.presets.map((p) => {
@@ -242,6 +250,7 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
     const meta = h('span.ng-seat-meta');
     const b = h('button.ng-seat', { type: 'button', class: `pos-${POS[s]}` }, face, name, meta);
     b.addEventListener('click', () => {
+      if (b.disabled) return; // after the swap this seat shows "me", not a pickable CPU
       active = s;
       shown = lu[s];
       refresh();
@@ -252,25 +261,23 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
     felt.append(b);
   }
   const meTeam = h('span.ng-team');
-  felt.append(
-    h(
-      'div.ng-seat.pos-bottom.me',
-      h('span.ng-seat-face', o.avatars ? staticFace(o.humanFace, 'idle', o.humanName) : h('span.ng-letter', o.humanName.slice(0, 1))),
-      h('span.ng-seat-name', o.humanName),
-      meTeam,
-    ),
-  );
-  // Codo a codo: the partner (and their character) moves to my other side
+  const meFace = h('span.ng-seat-face');
+  const meName = h('span.ng-seat-name');
+  const meMeta = h('span.ng-seat-meta');
+  felt.append(h('div.ng-seat.pos-bottom.me', meFace, meName, meMeta, meTeam));
+  // Codo a codo only: swap places with the partner (their avatar comes here, mine goes to their seat)
   const swapSide = h('button.link-btn.ng-swap-side', { type: 'button' }, t('newgame.swapSide'));
   swapSide.addEventListener('click', () => {
-    partnerLeft = !partnerLeft;
-    lu = { ...lu, 1: lu[3], 3: lu[1] };
-    if (active !== 2) active = active === 1 ? 3 : 1;
-    o.onLineup({ ...lu });
-    o.onPartnerSide?.(partnerLeft ? 'before' : 'after');
+    swappedSeats = !swappedSeats;
+    // the partner seat now shows my avatar: don't leave the roster picker pointing at "me"
+    if (swappedSeats && active === PARTNER_SLOT) {
+      active = ([2, 3] as Slot[]).find((s) => slots().includes(s)) ?? PARTNER_SLOT;
+      shown = lu[active];
+    }
+    o.onSwappedSeats?.(swappedSeats);
     renderSeats();
     refresh();
-    bump(partnerLeft ? 3 : 1);
+    bump(PARTNER_SLOT);
   });
   const faceNode = (c: Character, live: boolean): HTMLElement => (o.avatars ? (live ? liveFace(c.face, 'idle', c.name).el : staticFace(c.face, 'idle', c.name)) : h('span.ng-letter', c.name.slice(0, 1)));
   const renderSeat = (s: Slot) => {
@@ -278,16 +285,25 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
     const inUse = slots().includes(s);
     el.btn.hidden = !inUse;
     if (!inUse) return;
-    const c = character(lu[s]);
-    el.face.replaceChildren(faceNode(c, true));
-    el.name.textContent = c.name;
+    const at = shownAt(s);
+    const c = at.char;
     const partners = isTeams();
     const team = partners ? teamOf(s) : null;
     el.btn.classList.toggle('team-0', team === 0);
     el.btn.classList.toggle('team-1', team === 1);
-    const role = partners ? (team === teamOf(0) ? t(c.fem ? 'role.partnerF' : 'role.partner') : t('role.rival')) : null;
-    el.meta.replaceChildren(seatMeta(c, role));
-    el.btn.setAttribute('aria-label', `${t('newgame.seatAria')}: ${c.name}, ${levelLabel(c)}`);
+    el.btn.disabled = at.mine;
+    if (at.mine) {
+      el.face.replaceChildren(o.avatars ? staticFace(o.humanFace, 'idle', o.humanName) : h('span.ng-letter', o.humanName.slice(0, 1)));
+      el.name.textContent = o.humanName;
+      el.meta.replaceChildren(h('span', t('seat.you')));
+      el.btn.setAttribute('aria-label', t('seat.you'));
+    } else if (c) {
+      el.face.replaceChildren(faceNode(c, true));
+      el.name.textContent = c.name;
+      const role = partners ? (team === teamOf(0) ? t(c.fem ? 'role.partnerF' : 'role.partner') : t('role.rival')) : null;
+      el.meta.replaceChildren(seatMeta(c, role));
+      el.btn.setAttribute('aria-label', `${t('newgame.seatAria')}: ${c.name}, ${levelLabel(c)}`);
+    }
   };
   const renderSeats = () => {
     for (const s of [1, 2, 3] as Slot[]) renderSeat(s);
@@ -295,6 +311,17 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
     felt.classList.toggle('partners', isTeams());
     const team = isTeams() ? teamOf(0) : null;
     swapSide.hidden = !side();
+    // the bottom seat shows the partner's avatar after the swap; the rivals never move
+    const partnerHere = side() && swappedSeats ? character(lu[PARTNER_SLOT]) : null;
+    if (partnerHere) {
+      meFace.replaceChildren(faceNode(partnerHere, false));
+      meName.textContent = partnerHere.name;
+      meMeta.replaceChildren(seatMeta(partnerHere, t(partnerHere.fem ? 'role.partnerF' : 'role.partner')));
+    } else {
+      meFace.replaceChildren(o.avatars ? staticFace(o.humanFace, 'idle', o.humanName) : h('span.ng-letter', o.humanName.slice(0, 1)));
+      meName.textContent = o.humanName;
+      meMeta.replaceChildren();
+    }
     meTeam.textContent = team === null ? '' : team === 0 ? 'A' : 'B';
     felt.querySelector('.me')!.classList.toggle('team-0', team === 0);
   };
@@ -450,13 +477,18 @@ export function buildNewGame(o: NewGameOpts): HTMLElement {
   );
   const start = btn(
     t('newgame.start'),
-    () => o.onStart({ mode, ...(customId ? { custom: customId } : {}), players: count(), teams: !side() && isTeams(), lineup: { ...lu }, clock: { ...clock }, partnerSide: side() ? (partnerLeft ? 'before' : 'after') : undefined }),
+    () => o.onStart({ mode, ...(customId ? { custom: customId } : {}), players: count(), teams: isTeams(), lineup: { ...lu }, clock: { ...clock }, swappedSeats: side() ? swappedSeats : undefined }),
     'primary ng-start',
     h('span.btn-icon', { html: ICONS.play }),
   );
   start.dataset.autofocus = '';
 
   const applyMode = () => {
+    // the partner seat shows my avatar after the swap: never leave the picker pointing at it
+    if (side() && swappedSeats && active === PARTNER_SLOT) {
+      active = ([2, 3] as Slot[]).find((s) => slots().includes(s)) ?? PARTNER_SLOT;
+      shown = lu[active];
+    }
     // never hidden, only disabled: Codo a codo is always 4 players, 2 vs 2; teams need 4 players
     fixedNote.hidden = true;
     playersSeg.querySelector<HTMLButtonElement>('.rsel-btn')?.toggleAttribute('disabled', forcedTeams());

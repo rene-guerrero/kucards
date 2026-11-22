@@ -7,7 +7,7 @@ import type { FaceSpec } from 'kuavatars/faces';
  */
 import type { GameMode, RuleSettings, Seat } from '../contracts';
 import type { PublicRoom, QuickPhraseId, SeatOccupant } from '../net/protocol';
-import { activeSeatsOf, teamsFor, MAX_NAME_LENGTH, QUICK_PHRASES, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '../net/protocol';
+import { activeSeatsOf, sideSeatingRoom, teamsFor, MAX_NAME_LENGTH, QUICK_PHRASES, ROOM_CODE_LENGTH, ROOM_CODE_PREFIX } from '../net/protocol';
 import { Perspective } from '../net/perspective';
 import { displayCode, filterCodeChars } from '../net/identity';
 import { character, ROSTER } from '../roster';
@@ -342,6 +342,8 @@ export interface LobbyOpts {
   onShare(): void;
   onSeat(seat: Seat): void;
   onMode(mode: GameMode, count: number, teamPlay?: boolean): void;
+  /** host (side seating only): swap each player's avatar/name with their partner's */
+  onSwappedSeats?(swapped: boolean): void;
   onRules(): void;
   /** host: round limit / move times for the room */
   onClock(c: ClockSettings): void;
@@ -426,6 +428,8 @@ export function buildLobby(o: LobbyOpts): Lobby {
 
   let lastModeKey = '';
   let lastClockKey = '';
+  /** kept outside the mode-row rebuild: a rebuild would otherwise close over a stale room snapshot */
+  let currentSwapped = false;
   // one column on phones (code, controls, seats); two on wide screens (controls + seats | code + QR)
   const el = h(
     'section.screen.panel-screen.newgame.lobby.lb',
@@ -435,27 +439,40 @@ export function buildLobby(o: LobbyOpts): Lobby {
   );
 
   const update = (room: PublicRoom, me: { seat: Seat | null; isHost: boolean }) => {
+    currentSwapped = !!room.swappedSeats;
     const act = activeSeatsOf(room);
     // a fixed map of the table (first seat at the bottom): changing seats moves you, not the table
     const p = new Perspective(act[0], act);
     const myTeam = me.seat === null ? null : teamOfSeat(room, me.seat);
+    const tms = teamsFor(room);
+    const localTms = p.teams(tms);
+    const localMine = localTms ? (localTms[0].includes(0) ? 0 : 1) : 0;
+    const partnerSlot = localTms
+      ? (localTms[localMine] ?? []).find((x) => x !== 0 && act.includes(p.server(x))) ?? null
+      : null;
+    // "Cambiar de lado" swaps the two teammates' avatars/names, never their seats or the rivals
+    const swapped = !!room.swappedSeats && partnerSlot !== null && sideSeatingRoom(room);
+    const shownServer = (l: Seat): Seat =>
+      swapped && l === 0 ? p.server(partnerSlot!) : swapped && l === partnerSlot ? p.server(0) : p.server(l);
     for (const pos of [0, 1, 2, 3] as Seat[]) {
       const s = p.server(pos);
+      const shownS = shownServer(pos);
       const el = seatEls[pos];
       el.serverSeat = s;
       const used = act.includes(s);
       el.b.hidden = !used;
       if (!used) continue;
-      const occ = room.seats[s] ?? { kind: 'empty' };
+      const occ = room.seats[shownS] ?? { kind: 'empty' as const };
       const mine = occ.kind === 'human' && occ.playerId === o.myId;
-      const team = teamOfSeat(room, s);
+      const team = teamOfSeat(room, s); // the real seat keeps its team and its place on the table
+      const shownTeam = teamOfSeat(room, shownS);
       const side = team === null ? (mine ? 'us' : 'them') : team === (myTeam ?? 0) ? 'us' : 'them';
       // team-0 is always MY team (as on the offline screen), team-1 the rivals
       const rel = team === null ? null : team === (myTeam ?? 0) ? 0 : 1;
+      const shownRel = shownTeam === null ? null : shownTeam === (myTeam ?? 0) ? 0 : 1;
       el.b.className = `ng-seat pos-${POS[pos as 0 | 1 | 2 | 3]} ${side} occ-${occ.kind}${mine ? ' me' : ''}${rel !== null ? ` team-${rel}` : ''}`;
       // one order for every device: by server seat; with teams, team A's seats then team B's (each by seat).
       // The halves' colours follow (my team teal) without moving anybody.
-      const tms = teamsFor(room);
       el.b.style.order = String(tms ? (tms[0].includes(s) ? 0 : 10) + (tms[0].includes(s) ? tms[0] : tms[1]).indexOf(s) : s);
       if (occ.kind === 'human') {
         el.face.replaceChildren(o.avatars ? staticFace(occ.face, 'idle') : h('span.ng-letter', occupantName(occ).slice(0, 1).toUpperCase()));
@@ -467,22 +484,21 @@ export function buildLobby(o: LobbyOpts): Lobby {
           ...(mine && host ? [h('span.lobby-host-tag', `· ${t('lobby.host')}`)] : []),
         );
         el.b.setAttribute('aria-label', `${occupantName(occ)}${host ? `, ${t('lobby.host')}` : ''}`);
-        el.b.disabled = true;
       } else if (occ.kind === 'cpu') {
         const c = character(occ.characterId);
         el.face.replaceChildren(o.avatars ? staticFace(c.face, 'idle') : h('span.ng-letter', c.name.slice(0, 1)));
         el.name.textContent = c.name;
-        const role = team === null ? null : team === (myTeam ?? 0) ? t(c.fem ? 'role.partnerF' : 'role.partner') : t('role.rival');
+        const role = shownTeam === null ? null : shownRel === 0 ? t(c.fem ? 'role.partnerF' : 'role.partner') : t('role.rival');
         el.meta.replaceChildren(seatMeta(c, role));
         el.b.setAttribute('aria-label', `${c.name}, ${t(`level.${c.level}` as Key)}`);
-        el.b.disabled = false;
       } else {
         el.face.replaceChildren(h('span.lobby-empty', { html: ONLINE_ICONS.plus }));
         el.name.textContent = t('lobby.free');
         el.meta.replaceChildren(h('span', me.isHost ? t('lobby.randomCpu') : t('lobby.tapToSit')));
         el.b.setAttribute('aria-label', `${t('lobby.free')}: ${t('lobby.tapToSit')}`);
-        el.b.disabled = false;
       }
+      // clicking still addresses the real seat at this position, whoever's avatar is shown here
+      el.b.disabled = room.seats[s]?.kind === 'human';
     }
     const tp = !!room.teamPlay && room.playerCount === 4 && (room.custom ? room.custom.teams === 'optional' : room.mode !== 'sideBySide');
     const modeKey = `${me.isHost}|${room.mode}|${room.playerCount}|${tp}|${o.presetName(room.mode, room.rules)}|${room.custom?.id ?? ''}|${room.custom && customMode(room.custom.id) ? 1 : 0}`;
@@ -490,7 +506,7 @@ export function buildLobby(o: LobbyOpts): Lobby {
       lastModeKey = modeKey;
       // the same controls as the offline new-game screen (guests see them disabled)
       const host = me.isHost;
-      const side = room.custom ? room.custom.teams === 'always' : room.mode === 'sideBySide';
+      const side = sideSeatingRoom(room);
       // the shared game-mode dropdown; a room's player-made mode is listed even if this player lacks it
       const choices = modeChoices();
       if (room.custom && !choices.some((c) => c.id === room.custom!.id)) choices.push({ id: room.custom.id, label: room.custom.name, icon: room.custom.icon, custom: true });
@@ -534,7 +550,9 @@ export function buildLobby(o: LobbyOpts): Lobby {
       rules.querySelector<HTMLButtonElement>('.rsel-btn')?.toggleAttribute('disabled', !host);
       // a player-made mode this player doesn't have: save a copy
       const copyBtn = room.custom && !customMode(room.custom.id) ? btn(t('modes.copy'), () => o.onCopyMode?.(room.custom!), 'secondary lb-copy', icon(ONLINE_ICONS.plus)) : null;
-      modeRow.replaceChildren(rulesLine, ...(copyBtn ? [copyBtn] : []), h('div.ng-lines', h('div.ng-line', players), h('div.ng-line.ng-seating', teamsSeg)));
+      const swapSide = btn(t('newgame.swapSide'), () => o.onSwappedSeats?.(!currentSwapped), 'link-btn ng-swap-side');
+      swapSide.hidden = !host || !side;
+      modeRow.replaceChildren(rulesLine, ...(copyBtn ? [copyBtn] : []), h('div.ng-lines', h('div.ng-line', players), h('div.ng-line.ng-seating', teamsSeg, swapSide)));
     }
     felt.classList.toggle('partners', !!teamsFor(room));
     // my team is team B: its half (the second one) is the teal one

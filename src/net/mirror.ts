@@ -28,7 +28,7 @@ function anonymize(r: RoundState): void {
   for (let s = 1; s < r.hands.length; s++) if (r.hands[s].some((c) => !isHidden(c))) r.hands[s] = hiddenCards(r.hands[s].length);
 }
 
-/** cards under the top of the pile (shield / mirror / sweep go under it; the top stays) */
+/** cards under the top of the pile (mirror / sweep go under it; the top stays) */
 function underTop(discard: Card[], cards: Card[]): void {
   discard.splice(Math.max(0, discard.length - 1), 0, ...cards);
 }
@@ -100,7 +100,9 @@ export function applyEvent(m: MatchState, ev: GameEvent, faceOf: (id: number) =>
       break;
     case 'shield': {
       const c = takeOut(r.hands[ev.seat], null, 'shield');
-      underTop(r.discard, [c && !isHidden(c) ? c : { ...hiddenCard(), face: { kind: 'shield', color: null } }]);
+      const top = ev.card ?? (c && !isHidden(c) ? c : { ...hiddenCard(), face: { kind: 'shield', color: null } });
+      r.discard.push(top); // the shield is the new top card and sets the colour in play
+      r.activeColor = top.face.color ?? r.activeColor;
       r.pendingDraw = 0;
       r.pendingFrom = null;
       break;

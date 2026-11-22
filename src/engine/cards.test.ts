@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildDeck, cardPoints, createMatch, DEFAULT_RULES, matches, RULE_PRESETS, startRound } from '.';
+import { sanitizeModeDef } from './modes';
 
 const preset = (id: string) => RULE_PRESETS.find((p) => p.id === id)!.rules;
 
@@ -78,7 +79,23 @@ describe('deal', () => {
     expect(createMatch(DEFAULT_RULES, { mode: 'classic', players: 3, teams: true }).teams).toBeUndefined();
     expect(createMatch(DEFAULT_RULES, { mode: 'classic', players: 4 }).teams).toBeUndefined();
     expect(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 2 }).teams).toEqual([[0, 1], [2, 3]]);
-    expect(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 4, partnerSide: 'before' }).teams).toEqual([[0, 3], [1, 2]]);
+    // "Cambiar de lado" only swaps the avatars at seats 0 and 1: the teams (and rivals) never move
+    expect(createMatch(DEFAULT_RULES, { mode: 'sideBySide', players: 4, swappedSeats: true }).teams).toEqual([[0, 1], [2, 3]]);
+  });
+
+  it('a custom side mode with optional teams keeps side seating and the seat swap', () => {
+    const custom = sanitizeModeDef({
+      id: 'custom-side', name: 'Duetos', icon: 'users', base: 'classic', teams: 'optional', seating: 'side',
+      deck: { numbers: { zero: 1, each: 2, minValue: 1 }, perColor: [], wild: [] }, rules: {},
+    });
+    const setup = { mode: 'classic' as const, players: 4 as const, teams: true, custom };
+    expect(createMatch(DEFAULT_RULES, setup).teams).toEqual([[0, 1], [2, 3]]);
+    expect(createMatch(DEFAULT_RULES, { ...setup, swappedSeats: true }).teams).toEqual([[0, 1], [2, 3]]);
+    // no 2 vs 2 → no teams, even though the mode allows side seating
+    expect(createMatch(DEFAULT_RULES, { ...setup, teams: false }).teams).toBeUndefined();
+    // the setup is kept on the match so a rematch recreates the same seating and avatar swap
+    const swapped = { ...setup, swappedSeats: true };
+    expect(createMatch(DEFAULT_RULES, swapped, 1).setup).toEqual(swapped);
   });
 
   it('matches colour, number or kind', () => {

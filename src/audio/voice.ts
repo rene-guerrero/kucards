@@ -25,10 +25,12 @@ const COLOR_WORD: Record<string, string> = { coral: 'Red', mar: 'Blue', sol: 'Ye
 /**
  * the callout for a game event, or null. Skip, reverse and a wild's chosen colour (also the automatic
  * pick) speak on the card play; "Draw N!" speaks only when the penalty is actually drawn, with the final total.
+ * A multi-play puts one 'play' event per card down: every card but the last carries `more: true`, and only
+ * the last one speaks, so several skips / reverses / +2s fired in one move make a single callout.
  */
 export function phraseFor(ev: GameEvent): string | null {
   if (ev.type === 'draw') return ev.reason === 'penalty' ? drawPhrase(ev.count) : null;
-  if (ev.type !== 'play') return null;
+  if (ev.type !== 'play' || ev.more) return null;
   const f = ev.card.face;
   if (f.kind === 'skip' || f.kind === 'skipAll') return 'Skip!';
   if (f.kind === 'reverse') return 'Reverse!';

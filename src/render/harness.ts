@@ -474,7 +474,9 @@ async function shield() {
   if (!pen) return;
   const { victim } = pen;
   pen = null;
-  await send({ type: 'shield', seat: victim });
+  const card = synth({ kind: 'shield', color: round!.activeColor });
+  round!.hands[victim].push(card);
+  await send({ type: 'shield', seat: victim, card });
   await send({ type: 'window', window: null });
 }
 async function mirror() {

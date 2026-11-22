@@ -17,7 +17,7 @@ import { character, ROSTER } from '../roster';
 import { sanitizeFace } from 'kuavatars/faces';
 import { createTableView, type TableViewExt } from '../render';
 import { buildDeck } from '../engine/cards';
-import { giveOptions, multiPlayOptions } from '../engine/game';
+import { giveOptions, multiPlayOptions, penaltyOf } from '../engine/game';
 import { AUTO_COLOR } from '../engine/ai';
 import { AUTO_DRAW_MS, joinableFor } from './controller';
 import { RULE_PRESETS, RULE_SETTINGS } from '../engine/rules';
@@ -32,7 +32,7 @@ import { displayCode, normalizeCode, playerId, rememberRoom, cleanName } from '.
 import { Perspective } from '../net/perspective';
 import { applyEvent, applySnapshot, emptyMatch } from '../net/mirror';
 import { isHidden, withPlaceholders } from '../net/redact';
-import { CHAT_GESTURES, sanitizeGestures, TURN_TIMEOUT_MS, NEXT_ROUND_MS, type ChatGesture, type ErrorCode, type PublicRoom, type QuickPhraseId, type SeatView, type ServerMsg, type Snapshot } from '../net/protocol';
+import { CHAT_GESTURES, sanitizeGestures, sideSeatingRoom, teamsFor, TURN_TIMEOUT_MS, NEXT_ROUND_MS, type ChatGesture, type ErrorCode, type PublicRoom, type QuickPhraseId, type SeatView, type ServerMsg, type Snapshot } from '../net/protocol';
 import type { NearbyGame } from '../ui/online';
 import { copyMode, customMode, matchModeDef } from './customModes';
 import { rulesSheet } from '../ui/modeView';
@@ -48,7 +48,7 @@ import { presetName } from '../ui/settings';
 import { ChatButton } from '../ui/chat';
 import { allPresets, loadProfiles } from './ruleProfiles';
 import { h } from '../ui/dom';
-import { loc, t } from '../ui/i18n';
+import { loc, t, type Key } from '../ui/i18n';
 import { cardPoints } from '../engine/cards';
 import { requireLandscape } from './orientation';
 import { rulesFor, sanitizeRules } from './settings';
@@ -473,6 +473,7 @@ export class OnlineController {
           // built-in modes play their standard rules (read-only now): the room sets them on a mode change
           this.client?.send({ t: 'setMode', mode, playerCount: count, teamPlay: !!teamPlay });
         },
+        onSwappedSeats: (swapped) => this.client?.send({ t: 'setSwappedSeats', swapped }),
         onRules: () => this.editRules(),
         onCustom: (def) => this.client?.send({ t: 'setCustom', def, playerCount: this.room?.playerCount, teamPlay: this.room?.teamPlay }),
         onShowRules: () => this.showRules(),
@@ -819,13 +820,21 @@ export class OnlineController {
     const room = this.room;
     const p = this.persp;
     if (!room || !p) return { names, faces };
+    const tm = p.teams(teamsFor(room));
+    const localMine = tm ? (tm[0].includes(0) ? 0 : 1) : 0;
+    const partnerSlot = tm ? (tm[localMine] ?? []).find((x) => x !== 0) ?? null : null;
+    // "Cambiar de lado": identities swap between me and my partner; seats, teams and rivals do not move
+    const swapped = !!room.swappedSeats && partnerSlot !== null && sideSeatingRoom(room);
+    const shownLocal = (l: Seat): Seat =>
+      swapped && l === 0 ? partnerSlot! : swapped && l === partnerSlot ? 0 : l;
     for (const l of [0, 1, 2, 3] as Seat[]) {
-      const o = room.seats[p.server(l)] ?? { kind: 'empty' as const };
-      if (l === 0) {
-        names[0] = this.settings.playerName || (o.kind === 'human' ? o.name : t('seat.you'));
-        faces[0] = humanFace(this.settings.avatarFace ?? 0);
+      const from = shownLocal(l);
+      if (from === 0) {
+        names[l] = this.settings.playerName || t('seat.you');
+        faces[l] = humanFace(this.settings.avatarFace ?? 0);
         continue;
       }
+      const o = room.seats[p.server(from)] ?? { kind: 'empty' as const };
       names[l] = o.kind === 'empty' ? '' : occupantName(o);
       if (o.kind === 'human') faces[l] = sanitizeFace(o.face);
       else if (o.kind === 'cpu') faces[l] = character(o.characterId).face;
@@ -1421,18 +1430,29 @@ export class OnlineController {
     const plays = legal.filter((x): x is Extract<Move, { kind: 'play' }> => x.kind === 'play');
     const responds = legal.filter((x): x is Extract<Move, { kind: 'respond' }> => x.kind === 'respond');
     const challenge = legal.find((x) => x.kind === 'challenge');
-    if (responds.length || challenge) {
+    const stackMoves = r.pendingDraw > 0 ? plays : [];
+    const stacks = [...new Set(stackMoves.map((p) => p.cardId))].map((cardId) => {
+      const c = r.hands[0].find((x) => x.id === cardId)!;
+      const color = c.face.color ? ` ${t(`color.${c.face.color}` as Key)}` : '';
+      return { cardId, label: t('hud.stack', { card: `+${penaltyOf(c.face)}${color}` }) };
+    });
+    let forcedStack: number | null = null;
+    if (responds.length || challenge || stacks.length) {
       const kindOf = (cid: number) => r.hands[0].find((c) => c.id === cid)?.face.kind;
       const shield = responds.find((x) => kindOf(x.cardId) === 'shield');
       const mirror = responds.find((x) => kindOf(x.cardId) === 'mirror');
       const ms = windowEnds ? Math.max(1500, windowEnds - Date.now() - 300) : 8000;
-      // stacking is mandatory: when a stack is possible there is no accept, the hand is the answer
+      // stacking is mandatory: when a stack is possible there is no draw button
       const acc = legal.find((x) => x.kind === 'acceptPenalty');
-      const choice = await hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, canChallenge: !!challenge, canStack: !acc, canAccept: !!acc, ms: Math.min(ms, 8000) });
+      const choice = await hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, canChallenge: !!challenge, stacks, canAccept: !!acc, ms: Math.min(ms, 8000) });
       if (!this.live(id)) return;
-      const mv = choice === 'shield' ? shield : choice === 'mirror' ? mirror : choice === 'challenge' ? challenge : undefined;
-      if (mv) return this.send(mv);
-      if (acc) return this.send(acc);
+      if (typeof choice === 'object') {
+        if (stacks.some((x) => x.cardId === choice.stack)) forcedStack = choice.stack;
+      } else {
+        const mv = choice === 'shield' ? shield : choice === 'mirror' ? mirror : choice === 'challenge' ? challenge : undefined;
+        if (mv) return this.send(mv);
+      }
+      if (forcedStack === null && acc) return this.send(acc);
     }
     // a penalty I cannot stack, challenge or answer: drawn for me after a short beat
     if (legal.length === 1 && legal[0].kind === 'acceptPenalty') {
@@ -1443,13 +1463,16 @@ export class OnlineController {
     const playable = [...new Set(plays.map((p) => p.cardId))];
     const drawLike = legal.find((x) => x.kind === 'draw' || x.kind === 'pass' || x.kind === 'acceptPenalty');
     // nothing playable: the pyramid over the deck is the only hint
-    if (r.pendingDraw > 0 && playable.length) hud.notice(t('game.acceptHint', { n: r.pendingDraw }));
+    if (forcedStack === null && r.pendingDraw > 0 && playable.length) hud.notice(t('game.acceptHint', { n: r.pendingDraw }));
     // multi-plays (only on a plain turn, where the server lists a draw, or on a pending penalty, multiDraw2:
     // the copy does not track a draw kept)
     const joinable = legal.some((x) => x.kind === 'draw' || x.kind === 'acceptPenalty') ? joinableFor(m, plays, multiPlayOptions) : null;
     let choice: number | 'draw' | { cardId: number; extra: number[] };
     const passMove = legal.find((x) => x.kind === 'pass');
-    if (passMove && playable.length && !legal.some((x) => x.kind === 'draw')) {
+    if (forcedStack !== null && playable.includes(forcedStack)) {
+      // picked from the response bar: keep the colour/target prompts below
+      choice = forcedStack;
+    } else if (passMove && playable.length && !legal.some((x) => x.kind === 'draw')) {
       // the drawn card can be played: it lifts and a question (no escape) asks; time up = it is played
       view.markCard?.(playable[0]);
       const ans = await hud.askChoice({
@@ -1517,7 +1540,7 @@ export class OnlineController {
       const shield = responds.find((x) => kindOf(x.cardId) === 'shield');
       const mirror = responds.find((x) => kindOf(x.cardId) === 'mirror');
       const ms = windowEnds ? Math.max(800, windowEnds - Date.now() - 200) : 2500;
-      const choice = await hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, ms });
+      const choice = await hud.showResponse({ total: r.pendingDraw, canShield: !!shield, canMirror: !!mirror, canAccept: false, ms });
       if (!this.live(id)) return;
       const mv = choice === 'shield' ? shield : choice === 'mirror' ? mirror : undefined;
       if (mv) this.send(mv);

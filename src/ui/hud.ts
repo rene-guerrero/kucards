@@ -9,7 +9,7 @@
  *   setKu('hidden' | 'shown' | 'armed')   the big ¡Ku! button; onKu fires on tap (also waitKu())
  *   pickColor(): Promise<Color>
  *   pickTarget(seats, title?): Promise<Seat>
- *   showResponse(opts): Promise<'shield' | 'mirror' | 'accept'>   resolves 'accept' when the ring runs out
+ *   showResponse(opts): Promise<ResponseChoice>   shield / mirror / challenge / stack / accept
  *   kuPop(name?): Promise<void>           the big ¡KU! lettering
  *   closeAll()                            drops any open picker / response bar (their promises never resolve)
  */
@@ -38,6 +38,11 @@ export interface ScoreRow {
   team?: 0 | 1;
 }
 
+export interface ResponseStack {
+  cardId: number;
+  label: string;
+}
+
 export interface ResponseOpts {
   /** the stacked penalty aimed at the human */
   total: number;
@@ -45,16 +50,16 @@ export interface ResponseOpts {
   canMirror: boolean;
   /** wild4Challenge: the +4 (or +10) may be challenged */
   canChallenge?: boolean;
-  /** stacking: the human may answer with a penalty card from the hand instead (shown as a hint) */
-  canStack?: boolean;
-  /** false = no "Robar" button (stacking is mandatory); the ring running out still resolves 'accept' */
+  /** playable +N cards, one button each (stacking is mandatory when there is any) */
+  stacks?: ResponseStack[];
+  /** false = no "Robar" button (stacking is mandatory); the ring running out stacks the first card */
   canAccept?: boolean;
   /** how long the window stays open (ms) */
   ms?: number;
 }
 
 export type KuState = 'hidden' | 'shown' | 'armed';
-export type ResponseChoice = 'shield' | 'mirror' | 'challenge' | 'accept';
+export type ResponseChoice = 'shield' | 'mirror' | 'challenge' | 'accept' | { stack: number };
 
 export class Hud {
   readonly el: HTMLElement;
@@ -376,12 +381,14 @@ export class Hud {
   }
 
   /**
-   * A penalty is aimed at the human: Escudo / Espejo / Aceptar with a countdown ring. The table stays
-   * visible (a bar at the bottom, not a modal). Runs out → 'accept'.
+   * A penalty is aimed at the human: Escudo / Espejo / Apilar +N / Aceptar with a countdown ring. The table
+   * stays visible (a bar at the bottom, not a modal). Runs out → 'accept', or the first stack when drawing
+   * is not allowed.
    */
   showResponse(o: ResponseOpts): Promise<ResponseChoice> {
     return new Promise((resolve) => {
       const ms = Math.max(500, o.ms ?? 4000);
+      const stacks = o.stacks ?? [];
       let done = false;
       let timer = 0;
       const finish = (c: ResponseChoice) => {
@@ -402,12 +409,19 @@ export class Hud {
         'div.resp-bar',
         { role: 'alertdialog', 'aria-label': t('hud.responseAria', { n: o.total }) },
         h('div.resp-head', h('span.resp-ring-wrap', ring, h('span.resp-total', `+${o.total}`)), h('span.resp-title', t('hud.responseTitle', { n: o.total }))),
-        h('div.resp-row', o.canShield ? opt('shield', t('card.shield'), 'primary', true) : null, o.canMirror ? opt('mirror', t('card.mirror'), 'secondary', true) : null, o.canChallenge ? opt('challenge', t('hud.challenge'), 'secondary', true) : null, accept),
+        h(
+          'div.resp-row',
+          o.canShield ? opt('shield', t('card.shield'), 'primary', true) : null,
+          o.canMirror ? opt('mirror', t('card.mirror'), 'secondary', true) : null,
+          o.canChallenge ? opt('challenge', t('hud.challenge'), 'secondary', true) : null,
+          ...stacks.map((s) => opt({ stack: s.cardId }, s.label, 'secondary', true)),
+          accept,
+        ),
       );
       this.respLayer.append(bar);
       const run = ring.querySelector('.rr-run') as SVGCircleElement;
       run.animate([{ strokeDashoffset: '0' }, { strokeDashoffset: '100' }], { duration: ms, easing: 'linear', fill: 'forwards' });
-      timer = window.setTimeout(() => finish('accept'), ms);
+      timer = window.setTimeout(() => finish(o.canAccept === false && stacks.length ? { stack: stacks[0].cardId } : 'accept'), ms);
       const close = this.track(() => {
         done = true;
         clearTimeout(timer);

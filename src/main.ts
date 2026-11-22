@@ -95,19 +95,18 @@ async function play(match: MatchState, lineup: Lineup, restored: boolean): Promi
   );
 }
 
-/** Codo a codo partner side picked on the new-game screen (kept for the session) */
-let ngPartnerSide: 'after' | 'before' = 'after';
+/** Codo a codo seat swap picked on the new-game screen (kept for the session) */
+let ngSwappedSeats = false;
 
 function newGame(o: NewGameStart): void {
   clearSave();
   // a player-made mode plays its own definition (rules, deck, seating); built-ins their rule set
   const custom = o.custom ? customMode(o.custom) : null;
   const rules = custom ? { ...custom.rules } : rulesFor(settings, o.mode);
-  // side-by-side seating: the partner sits where the new-game screen shows them (right = 'after', left = 'before');
-  // the lineup is already by seat (the screen moves the partner's character with the side)
-  const sideSeat = custom ? custom.teams === 'always' && custom.seating === 'side' : o.mode === 'sideBySide';
-  const partnerSide = sideSeat ? (o.partnerSide ?? 'after') : undefined;
-  const match = { ...createMatch(rules, { mode: o.mode, players: o.players, teams: o.teams, partnerSide, ...(custom ? { custom } : {}) }), clock: sanitizeClock(o.clock) };
+  // the screen only sends swappedSeats for side seating; the lineup stays by real seat and the avatar
+  // swap is applied at display time. createMatch stores the whole setup on the match so a rematch keeps
+  // this exact mode, seating, seat swap and deck.
+  const match = { ...createMatch(rules, { mode: o.mode, players: o.players, teams: o.teams, swappedSeats: o.swappedSeats, ...(custom ? { custom } : {}) }), clock: sanitizeClock(o.clock) };
   void play(match, o.lineup, false);
 }
 
@@ -159,8 +158,8 @@ function screen(id: ScreenId): HTMLElement {
         players: settings.players ?? 4,
         teams: settings.teamPlay === true,
         lineup: settings.lineup ?? {},
-        partnerSide: ngPartnerSide,
-        onPartnerSide: (s) => (ngPartnerSide = s),
+        swappedSeats: ngSwappedSeats,
+        onSwappedSeats: (s) => (ngSwappedSeats = s),
         avatars: settings.avatars !== false,
         humanFace: settings.avatarFace ?? 0,
         humanName: humanName(),
