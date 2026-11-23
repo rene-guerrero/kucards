@@ -3350,10 +3350,7 @@ button.ng-seat:hover {
 }
 
 /* ── plates: card count, team badge, ¡Ku! state ── */
-.plate-av .av-face {
-  position: absolute;
-  inset: 0;
-}
+/* .plate-av .av-face: the avatar library places the face itself (110% box, -5% / -12%), as designed for a round frame */
 .plate-letter {
   position: absolute;
   inset: 0;
