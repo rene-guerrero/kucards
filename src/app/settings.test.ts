@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RULE_PRESETS, RULES_VERSION } from '../engine/rules';
 import { DEFAULT_LINEUP } from '../roster';
-import { defaultSettings, descriptorsFor, migrateSettings, rulesFor, sanitizeLineupSetting, sanitizeRules, withMode, withRules } from './settings';
+import { defaultSettings, descriptorsFor, detectLanguage, migrateSettings, withDetectedLanguage, rulesFor, sanitizeLineupSetting, sanitizeRules, withMode, withRules } from './settings';
 import { loadSave, migrateSave, type SavedGame } from './save';
 import { createMatch } from '../engine/game';
 
@@ -134,5 +134,36 @@ describe('gestures setting', () => {
     expect(sanitizeGestures(undefined)).toEqual(['thumbsUp', 'clap', 'wave', 'shrug', 'facepalm']);
     expect(sanitizeGestures(['wave', 'wave', 'nope', 'rub', 'clap', 'chin', 'mewing', 'shrug'])).toEqual(['wave', 'rub', 'clap', 'chin', 'mewing']);
     expect(isChatId('g:wave') && isChatId('hello') && !isChatId('g:nope')).toBe(true);
+  });
+});
+
+describe('language default', () => {
+  it('detects Spanish from the first Spanish or English device language, else English', () => {
+    expect(detectLanguage(['es-MX', 'en-US'], 'es-MX')).toBe('es');
+    expect(detectLanguage(['ES'], undefined)).toBe('es');
+    expect(detectLanguage(['en-GB', 'es-ES'], 'en-GB')).toBe('en');
+    expect(detectLanguage(['fr-FR', 'es-419'], 'fr-FR')).toBe('es'); // first match wins
+    expect(detectLanguage(['fr-FR', 'de'], 'fr-FR')).toBe('en');
+    expect(detectLanguage(undefined, 'es-AR')).toBe('es'); // no navigator.languages
+    expect(detectLanguage([], 'pt-BR')).toBe('en');
+    expect(detectLanguage(null, null)).toBe('en');
+  });
+
+  it('a first visit follows the device; a picked language always wins', () => {
+    expect(withDetectedLanguage(migrateSettings(null), 'en').language).toBe('en');
+    expect(withDetectedLanguage(migrateSettings(null), 'es').language).toBe('es');
+    const picked = migrateSettings({ language: 'es', languageChosen: true });
+    expect(withDetectedLanguage(picked, 'en').language).toBe('es');
+    const notPicked = migrateSettings({ language: 'en', languageChosen: false });
+    expect(withDetectedLanguage(notPicked, 'es').language).toBe('es');
+  });
+
+  it('old saved settings (no languageChosen): only a non-default language counts as picked', () => {
+    const oldDefault = migrateSettings({ language: 'es' });
+    expect(oldDefault.languageChosen).toBe(false);
+    expect(withDetectedLanguage(oldDefault, 'en').language).toBe('en');
+    const oldEnglish = migrateSettings({ language: 'en' });
+    expect(oldEnglish.languageChosen).toBe(true);
+    expect(withDetectedLanguage(oldEnglish, 'es').language).toBe('en');
   });
 });

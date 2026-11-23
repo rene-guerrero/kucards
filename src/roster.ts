@@ -56,7 +56,7 @@ export const ROSTER: Character[] = [
     id: 'lola', name: 'Lola', level: 'easy', style: 'carefree',
     face: FACES.lola,
     tag: { es: 'Despreocupada', en: 'Carefree' },
-    desc: { es: 'Juega por diversión: pone la primera carta que sirve y elige colores al azar.', en: 'Plays for fun: puts down the first card that fits and picks colours at random.' },
+    desc: { es: 'Juega por diversión: pone la primera carta que sirve y elige colores al azar.', en: 'Plays for fun: puts down the first card that fits and picks colors at random.' },
     chat: 0.5, fem: true,
   },
   {
@@ -70,14 +70,14 @@ export const ROSTER: Character[] = [
     id: 'nico', name: 'Nico', level: 'easy', style: 'beginner',
     face: FACES.nico,
     tag: { es: 'Principiante', en: 'Beginner' },
-    desc: { es: 'Todavía está aprendiendo. Combina bien los colores, pero gasta los comodines enseguida.', en: 'Still learning. Matches colours well but spends his wilds right away.' },
+    desc: { es: 'Todavía está aprendiendo. Combina bien los colores, pero gasta los comodines enseguida.', en: 'Still learning. Matches colors well but burns through his wilds right away.' },
     chat: 0.4, fem: false,
   },
   {
     id: 'elena', name: 'Elena', level: 'normal', style: 'balanced',
     face: FACES.elena,
     tag: { es: 'Equilibrada', en: 'Balanced' },
-    desc: { es: 'Guarda un poco de cada color para no quedarse nunca sin jugada.', en: 'Keeps a bit of every colour so she always has a play.' },
+    desc: { es: 'Guarda un poco de cada color para no quedarse nunca sin jugada.', en: 'Keeps a bit of every color so she always has a play.' },
     chat: 0.4, fem: true,
   },
   {
@@ -91,14 +91,14 @@ export const ROSTER: Character[] = [
     id: 'rosa', name: 'Rosa', level: 'normal', style: 'chatty',
     face: FACES.rosa,
     tag: { es: 'Habladora', en: 'Chatty' },
-    desc: { es: 'Grita ¡Ku! antes de tiempo y nunca deja pasar a quien se olvida.', en: 'Calls ¡Ku! early and never lets anyone off who forgets.' },
+    desc: { es: 'Grita ¡Ku! antes de tiempo y nunca deja pasar a quien se olvida.', en: 'Calls ¡Ku! early and never lets anyone who forgets get away with it.' },
     chat: 0.9, fem: true,
   },
   {
     id: 'carlos', name: 'Carlos', level: 'hard', style: 'aggressive',
     face: FACES.carlos,
     tag: { es: 'Agresivo', en: 'Aggressive' },
-    desc: { es: 'Castigos primero: lanza +2 y +4 al que va ganando sin pensarlo dos veces.', en: 'Penalties first: throws +2 and +4 at the leader without a second thought.' },
+    desc: { es: 'Castigos primero: lanza +2 y +4 al que va ganando sin pensarlo dos veces.', en: 'Penalties first: throws +2s and +4s at the leader without a second thought.' },
     chat: 0.6, fem: false,
   },
   {
@@ -112,7 +112,7 @@ export const ROSTER: Character[] = [
     id: 'julio', name: 'Don Julio', short: 'Julio', level: 'hard', style: 'teamPlayer',
     face: FACES.julio,
     tag: { es: 'De equipo', en: 'Team player' },
-    desc: { es: 'Recuerda cada color que falta y protege a su pareja de los castigos.', en: 'Remembers every missing colour and shields his partner from penalties.' },
+    desc: { es: 'Recuerda cada color que falta y protege a su pareja de los castigos.', en: 'Remembers every missing color and shields his partner from penalties.' },
     chat: 0.4, fem: false,
   },
   {

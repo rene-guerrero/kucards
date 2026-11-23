@@ -496,6 +496,8 @@ export interface TableView {
 
 export interface AppSettings {
   language: 'es' | 'en';
+  /** true once the player picked the language in Ajustes; otherwise it follows the device (detectLanguage) */
+  languageChosen?: boolean;
   quality: Quality;
   qualityMode?: 'auto' | 'manual';
   autoQuality?: Quality;

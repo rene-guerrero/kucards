@@ -70,6 +70,7 @@ export function defaultSettings(src: RulesSource = ENGINE): AppSettings {
   const rulesByMode = defaultRulesByMode(src);
   return {
     language: 'es',
+    languageChosen: false,
     quality: 'medium',
     qualityMode: 'auto',
     sound: true,
@@ -113,6 +114,39 @@ export function sanitizeLineupSetting(v: unknown): Lineup {
 const isQuality = (v: unknown): v is AppSettings['quality'] => v === 'low' || v === 'medium' || v === 'high';
 const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
 
+/**
+ * The language for a player who never picked one in Ajustes: the first device language that is Spanish
+ * or English decides (navigator.languages in order, then navigator.language); anything else is English.
+ */
+export function detectLanguage(languages?: readonly string[] | null, language?: string | null): 'es' | 'en' {
+  for (const l of [...(languages ?? []), language ?? '']) {
+    const tag = String(l).trim().toLowerCase();
+    if (tag.startsWith('es')) return 'es';
+    if (tag.startsWith('en')) return 'en';
+  }
+  return 'en';
+}
+
+/** detectLanguage on this device's browser languages (English when there is no navigator) */
+export function deviceLanguage(): 'es' | 'en' {
+  try {
+    return typeof navigator === 'undefined' ? 'en' : detectLanguage(navigator.languages, navigator.language);
+  } catch {
+    return 'en';
+  }
+}
+
+/**
+ * Whether a stored settings object holds a language the player picked. Settings saved before
+ * `languageChosen` existed always carried `language` (default 'es'): only a value other than that old
+ * default can have come from the picker.
+ */
+function storedLanguageChosen(s: Partial<AppSettings>): boolean {
+  if (s.language !== 'es' && s.language !== 'en') return false;
+  if (typeof s.languageChosen === 'boolean') return s.languageChosen;
+  return s.language !== 'es';
+}
+
 /** Turn any stored object into valid settings (pure; no storage, no quality detection). */
 export function migrateSettings(raw: unknown, src: RulesSource = ENGINE): AppSettings {
   const def = defaultSettings(src);
@@ -135,8 +169,10 @@ export function migrateSettings(raw: unknown, src: RulesSource = ENGINE): AppSet
   const rulesByMode = Object.fromEntries(
     MODES.map((m) => [m, sanitizeRules(storedByMode[m] ?? (m === mode && !s.rulesByMode ? s.rules : undefined), m, src)]),
   ) as Record<GameMode, RuleSettings>;
+  const languageChosen = storedLanguageChosen(s);
   return {
-    language: pick('language', (v) => v === 'es' || v === 'en'),
+    language: languageChosen ? (s.language as AppSettings['language']) : def.language,
+    languageChosen,
     quality: pick('quality', isQuality),
     qualityMode: s.qualityMode === 'manual' && isQuality(s.quality) ? 'manual' : 'auto',
     autoQuality: isQuality(s.autoQuality) ? s.autoQuality : undefined,
@@ -165,12 +201,17 @@ export function migrateSettings(raw: unknown, src: RulesSource = ENGINE): AppSet
   };
 }
 
+/** a language the player never picked follows the device (first visit, or saved before they chose) */
+export function withDetectedLanguage(s: AppSettings, detected: AppSettings['language'] = deviceLanguage()): AppSettings {
+  return s.languageChosen ? s : { ...s, language: detected, languageChosen: false };
+}
+
 export function loadSettings(src: RulesSource = ENGINE): AppSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    return resolveQuality(migrateSettings(raw ? JSON.parse(raw) : null, src));
+    return resolveQuality(withDetectedLanguage(migrateSettings(raw ? JSON.parse(raw) : null, src)));
   } catch {
-    return resolveQuality(defaultSettings(src));
+    return resolveQuality(withDetectedLanguage(defaultSettings(src)));
   }
 }
 

@@ -1,7 +1,7 @@
 {
-  "name": "KuCards — Juego de cartas",
+  "name": "KuCards",
   "short_name": "KuCards",
-  "description": "Juego de cartas: combina color o número y grita ¡Ku! con tu última carta. Sin conexión.",
+  "description": "Juego de cartas: combina color o número y grita ¡Ku! con tu última carta. Sin conexión. · A card game: match color or number and call ¡Ku! when you are down to your last card. Plays offline.",
   "lang": "es",
   "start_url": "./",
   "scope": "./",

@@ -13,7 +13,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="KuCards" />
     <meta name="format-detection" content="telephone=no" />
-    <meta name="description" content="Juego de cartas: combina color o número y grita ¡Ku!" />
+    <meta name="description" content="Juego de cartas: combina color o número y grita ¡Ku! · A card game: match color or number and call ¡Ku!" />
     <link rel="icon" type="image/svg+xml" href="./icon.svg" />
     <link rel="apple-touch-icon" href="./icon.svg" />
     <link rel="manifest" href="./manifest.webmanifest" />
@@ -63,7 +63,22 @@
           var boot = document.getElementById('boot');
           if (shown || !boot || !boot.parentNode) return;
           shown = true;
-          var es = (navigator.language || 'es').slice(0, 2) !== 'en';
+          // same rule as the game (settings.ts): a language picked in Ajustes, else the device's first es/en
+          var es = false;
+          try {
+            var saved = JSON.parse(localStorage.getItem('kucards.settings.v1') || 'null');
+            var chosen = saved && (saved.language === 'es' || saved.language === 'en') &&
+              (typeof saved.languageChosen === 'boolean' ? saved.languageChosen : saved.language !== 'es');
+            if (chosen) es = saved.language === 'es';
+            else {
+              var ls = [].concat(navigator.languages || [], navigator.language || '');
+              for (var i = 0; i < ls.length; i++) {
+                var tag = String(ls[i]).toLowerCase();
+                if (tag.indexOf('es') === 0) { es = true; break; }
+                if (tag.indexOf('en') === 0) break;
+              }
+            }
+          } catch (e) { /* storage blocked: English */ }
           var box = document.createElement('div');
           box.style.cssText = 'position:fixed;left:0;right:0;bottom:18%;display:flex;flex-direction:column;align-items:center;gap:12px;font:600 15px system-ui,sans-serif;color:#f3e7cf;text-align:center;padding:0 24px';
           var msg = document.createElement('p');

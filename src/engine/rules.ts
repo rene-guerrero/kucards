@@ -19,7 +19,7 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
   {
     key: 'target', group: 'match', type: 'select', default: 500,
     label: { es: 'Meta de la partida', en: 'Match target' },
-    help: { es: 'La partida termina al llegar a estos puntos. Gana quien menos tenga.', en: 'The match ends when someone reaches these points. Fewest points wins.' },
+    help: { es: 'La partida termina cuando alguien llega a estos puntos. Gana el primero en llegar.', en: 'The match ends when someone reaches this score. The first to reach it wins.' },
     options: [
       { value: 0, label: { es: 'Una ronda', en: 'One round' } },
       { value: 200, label: { es: '200 puntos', en: '200 points' } },
@@ -28,8 +28,8 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
   },
   {
     key: 'drawMode', group: 'turn', type: 'select', default: 'one',
-    label: { es: 'Al no poder jugar', en: 'When you cannot play' },
-    help: { es: 'Si no tienes carta que sirva: robas una, o robas hasta encontrar una que puedas jugar.', en: 'With no card to play: draw one, or draw until you get one you can play.' },
+    label: { es: 'Al no poder jugar', en: 'If you can’t play' },
+    help: { es: 'Si no tienes carta que sirva: robas una, o robas hasta encontrar una que puedas jugar.', en: 'If you have no playable card: draw one, or keep drawing until you get one you can play.' },
     options: [
       { value: 'one', label: { es: 'Robar una', en: 'Draw one' } },
       { value: 'untilPlayable', label: { es: 'Robar hasta poder jugar', en: 'Draw until playable' } },
@@ -44,64 +44,64 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
   {
     key: 'jumpIn', group: 'turn', type: 'toggle', default: false,
     label: { es: 'Entrar sin turno', en: 'Jump in' },
-    help: { es: 'Puedes jugar una carta idéntica a la de la pila aunque no sea tu turno.', en: 'Play an identical card out of turn.' },
+    help: { es: 'Puedes jugar una carta idéntica a la de la pila aunque no sea tu turno.', en: 'You can play a card identical to the top of the pile even when it isn’t your turn.' },
     options: [on, off],
   },
   {
     key: 'sevenSwap', group: 'turn', type: 'toggle', default: false,
     label: { es: 'El 7 cambia manos', en: 'Sevens swap hands' },
     short: { es: '7 cambia', en: '7 swaps' },
-    help: { es: 'Al jugar un 7 eliges a otro jugador y cambias tu mano con la suya.', en: 'Playing a 7 lets you pick another player and swap hands with them.' },
+    help: { es: 'Al jugar un 7 eliges a otro jugador y cambias tu mano con la suya.', en: 'When you play a 7, you pick another player and swap hands with them.' },
     options: [on, off],
   },
   {
     key: 'zeroPass', group: 'turn', type: 'toggle', default: false,
     label: { es: 'El 0 pasa las manos', en: 'Zeros pass hands' },
     short: { es: '0 pasa', en: '0 passes' },
-    help: { es: 'Al jugar un 0, todos pasan su mano entera al siguiente jugador en el sentido del juego.', en: 'Playing a 0 makes everyone pass their whole hand to the next player in the direction of play.' },
+    help: { es: 'Al jugar un 0, todos pasan su mano entera al siguiente jugador en el sentido del juego.', en: 'When a 0 is played, everyone passes their whole hand to the next player in the direction of play.' },
     options: [on, off],
   },
   {
     key: 'multiPlay', group: 'turn', type: 'toggle', default: false,
-    label: { es: 'Jugar varias del mismo número', en: 'Play same numbers together' },
-    help: { es: 'Si la primera se puede jugar, puedes jugar a la vez otras cartas con el mismo número; la última que elijas marca el color.', en: 'If the first one is playable, you can play other cards with the same number at once; the last one you pick sets the colour.' },
+    label: { es: 'Jugar varias del mismo número', en: 'Play matching numbers together' },
+    help: { es: 'Si la primera se puede jugar, puedes jugar a la vez otras cartas con el mismo número; la última que elijas marca el color.', en: 'If the first card is playable, you can play other cards with the same number along with it; the last one you pick sets the color.' },
     options: [on, off],
   },
   {
     key: 'multiDraw2', group: 'turn', type: 'toggle', default: false,
-    label: { es: 'Varios +2 a la vez', en: 'Several +2 at once' },
-    help: { es: 'Si el primero se puede jugar, puedes soltar a la vez otros +2 de cualquier color: cada uno suma 2 (tres +2 son +6). El siguiente aún puede acumular si se permite.', en: 'If the first one is playable, you can drop other +2s of any colour at once: each adds 2 (three +2s make +6). The next player may still stack if allowed.' },
+    label: { es: 'Varios +2 a la vez', en: 'Several +2s at once' },
+    help: { es: 'Si el primero se puede jugar, puedes soltar a la vez otros +2 de cualquier color: cada uno suma 2 (tres +2 son +6). El siguiente aún puede acumular si se permite.', en: 'If the first one is playable, you can play other +2s of any color along with it: each adds 2 (three +2s make +6). The next player can still stack if allowed.' },
     options: [on, off],
   },
   {
     key: 'multiReverse', group: 'turn', type: 'toggle', default: false,
     label: { es: 'Varias Vueltas a la vez', en: 'Several Reverses at once' },
-    help: { es: 'Si la primera se puede jugar, puedes soltar a la vez otras Vueltas de cualquier color: cada una cambia el sentido (dos lo dejan igual). Entre dos jugadores cada una salta al otro.', en: 'If the first one is playable, you can drop other Reverses of any colour at once: each turns the direction (two keep it). With two players each one skips the other.' },
+    help: { es: 'Si la primera se puede jugar, puedes soltar a la vez otras Vueltas de cualquier color: cada una cambia el sentido (dos lo dejan igual). Entre dos jugadores cada una salta al otro.', en: 'If the first one is playable, you can play other Reverses of any color along with it: each flips the direction (two cancel out). With two players, each one skips the other player.' },
     options: [on, off],
   },
   {
     key: 'multiSkip', group: 'turn', type: 'toggle', default: false,
     label: { es: 'Varios Saltos a la vez', en: 'Several Skips at once' },
-    help: { es: 'Si el primero se puede jugar, puedes soltar a la vez otros Saltos de cualquier color: cada uno salta a un jugador más, dando la vuelta a la mesa.', en: 'If the first one is playable, you can drop other Skips of any colour at once: each one skips one more player, round the table.' },
+    help: { es: 'Si el primero se puede jugar, puedes soltar a la vez otros Saltos de cualquier color: cada uno salta a un jugador más, dando la vuelta a la mesa.', en: 'If the first one is playable, you can play other Skips of any color along with it: each one skips one more player, going around the table.' },
     options: [on, off],
   },
   {
     key: 'numberFinish', group: 'match', type: 'toggle', default: false,
-    label: { es: 'Ganar solo con números', en: 'Win with numbers only' },
+    label: { es: 'Ganar solo con números', en: 'Finish on a number' },
     help: { es: 'No puedes ganar con una carta especial: tu última carta debe ser un número.', en: 'You can’t win with a special card: your last card must be a number.' },
     options: [on, off],
   },
   {
     key: 'kuCall', group: 'turn', type: 'toggle', default: true,
     label: { es: 'Gritar ¡Ku!', en: 'Call ¡Ku!' },
-    help: { es: 'Al quedarte con una carta debes gritar ¡Ku!; si te descubren, robas 2.', en: 'Call ¡Ku! on your last card or draw 2 if caught.' },
+    help: { es: 'Al quedarte con una carta debes gritar ¡Ku!; si te descubren, robas 2.', en: 'When you’re down to one card, call ¡Ku!; if you get caught, you draw 2.' },
     options: [on, off],
   },
   {
     // only Clásico may turn it off; every other mode always stacks +2 / +4 freely (modeRules)
     key: 'stacking', group: 'penalties', type: 'select', default: 'off', modes: ['classic'],
     label: { es: 'Acumular castigos', en: 'Stack penalties' },
-    help: { es: 'Si te lanzan un +2 o +4, puedes responder con otro y pasar la suma al siguiente.', en: 'When hit by a +2 or +4, answer with another and pass the total on.' },
+    help: { es: 'Si te lanzan un +2 o +4, puedes responder con otro y pasar la suma al siguiente.', en: 'When you’re hit with a +2 or +4, you can answer with another and pass the total to the next player.' },
     options: [
       { value: 'off', label: { es: 'No', en: 'Off' } },
       { value: 'same', label: { es: 'Solo la misma carta', en: 'Same card only' } },
@@ -111,7 +111,7 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
   {
     key: 'eliminateAt', group: 'penalties', type: 'select', default: 0,
     label: { es: 'Eliminación', en: 'Elimination' },
-    help: { es: 'Quien acumule esa cantidad de cartas queda fuera.', en: 'A player holding that many cards is out.' },
+    help: { es: 'Quien acumule esa cantidad de cartas queda fuera.', en: 'Anyone who ends up holding that many cards is out.' },
     options: [
       { value: 0, label: { es: 'No', en: 'Off' } },
       { value: 25, label: { es: '25 cartas', en: '25 cards' } },
@@ -119,12 +119,12 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
     ],
   },
   { key: 'power.swap', group: 'power', type: 'toggle', default: false, modes: ['classic', 'cyclone', 'sideBySide'], label: { es: 'Cambio', en: 'Swap' }, help: { es: 'Comodín: cambias tu mano con otro jugador.', en: 'Wild: swap hands with another player.' }, options: [on, off] },
-  { key: 'power.sweep', group: 'power', type: 'toggle', default: false, modes: ['classic', 'cyclone'], label: { es: 'Barrida', en: 'Sweep' }, help: { es: 'Descartas todas tus cartas de ese color.', en: 'Discard all your cards of that colour.' }, options: [on, off] },
+  { key: 'power.sweep', group: 'power', type: 'toggle', default: false, modes: ['classic', 'cyclone'], label: { es: 'Barrida', en: 'Sweep' }, help: { es: 'Descartas todas tus cartas de ese color.', en: 'Discard all your cards of that color.' }, options: [on, off] },
   // Escudo (power.shield), Espejo (power.mirror) and partnerShield have no descriptor, preset or default
   // deck, but player-made modes can still put their cards in a deck. The engine, renderer and network
   // mirror keep supporting them; sanitizeRules/normalizeRules only drop the obsolete rule toggles.
-  { key: 'partnerOpen', group: 'partners', type: 'toggle', default: true, label: { es: 'Cartas del compañero a la vista', en: 'Partner cards face up' }, help: { es: 'Ves las cartas de tu compañero y él ve las tuyas.', en: 'You see your partner’s cards and they see yours.' }, options: [on, off] },
-  { key: 'partnerPass', group: 'partners', type: 'toggle', default: false, label: { es: 'Pasar carta al compañero', en: 'Pass a card to your partner' }, help: { es: 'Con un 7 puedes darle una carta a tu compañero.', en: 'On a 7 you may give one card to your partner.' }, options: [on, off] },
+  { key: 'partnerOpen', group: 'partners', type: 'toggle', default: true, label: { es: 'Cartas del compañero a la vista', en: 'Partner’s cards face up' }, help: { es: 'Ves las cartas de tu compañero y él ve las tuyas.', en: 'You see your partner’s cards and they see yours.' }, options: [on, off] },
+  { key: 'partnerPass', group: 'partners', type: 'toggle', default: false, label: { es: 'Pasar carta al compañero', en: 'Pass a card to your partner' }, help: { es: 'Con un 7 puedes darle una carta a tu compañero.', en: 'When you play a 7, you can give one card to your partner.' }, options: [on, off] },
 ];
 
 /**
@@ -150,17 +150,17 @@ const preset = (id: GameMode, label: RulePreset['label'], blurb: RulePreset['blu
 });
 
 export const RULE_PRESETS: RulePreset[] = [
-  preset('classic', { es: 'Clásico', en: 'Classic' }, { es: 'Combina color o número. Sin sorpresas.', en: 'Match colour or number. No surprises.' }, {}),
+  preset('classic', { es: 'Clásico', en: 'Classic' }, { es: 'Combina color o número. Sin sorpresas.', en: 'Match color or number. No surprises.' }, {}),
   preset('action', { es: 'Pura acción', en: 'All Action' }, { es: 'Más cartas especiales, Barrida y Cambio.', en: 'More action cards, Sweep and Swap.' }, {
     deck: 'action', stacking: 'any', 'power.swap': true, 'power.sweep': true,
   }),
-  preset('cyclone', { es: 'Ciclón', en: 'Cyclone' }, { es: 'Castigos que se acumulan. Con 25 cartas, quedas fuera.', en: 'Stacking penalties. Hold 25 cards and you are out.' }, {
+  preset('cyclone', { es: 'Ciclón', en: 'Cyclone' }, { es: 'Castigos que se acumulan. Con 25 cartas, quedas fuera.', en: 'Penalties stack. Reach 25 cards and you’re out.' }, {
     deck: 'cyclone', stacking: 'any', 'power.sweep': true, eliminateAt: 25, drawMode: 'untilPlayable', target: 0, sevenSwap: true, zeroPass: true,
   }),
-  preset('sideBySide', { es: 'Codo a codo', en: 'Side by Side' }, { es: '2 vs 2, tu pareja al lado. Los castigos se acumulan.', en: '2 vs 2, partner beside you. Penalties always stack.' }, {
+  preset('sideBySide', { es: 'Codo a codo', en: 'Side by Side' }, { es: '2 vs 2, tu pareja al lado. Los castigos se acumulan.', en: '2 vs 2, with your partner beside you. Penalties stack.' }, {
     deck: 'sideBySide', stacking: 'any', 'power.sweep': true,
   }),
-  preset('dayNight', { es: 'Día y Noche', en: 'Day & Night' }, { es: 'Cartas de dos caras: el Eclipse voltea el juego a la Noche.', en: 'Two-sided cards: the Eclipse turns the game over to Night.' }, {
+  preset('dayNight', { es: 'Día y Noche', en: 'Day & Night' }, { es: 'Cartas de dos caras: el Eclipse voltea el juego a la Noche.', en: 'Two-sided cards: the Eclipse flips the game to Night.' }, {
     deck: 'dayNight', stacking: 'any',
   }),
 ];

@@ -351,7 +351,8 @@ export function ruleSelect(items: RuleSelectItem[], label: string, variant?: 'so
 export function buildSettings(o: SettingsOpts): HTMLElement {
   let s: AppSettings = structuredClone(o.settings);
   const set = <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => {
-    s = { ...s, [k]: v };
+    // a language picked here is kept for good (otherwise it follows the device)
+    s = { ...s, [k]: v, ...(k === 'language' ? { languageChosen: true } : {}) };
     o.onChange(s, k);
   };
   const seg = <K extends 'language' | 'animationSpeed'>(k: K, values: AppSettings[K][], label: (v: AppSettings[K]) => string) =>
