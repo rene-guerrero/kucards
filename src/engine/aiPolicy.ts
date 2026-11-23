@@ -21,6 +21,7 @@ import { cardPoints, matchDeck } from './cards';
 import { canPlay, isLegal, multiPlayOptions, opponents, stepSeat } from './game';
 import { bit, colorIdx, drawOf, isPenaltyCard, isWildCard, type Knowledge } from './aiKnow';
 import type { Rng } from './rng';
+import { sevenSwapOn, zeroPassOn } from './rules';
 
 export type Level = 1 | 2 | 3; // easy, normal, hard (master plays hard outside its search)
 
@@ -295,10 +296,10 @@ export function scoreTurn(c: Ctx, mv: Move): number {
         // still hold in other colours let them switch colour on me
         sc = 10 + (hard ? (Number(m.rules.target) > 0 ? 0.5 * val : 0) - HARD_W.numVal * (c.k?.unseenVal[val] ?? 0) : val) + w.numbers;
         const target = ex.target;
-        if (m.rules.sevenZero && face.value === 7 && target !== undefined) {
+        if (sevenSwapOn(m.rules) && face.value === 7 && target !== undefined) {
           const t = r.hands[target].length;
           sc += opponents(m, seat, target) ? (after.length - t) * 4 + (target === c.leader ? w.leader : 0) : -20;
-        } else if (m.rules.sevenZero && face.value === 0) {
+        } else if (zeroPassOn(m.rules) && face.value === 0) {
           sc += (after.length - r.hands[stepSeat(m, r, seat, -r.direction)].length) * 3;
         }
         if (ex.give !== undefined) sc += giveValue(c, card, ex.give, after.length);
@@ -351,6 +352,10 @@ export function scoreTurn(c: Ctx, mv: Move): number {
       case 'sweep':
         sc = swept >= 2 ? 14 + 9 * swept : 6 + 3 * swept;
         break;
+      case 'wheelWild':
+        // my hand moves on and I get the previous seat's: good when theirs is smaller than mine
+        sc = (after.length <= 1 ? 30 : -6) + (after.length - r.hands[stepSeat(m, r, seat, -r.direction)].length) * 3;
+        break;
       case 'sweepWild':
         // the colour that sheds the most cards (a wild spent on one card is a waste)
         sc = swept >= 2 ? 10 + 9 * swept : -10 + 3 * swept;
@@ -378,6 +383,9 @@ export function scoreTurn(c: Ctx, mv: Move): number {
     if (face.kind === 'swap' && ex.target !== undefined && c.k) sc += c.k.likes[ex.target] & bit(ex.color) ? 4 : 0;
     else if (face.kind === 'sweepWild' || (face.kind === 'wildFlip' && card.other)) {
       /* scored above */
+    } else if (face.kind === 'wheelWild') {
+      // my hand goes to the next seat: a colour it holds little of
+      sc -= 2 * colorCount(after, ex.color);
     } else {
       const counts = sideColors(r.side).map((x) => colorCount(after, x));
       const max = Math.max(...counts);
@@ -385,7 +393,7 @@ export function scoreTurn(c: Ctx, mv: Move): number {
       sc += 3 * mine + (max > 0 && mine === max ? 1 : 0);
     }
   }
-  if (face.color === null && big && face.kind !== 'swap' && face.kind !== 'sweepWild') sc -= w.hoard;
+  if (face.color === null && big && face.kind !== 'swap' && face.kind !== 'sweepWild' && face.kind !== 'wheelWild') sc -= w.hoard;
   if (w.numbers && face.kind !== 'number') sc -= w.numbers * 0.5;
   if (w.variety) sc += w.variety * sideColors(r.side).reduce((t, x) => t + (colorCount(after, x) > 0 ? 1 : 0), 0);
   if (hard) sc += hardExtras(c, card, after, resColor, victim, victimLen, nextPlayer);
@@ -404,6 +412,7 @@ export function faceStrength(f: CardFace): number {
     case 'wildFlip':
       return 5;
     case 'sweepWild':
+    case 'wheelWild':
       return 4;
     case 'wild4':
     case 'wildColor':
@@ -777,7 +786,7 @@ export function finishPlay(c: Ctx, mv0: Move): Move {
   if (mv.kind !== 'play') return mv;
   let out: Move = mv;
   const card = hand.find((x) => x.id === mv.cardId);
-  if (card && m.teams && m.rules.partnerPass && !m.rules.sevenZero && card.face.kind === 'number' && card.face.value === 7 && extra(mv).give === undefined && c.level >= 2) {
+  if (card && m.teams && m.rules.partnerPass && !sevenSwapOn(m.rules) && card.face.kind === 'number' && card.face.value === 7 && extra(mv).give === undefined && c.level >= 2) {
     const gift = pickGift(c, card, mv.extra ?? []);
     if (gift !== null) {
       const cand = { ...mv, give: gift } as Move;

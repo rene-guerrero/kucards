@@ -18,6 +18,7 @@ import type {
   TableStyle, TableView, TableViewOptions,
 } from '../contracts';
 import * as A from './cardAtlas';
+import { BADGE_BOX, BADGE_X, BADGE_Y, badgeIndex, drawBadgeTiles } from './ruleBadges';
 import { FrameLoop } from './frameLoop';
 import * as L from './layout';
 import { Particles } from './particles';
@@ -230,14 +231,17 @@ const CELL_UV = (() => {
 
 const VERT = /* glsl */ `
 attribute vec4 aCell;
-attribute vec3 aFx;
+attribute vec4 aFx;
+attribute float aTab;
 varying vec2 vUv;
 varying vec4 vCell;
-varying vec3 vFx;
+varying vec4 vFx;
+varying float vTab;
 void main() {
   vUv = uv;
   vCell = aCell;
   vFx = aFx;
+  vTab = aTab;
   gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
 }`;
 
@@ -247,10 +251,21 @@ uniform sampler2D uBack;
 uniform vec2 uCell;
 uniform vec3 uGlow;
 uniform vec3 uSel;
+uniform sampler2D uBadge;
 varying vec2 vUv;
 varying vec4 vCell;
-varying vec3 vFx;
+varying vec4 vFx;
+varying float vTab;
 void main() {
+  // the rule badge tab on the top-left corner (ruleBadges.ts): vFx.w = tile 1..2, 0 = none; front only
+  if (vTab > 0.5) {
+    if (!gl_FrontFacing || vFx.w < 0.5) discard;
+    vec4 t = texture2D(uBadge, vec2((vFx.w - 1.0 + vUv.x) * 0.5, vUv.y));
+    if (t.a < 0.5) discard;
+    gl_FragColor = vec4(t.rgb * (1.0 - vFx.y * 0.5), 1.0);
+    #include <colorspace_fragment>
+    return;
+  }
   vec3 c;
   // vFx.z: +1 the front shows an atlas face, +2 the back shows one (Dia y Noche: the card's other side)
   bool hasBack = vFx.z > 1.5;
@@ -341,6 +356,8 @@ interface CardObj {
   back: number;
   /** the face behind `back` (null = plain back) */
   bk: CardFace | null;
+  /** the rule badge on the front's corner (ruleBadges badgeIndex: 0 = none) */
+  badge: number;
   pos: V3;
   quat: Q;
   s: number;
@@ -417,8 +434,45 @@ function makeDrawCue(): THREE.Mesh {
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
   return new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true }));
 }
-/** rounded-rect card geometry in the XY plane facing +Z, uv 0..1 over the card */
-function buildCardGeometry(): THREE.BufferGeometry {
+/**
+ * rounded-rect card geometry in the XY plane facing +Z, uv 0..1 over the card. With `tab`, one more quad
+ * (aTab = 1, uv 0..1 over it) where the rule badge overhangs the top-left corner (ruleBadges.ts BADGE_*);
+ * the shader discards it unless the card carries a badge, so a badge costs no extra draw call.
+ */
+function buildCardGeometry(tab = false): THREE.BufferGeometry {
+  const g = buildCardShape();
+  if (!tab) return g;
+  const u = L.CARD_H / 90;
+  const x0 = -L.CARD_W / 2 + BADGE_X * u;
+  const y1 = L.CARD_H / 2 - BADGE_Y * u;
+  const sz = BADGE_BOX * u;
+  const z = 0.004; // a hair in front of the face it sticks to
+  const pos = g.attributes.position;
+  const uv = g.attributes.uv;
+  const n = pos.count;
+  const P = new Float32Array((n + 4) * 3);
+  const U = new Float32Array((n + 4) * 2);
+  const T = new Float32Array(n + 4);
+  P.set(pos.array as Float32Array);
+  U.set(uv.array as Float32Array);
+  const quad = [[x0, y1 - sz, 0, 0], [x0 + sz, y1 - sz, 1, 0], [x0 + sz, y1, 1, 1], [x0, y1, 0, 1]];
+  quad.forEach(([x, y, a, b], k) => {
+    P.set([x, y, z], (n + k) * 3);
+    U.set([a, b], (n + k) * 2);
+    T[n + k] = 1;
+  });
+  const idx = Array.from(g.index!.array as ArrayLike<number>);
+  idx.push(n, n + 1, n + 2, n, n + 2, n + 3);
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(P, 3));
+  out.setAttribute('uv', new THREE.BufferAttribute(U, 2));
+  out.setAttribute('aTab', new THREE.BufferAttribute(T, 1));
+  out.setIndex(idx);
+  g.dispose();
+  return out;
+}
+
+function buildCardShape(): THREE.BufferGeometry {
   const w = L.CARD_W;
   const h = L.CARD_H;
   const r = 0.075;
@@ -560,6 +614,10 @@ export class CardTable implements TableView {
 
   // textures / materials / meshes
   private faceMap = new A.FaceMap();
+  /** the rules that put badges on 7s and 0s (setRuleBadges); null = none */
+  private badgeRules: A.BadgeRules | null = null;
+  /** the two rule badge tiles (ruleBadges drawBadgeTiles) */
+  private ruleBadgeTex!: THREE.CanvasTexture;
   private atlasCanvas!: A.AtlasCanvas;
   private atlasTex!: THREE.CanvasTexture;
   /** double-sided (Día y Noche) faces seen: bigger atlas + more anisotropy (see atlasSize) */
@@ -871,7 +929,8 @@ export class CardTable implements TableView {
     this.deckRefl.renderOrder = -8;
     this.scene.add(this.deckRefl);
     // cards
-    this.cardGeo = buildCardGeometry();
+    this.cardGeo = buildCardGeometry(true);
+    this.ruleBadgeTex = A.makeTexture(drawBadgeTiles(), true);
     this.atlasCanvas = A.drawAtlas(this.q.atlas, this.faceMap);
     this.atlasTex = A.makeTexture(this.atlasCanvas.canvas, true);
     this.backTex = A.makeTexture(A.drawBack(this.cardBack, 256), true);
@@ -884,11 +943,12 @@ export class CardTable implements TableView {
         uCell: { value: new THREE.Vector2(A.CELL_SU, A.CELL_SV) },
         uGlow: { value: new THREE.Color('#ffe17a') },
         uSel: { value: new THREE.Color('#8ff0ff') },
+        uBadge: { value: this.ruleBadgeTex },
       },
       side: THREE.DoubleSide,
     });
     this.aCell = new THREE.InstancedBufferAttribute(new Float32Array(POOL * 4), 4).setUsage(THREE.DynamicDrawUsage);
-    this.aFx = new THREE.InstancedBufferAttribute(new Float32Array(POOL * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    this.aFx = new THREE.InstancedBufferAttribute(new Float32Array(POOL * 4), 4).setUsage(THREE.DynamicDrawUsage);
     this.cardGeo.setAttribute('aCell', this.aCell);
     this.cardGeo.setAttribute('aFx', this.aFx);
     this.cards = new THREE.InstancedMesh(this.cardGeo, this.cardMat, POOL);
@@ -923,7 +983,7 @@ export class CardTable implements TableView {
     for (let i = 0; i < POOL; i++) {
       const o: CardObj = {
         i, card: null, cell: 0, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), s: 1, sqx: 1, sqy: 1, glow: 0, dim: 0,
-        vis: false, token: 0, fxToken: 0, jx: 0, jz: 0, jyaw: 0, held: false, back: -1, bk: null,
+        vis: false, token: 0, fxToken: 0, jx: 0, jz: 0, jyaw: 0, held: false, back: -1, bk: null, badge: 0,
       };
       this.pool.push(o);
     }
@@ -1467,6 +1527,7 @@ export class CardTable implements TableView {
     if (!card) return;
     this.faces.set(card.id, card.face);
     o.cell = this.cellOf(card.face, chosen);
+    o.badge = badgeIndex(A.faceBadge(card.face, this.badgeRules));
     if (card.other) this.setBack(o, card.other);
   }
 
@@ -4323,9 +4384,11 @@ export class CardTable implements TableView {
         cells[i * 4 + 2] = CELL_UV[o.back * 2];
         cells[i * 4 + 3] = CELL_UV[o.back * 2 + 1];
       }
-      fx[i * 3] = o.glow;
-      fx[i * 3 + 1] = o.dim;
-      fx[i * 3 + 2] = (o.card ? 1 : 0) + (o.back >= 0 ? 2 : 0);
+      fx[i * 4] = o.glow;
+      fx[i * 4 + 1] = o.dim;
+      fx[i * 4 + 2] = (o.card ? 1 : 0) + (o.back >= 0 ? 2 : 0);
+      // rule badges show only in hands: a card thrown to the pile drops its badge
+      fx[i * 4 + 3] = o.card && o.badge && !this.pile.includes(o) ? o.badge : 0;
     }
     // camera push-in (Ku): the human hand lives in front of the un-pushed camera, so it rides along
     if (this.push > 0) {
@@ -4576,6 +4639,15 @@ export class CardTable implements TableView {
   }
 
   /** extension: Parejas teams (team A teal, team B coral glow on the felt behind each seat); null = none */
+  /**
+   * the match's rules, for the rule badges on 7s (sevenSwap) and 0s (zeroPass): cards placed from now on
+   * show them; cards already on the table keep their faces until they are placed again (rules only change
+   * between matches, before a deal or a restore)
+   */
+  setRuleBadges(rules: A.BadgeRules | null): void {
+    this.badgeRules = rules ? { sevenSwap: !!rules.sevenSwap, zeroPass: !!rules.zeroPass, sevenZero: !!rules.sevenZero } : null;
+  }
+
   setTeams(teams: [Seat[], Seat[]] | null): void {
     this.teams = teams ? [teams[0].slice(), teams[1].slice()] : null;
     this.teamsExplicit = true;
@@ -4689,6 +4761,7 @@ export class CardTable implements TableView {
     this.glowRing.geometry.dispose();
     (this.glowRing.material as THREE.Material).dispose();
     this.glowTex.dispose();
+    this.ruleBadgeTex.dispose();
     this.dirRing.geometry.dispose();
     (this.dirRing.material as THREE.Material).dispose();
     this.dirTex.dispose();

@@ -1101,6 +1101,7 @@ export class OnlineController {
       this.setRoundClock(null);
       plates.clearRanks();
     }
+    if (ev.type === 'deal') view.setRuleBadges?.(m0.rules);
     let m = applyEvent(m0, ev, this.faceOf);
     // the hands this player may see change wholesale: take them from the snapshot
     if ((ev.type === 'deal' || ev.type === 'swapHands' || ev.type === 'rotateHands') && m.round) {
@@ -1434,7 +1435,7 @@ export class OnlineController {
     const stacks = [...new Set(stackMoves.map((p) => p.cardId))].map((cardId) => {
       const c = r.hands[0].find((x) => x.id === cardId)!;
       const color = c.face.color ? ` ${t(`color.${c.face.color}` as Key)}` : '';
-      return { cardId, label: t('hud.stack', { card: `+${penaltyOf(c.face)}${color}` }) };
+      return { cardId, label: t('hud.stack', { card: `+${penaltyOf(c.face)}${color}` }), face: c.face };
     });
     let forcedStack: number | null = null;
     if (responds.length || challenge || stacks.length) {
@@ -1619,6 +1620,7 @@ export class OnlineController {
     if (r) {
       setAudioPrefs({ sound: false });
       try {
+        tb.view.setRuleBadges?.(this.mirror.rules);
         await tb.view.restore({ round: r, seats: this.mirror.seats });
       } finally {
         setAudioPrefs({ sound: this.settings.sound });

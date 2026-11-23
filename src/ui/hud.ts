@@ -17,7 +17,7 @@ import type { Color, Seat } from '../contracts';
 import { COLORS } from '../contracts';
 import type { FaceSpec } from '../roster';
 import { staticFace } from './avatarAdapter';
-import { COLOR_HEX, symbolSvg } from './cardArt';
+import { cardSvg, COLOR_HEX, symbolSvg } from './cardArt';
 import { h, prefersReducedMotion, svgEl } from './dom';
 import { t, type Key } from './i18n';
 import { iconBtn, ICONS, type Overlay } from './overlay';
@@ -41,6 +41,8 @@ export interface ScoreRow {
 export interface ResponseStack {
   cardId: number;
   label: string;
+  /** the card itself: the button shows it as a small thumbnail so its colour is visible */
+  face?: import('../contracts').CardFace;
 }
 
 export interface ResponseOpts {
@@ -414,7 +416,16 @@ export class Hud {
           o.canShield ? opt('shield', t('card.shield'), 'primary', true) : null,
           o.canMirror ? opt('mirror', t('card.mirror'), 'secondary', true) : null,
           o.canChallenge ? opt('challenge', t('hud.challenge'), 'secondary', true) : null,
-          ...stacks.map((s) => opt({ stack: s.cardId }, s.label, 'secondary', true)),
+          ...stacks.map((s) => {
+            const b = opt({ stack: s.cardId }, s.label, 'secondary resp-stack', true);
+            if (s.face) {
+              // the card's own little picture (colour and +N) instead of a long, cut-off label
+              b.setAttribute('aria-label', s.label);
+              b.title = s.label;
+              b.replaceChildren(h('span.resp-stack-card', { html: cardSvg(s.face, { width: 30 }), 'aria-hidden': 'true' }), h('span.btn-label', t('hud.stackShort')));
+            }
+            return b;
+          }),
           accept,
         ),
       );

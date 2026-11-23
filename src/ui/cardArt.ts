@@ -5,6 +5,7 @@
  */
 import type { CardBack, CardFace, CardKind, Color, TableStyle } from '../contracts';
 import { BACK_FIELD, backDesign } from '../render/cardBacks';
+import { BADGE_X, BADGE_Y, badgeSvg, OUTLINED_CORNER, OUTLINE_STEPS, WHEEL_ARCS, WHEEL_HEADS } from '../render/ruleBadges';
 import type { AnyColor, AtlasFace, NightColor } from '../render/cardAtlas';
 
 const DESIGN_IDS: readonly string[] = ['ku', 'weave', 'sun', 'night'];
@@ -112,6 +113,12 @@ function glyph(kind: CardKind, col: string, isIndex = col === CREAM): string {
         `<path d="M3.2 21.9h11.2M3.2 23.4h11.2" ${st.replace('2.6', '1.2')}/>`
       );
     }
+    case 'wheelWild':
+      // Comodín Rueda: two arrows chasing round a small card (every hand moves on one seat)
+      return (
+        `<path d="${WHEEL_ARCS}" ${st}/><path d="${WHEEL_HEADS}" fill="${col}" stroke="${col}" stroke-width="1.2" stroke-linejoin="round"/>` +
+        `<rect x="9.4" y="8.4" width="5.2" height="7.2" rx="1" fill="none" stroke="${col}" stroke-width="1.6"/>`
+      );
     case 'swap':
       return `<path d="M4 8h14l-3-3M20 16H6l3 3" ${st}/><circle cx="12" cy="12" r="1.6" fill="${col}"/>`;
     case 'flip':
@@ -120,8 +127,26 @@ function glyph(kind: CardKind, col: string, isIndex = col === CREAM): string {
     case 'skipAll':
       // a small "no" sign inside a broken ring of four arcs: the stop goes out to every side
       return `<circle cx="12" cy="12" r="5.4" ${st}/><path d="M8.2 15.8 15.8 8.2" ${st}/><path d="${SKIP_ALL_RING}" ${st.replace('2.6', '2.2')}/>`;
-    case 'wildColor':
-      return `<path d="M12 2.6c2.6 3.4 3.9 5.5 3.9 7.2a3.9 3.9 0 0 1-7.8 0c0-1.7 1.3-3.8 3.9-7.2z" fill="${col}"/><path d="M5 15.5h14M6.5 18.6h11M8 21.6h8" ${st.replace('2.6', '2')}/>`;
+    case 'wildColor': {
+      // a deck seen from above at an angle (flat rhombus layers, a thin gap between them), its top card lifted clear of it and a bold
+      // arrow rising from that card: draw until the colour comes. Fills in `col`, gaps and the arrow's rim in the colour behind the glyph.
+      // The corner index has one layer less. Same shapes in src/render/cardAtlas.ts
+      const sep = col === CREAM ? INK : col === NIGHT_LIGHT ? NIGHT_PAPER : col === NIGHT_PAPER ? NIGHT_WILD_FIELD : CREAM;
+      const rhombus = (cy: number, w: number, h: number): string => {
+        const v = [[12 - w, cy], [12, cy - h], [12 + w, cy], [12, cy + h]];
+        const at = (i: number, k: number): string => {
+          const a = v[i % 4]!, b = v[(i + 1) % 4]!;
+          return `${(a[0]! + (b[0]! - a[0]!) * k).toFixed(2)} ${(a[1]! + (b[1]! - a[1]!) * k).toFixed(2)}`;
+        };
+        let d = `M${at(0, 0.2)}`;
+        for (let i = 0; i < 4; i++) d += `L${at(i, 0.8)}Q${v[(i + 1) % 4]!.join(' ')} ${at(i + 1, 0.2)}`;
+        return d + 'Z';
+      };
+      const shapes = isIndex
+        ? [rhombus(20, 9.2, 3), rhombus(17.5, 9.2, 3), rhombus(15, 9.2, 3), rhombus(8.4, 9.2, 3), 'M12 .6 17.2 5.8H13.9V9H10.1V5.8H6.8Z']
+        : [rhombus(20, 9, 2.7), rhombus(18.1, 9, 2.7), rhombus(16.2, 9, 2.7), rhombus(14.3, 9, 2.7), rhombus(8, 9, 2.7), 'M12 .7 16.6 5.4H13.6V8.6H10.4V5.4H7.4Z'];
+      return shapes.map((d) => `<path d="${d}" fill="${col}" stroke="${sep}" stroke-width="${isIndex ? 2 : 1.6}" stroke-linejoin="round" paint-order="stroke"/>`).join('');
+    }
     default:
       return '';
   }
@@ -209,14 +234,17 @@ export function cardSvg(f: AtlasFace, opts: { width?: number; cls?: string; rota
   } else if (f.kind === 'wild') {
     cor = quads(CORNER_QUADS, order) + `<circle cx="11.5" cy="13" r="5.6" fill="none" stroke="${night ? NIGHT_LIGHT : CREAM}" stroke-width="1"/>`;
   } else {
-    cor = `<g transform="translate(4.2 5) scale(.68)">${glyph(f.kind, onField, true)}</g>`;
+    // reverse / skip corners get a dark rim like the number index (copies nudged in 8 directions, as the atlas)
+    const rim = OUTLINED_CORNER.has(f.kind) ? OUTLINE_STEPS.map(([dx, dy]) => `<g transform="translate(${dx} ${dy})">${glyph(f.kind, idxRim, true)}</g>`).join('') : '';
+    cor = `<g transform="translate(4.2 5) scale(.68)">${rim}${glyph(f.kind, onField, true)}</g>`;
   }
   const weave = hue
     ? ''
     : (night ? NIGHT_COLORS : COLORS).map((col, i) => `<path d="M3.4 ${12 + i * 20}L56.6 ${30 + i * 20}" stroke="${COLOR_HEX[col]}" stroke-width="1.2" stroke-opacity=".3"/>`).join('');
   const rot = opts.rotate ? ` style="transform:rotate(${opts.rotate}deg)"` : '';
+  const badge = f.kind === 'wheelWild' ? 'pass' : f.badge;
   return (
-    `<svg class="kc-card ${opts.cls ?? ''}" viewBox="0 0 60 90" width="${w}" height="${hgt}" aria-hidden="true" focusable="false"${rot}>` +
+    `<svg class="kc-card ${opts.cls ?? ''}${badge ? ' kc-badged' : ''}" viewBox="0 0 60 90" width="${w}" height="${hgt}"${badge ? ' overflow="visible"' : ''} aria-hidden="true" focusable="false"${rot}>` +
     `<rect x=".3" y=".3" width="59.4" height="89.4" rx="6.8" fill="${paper}" stroke="${night ? '#fff' : '#000'}" stroke-opacity=".25" stroke-width=".6"/>` +
     `<rect x="3.4" y="3.4" width="53.2" height="83.2" rx="5.6" fill="${field}"/>` +
     `<path d="${SHEEN}" fill="#fff" fill-opacity=".12"/><path d="${SHEEN}" fill="#000" fill-opacity=".12" transform="rotate(180 30 45)"/>` +
@@ -224,6 +252,8 @@ export function cardSvg(f: AtlasFace, opts: { width?: number; cls?: string; rota
     mid +
     cor +
     `<g transform="rotate(180 30 45)">${cor}</g>` +
+    // the rule badge overhangs the top-left corner, outside the 60×90 box (the svg lets it show)
+    (badge ? `<g transform="translate(${BADGE_X} ${BADGE_Y})">${badgeSvg(badge)}</g>` : '') +
     `</svg>`
   );
 }

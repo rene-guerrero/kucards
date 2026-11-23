@@ -67,7 +67,7 @@ export function buildDeckFromSpec(spec: DeckSpec): Card[] {
 
 /** cards without a colour of their own: the player picks the active colour */
 export const isWildKind = (k: CardKind): boolean =>
-  k === 'wild' || k === 'wild4' || k === 'swap' || k === 'draw10' || k === 'wildColor' || k === 'wildFlip' || k === 'sweepWild';
+  k === 'wild' || k === 'wild4' || k === 'swap' || k === 'draw10' || k === 'wildColor' || k === 'wildFlip' || k === 'sweepWild' || k === 'wheelWild';
 /** penalty cards (stackable draw penalties) */
 export const isPenaltyKind = (k: CardKind): boolean => (PENALTY_DRAW[k] ?? 0) > 0;
 

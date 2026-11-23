@@ -27,8 +27,9 @@ import type { ClockSettings } from '../engine/clock';
 import type { ModeDef } from '../engine/modes';
 import { sideSeating } from '../modes/core';
 
-/** KuCards speaks its own protocol (Kudominoes is v1); v3 adds setSwappedSeats */
-export const PROTOCOL_VERSION = 3;
+/** KuCards speaks its own protocol (Kudominoes is v1); v3 adds setSwappedSeats; v4: the Comodín Rueda card
+ * (wheelWild) and the sevenSwap / zeroPass rules (an older peer would drop them or not draw the card) */
+export const PROTOCOL_VERSION = 4;
 /** room codes: 4 chars from an unambiguous alphabet (no 0/O/1/I), shown as KUCA-XXXX */
 export const ROOM_CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 export const ROOM_CODE_LENGTH = 4;

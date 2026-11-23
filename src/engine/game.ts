@@ -66,6 +66,8 @@
  *  - shield / mirror played on their turn are plain coloured cards.
  *  - sweepWild (wild, player-made decks): `color`; every other card of the chosen colour leaves the hand
  *    like a sweep's, and the chosen colour is in play.
+ *  - wheelWild (wild, player-made decks): `color`; every active hand (with its ¡Ku! flag) moves to the next
+ *    active seat in the direction of play, like a 0 under the zeroPass rule ('rotateHands' event).
  *  - wildFlip (wild, two-sided decks): an Eclipse whose player picks the colour in play after the turn
  *    over: `color` is one of the OTHER side's colours (the side it turns to), and it wins over the colour of
  *    the face the Eclipse turns up. In a one-sided deck (never dealt there) it is a plain wild.
@@ -75,9 +77,9 @@
  * off-turn seat holding a card identical (kind + colour + number, never a wild) to the top of the pile,
  * whenever no penalty is pending. The controller polls off-turn seats; the first one applied wins and
  * play continues from the jumper as if it had played the card on its turn. A jumped-in 7 under the 7-0
- * rule swaps with its `target` (one jumpIn listed per target).
+ * rule (sevenSwap) swaps with its `target` (one jumpIn listed per target).
  *
- * partnerPass (Parejas, not with 7-0, which wins): a 7 play may carry `give` = one more card id that goes
+ * partnerPass (Parejas, not with sevenSwap, which wins): a 7 play may carry `give` = one more card id that goes
  * to the partner's hand. Like `ku` it is a flag that `legalMoves` does not enumerate (see
  * `giveOptions()`); the giver must keep at least one card. Events: the 'play' of the 7, then
  * { type: 'draw', seat: partner, count: 1, cards: [given], reason: 'turn' } — the renderer takes the card
@@ -102,7 +104,7 @@ import type { Card, CardFace, Color, GameEvent, MatchSetup, MatchState, Move, Re
 import { COLORS, sideColors } from '../contracts';
 import { cardPoints, isWildKind, matchDeck, otherSideColor, PENALTY_DRAW, turnOver } from './cards';
 import { Rng } from './rng';
-import { modeRules } from './rules';
+import { modeRules, sevenSwapOn, zeroPassOn } from './rules';
 import { modeDef } from './modes';
 import { sideSeating } from '../modes/core';
 
@@ -273,7 +275,6 @@ export function identical(card: Card, top: Card): boolean {
   return a.kind === b.kind && a.color === b.color && (a.kind !== 'number' || a.value === b.value);
 }
 
-const isSevenZero = (rules: RuleSettings) => !!rules.sevenZero;
 const isSeven = (c: Card) => c.face.kind === 'number' && c.face.value === 7;
 const isNumber = (c: Card) => c.face.kind === 'number';
 
@@ -321,13 +322,13 @@ function playVariants(m: MatchState, r: RoundState, seat: Seat, card: Card): Mov
   const colors = (r.side === 'dark') !== flipTo ? sideColors('dark') : COLORS;
   if (card.face.kind === 'swap') return colors.flatMap((color) => targets().map((target) => ({ ...base, color, target })));
   if (isWildKind(card.face.kind)) return colors.map((color) => ({ ...base, color }));
-  if (isSevenZero(m.rules) && isSeven(card)) return targets().map((target) => ({ ...base, target }));
+  if (sevenSwapOn(m.rules) && isSeven(card)) return targets().map((target) => ({ ...base, target }));
   return [base];
 }
 
 function jumpInVariants(m: MatchState, r: RoundState, seat: Seat, card: Card): Move[] {
   const base = { kind: 'jumpIn' as const, seat, cardId: card.id };
-  if (isSevenZero(m.rules) && isSeven(card)) {
+  if (sevenSwapOn(m.rules) && isSeven(card)) {
     return activeSeats(m, r)
       .filter((t) => t !== seat)
       .map((target) => ({ ...base, target }));
@@ -411,7 +412,7 @@ export function giveOptions(match: MatchState, move: Move): number[] {
   const r = match.round;
   if (!r || move.kind !== 'play') return [];
   const rules = match.rules;
-  if (!rules.partnerPass || isSevenZero(rules)) return [];
+  if (!rules.partnerPass || sevenSwapOn(rules)) return [];
   const partner = partnerOf(match, move.seat);
   if (partner === null || r.eliminated[partner]) return [];
   const hand = r.hands[move.seat];
@@ -973,10 +974,10 @@ function resolvePlay(st: St, seat: Seat, card: Card, opts: PlayOpts): void {
 
   switch (kind) {
     case 'number': {
-      if (isSevenZero(rules) && card.face.value === 7 && opts.target !== undefined) {
+      if (sevenSwapOn(rules) && card.face.value === 7 && opts.target !== undefined) {
         swapHands(st, seat, opts.target);
         if (kuSeat === seat) kuSeat = opts.target;
-      } else if (isSevenZero(rules) && card.face.value === 0) {
+      } else if (zeroPassOn(rules) && card.face.value === 0) {
         const dest = rotateHands(st);
         if (kuSeat !== null) kuSeat = dest[kuSeat] ?? kuSeat;
       }
@@ -990,6 +991,13 @@ function resolvePlay(st: St, seat: Seat, card: Card, opts: PlayOpts): void {
       }
       setTurn(st, next(st, seat));
       break;
+    case 'wheelWild': {
+      // Comodín Rueda: the colour is set above; every hand moves on one seat in play direction
+      const dest = rotateHands(st);
+      if (kuSeat !== null) kuSeat = dest[kuSeat] ?? kuSeat;
+      setTurn(st, next(st, seat));
+      break;
+    }
     case 'skip':
       skipNext(st, seat, times);
       break;

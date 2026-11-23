@@ -673,8 +673,8 @@ async function oppDraw() {
 }
 
 // ───────── card picker ─────────
-const PK_KINDS = ['number', 'skip', 'skipAll', 'reverse', 'draw2', 'draw6', 'shield', 'sweep', 'mirror', 'flip', 'wild', 'wildColor', 'wild4', 'draw10', 'swap'];
-const PK_NOCOL = ['wild', 'wildColor', 'wild4', 'draw10', 'swap'];
+const PK_KINDS = ['number', 'skip', 'skipAll', 'reverse', 'draw2', 'draw6', 'shield', 'sweep', 'mirror', 'flip', 'wild', 'wildColor', 'wild4', 'draw10', 'swap', 'wheelWild'];
+const PK_NOCOL = ['wild', 'wildColor', 'wild4', 'draw10', 'swap', 'wheelWild'];
 const PK_DRAW: Record<string, number> = { draw2: 2, draw6: 6, wild4: 4, draw10: 10 };
 const PK_ALIAS: Record<string, string> = { rev: 'reverse', '+2': 'draw2', '+6': 'draw6', '+4': 'wild4', '+10': 'draw10', skipall: 'skipAll', wildcolor: 'wildColor' };
 const PK_COL: Record<string, Color> = { y: 'sol', s: 'sol', m: 'mar', b: 'mar', g: 'palma', r: 'coral' };

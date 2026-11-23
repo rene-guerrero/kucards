@@ -133,6 +133,18 @@ function update(next: AppSettings, key: keyof AppSettings): void {
   if (key === 'language') show(current, false);
 }
 
+/** the saved match for Continuar: its round and "Clásico · 4 jugadores · 2 vs 2", like Partida rápida */
+function savedGame(): { round: number; line: string } | null {
+  const sv = loadSave();
+  const sum = saveSummary(sv);
+  if (!sv || !sum) return null;
+  const m = sv.match;
+  const preset = RULE_PRESETS.find((p) => p.id === m.mode);
+  const name = m.custom?.name ?? m.setup?.custom?.name ?? (preset ? loc(preset.label) : '');
+  const n = m.setup?.players ?? m.round?.hands.length ?? 4;
+  return { ...sum, line: [name, t('menu.players', { n }), m.teams ? '2 vs 2' : ''].filter(Boolean).join(' · ') };
+}
+
 /** the menu's last-setup line: "Clásico · 4 jugadores · 2 vs 2" */
 function setupLine(): string {
   const cm = settings.customMode ? customMode(settings.customMode) : null;
@@ -146,7 +158,7 @@ function screen(id: ScreenId): HTMLElement {
   switch (id) {
     case 'menu':
       return buildMenu({
-        save: saveSummary(loadSave()),
+        save: savedGame(),
         // Jugar starts right away with the last setup (the setup screen's own start, so nothing drifts)
         onPlay: () => (screen('newgame').querySelector('.ng-start') as HTMLButtonElement | null)?.click(),
         onSetup: () => show('newgame'),

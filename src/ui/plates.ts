@@ -401,6 +401,7 @@ function bubbleText(ev: GameEvent): { seat: Seat; text: string; strong: boolean 
       if (k === 'reverse') return say(ev.seat, 'say.reverse');
       if (k === 'swap') return say(ev.seat, 'say.swap');
       if (k === 'sweep' || k === 'sweepWild') return say(ev.seat, 'say.sweep');
+      if (k === 'wheelWild') return say(ev.seat, 'say.wheel');
       if ((k === 'wild' || k === 'wildFlip') && ev.color) return say(ev.seat, 'say.color', false, { color: t(`color.${ev.color as Color}` as Key) });
       if (ev.card.face.draw && ev.card.face.draw > 4) return say(ev.seat, 'say.drawN', true, { n: String(ev.card.face.draw) });
       return null;

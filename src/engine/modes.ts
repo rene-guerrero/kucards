@@ -130,8 +130,8 @@ export function modeDef(id: string): ModeDef {
 
 // ───────────────────────── sanitizing stored JSON ─────────────────────────
 
-const CARD_KINDS: readonly CardKind[] = ['number', 'skip', 'skipAll', 'reverse', 'draw2', 'draw6', 'shield', 'sweep', 'mirror', 'flip', 'wild', 'wildColor', 'wild4', 'draw10', 'swap', 'wildFlip', 'sweepWild'];
-const COLOURLESS = new Set<CardKind>(['wild', 'wildColor', 'wild4', 'draw10', 'swap', 'wildFlip', 'sweepWild']);
+const CARD_KINDS: readonly CardKind[] = ['number', 'skip', 'skipAll', 'reverse', 'draw2', 'draw6', 'shield', 'sweep', 'mirror', 'flip', 'wild', 'wildColor', 'wild4', 'draw10', 'swap', 'wildFlip', 'sweepWild', 'wheelWild'];
+const COLOURLESS = new Set<CardKind>(['wild', 'wildColor', 'wild4', 'draw10', 'swap', 'wildFlip', 'sweepWild', 'wheelWild']);
 
 /** coloured power / action kinds a deck list may hold per colour (`flip` only counts in two-sided decks) */
 export const PER_COLOR_KINDS: readonly CardKind[] = CARD_KINDS.filter((k) => k !== 'number' && !COLOURLESS.has(k));
@@ -172,9 +172,22 @@ export function sanitizeDeckSpec(raw: unknown, dflt: DeckSpec = CLASSIC_DECK): D
   };
 }
 
+/**
+ * stored rules from before a rule was split: `sevenZero` (7 swaps, 0 rotates) became `sevenSwap` +
+ * `zeroPass`. Returns a copy with the new keys filled in (they win when both are present) and the old
+ * key dropped; anything else comes back as it was.
+ */
+export function upgradeLegacyRules<T extends Record<string, unknown>>(raw: T): T {
+  if (!('sevenZero' in raw)) return raw;
+  const { sevenZero, ...rest } = raw as Record<string, unknown>;
+  if (sevenZero !== true) return rest as T;
+  return { ...rest, sevenSwap: rest.sevenSwap ?? true, zeroPass: rest.zeroPass ?? true } as unknown as T;
+}
+
 /** a stored / received KuCards mode → a valid ModeDef (missing fields take their defaults; never throws) */
 export function sanitizeModeDef(raw: unknown): ModeDef {
-  const base = sanitizeModeBase(raw, isBuiltInMode);
+  const clean = sanitizeModeBase(raw, isBuiltInMode);
+  const base = { ...clean, rules: upgradeLegacyRules(clean.rules), ...(clean.forced ? { forced: upgradeLegacyRules(clean.forced) } : {}) };
   const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<ModeDef>;
   const b = typeof r.base === 'string' && isBuiltInMode(r.base) ? r.base : isBuiltInMode(base.id) ? base.id : 'classic';
   const twoSided = r.twoSided === true;

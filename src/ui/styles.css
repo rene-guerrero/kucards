@@ -6858,3 +6858,90 @@ html, body { background-color: #0c1820; }
   .menu-actions > .btn { --h: 52px; font-size: 18px; }
   .menu-actions > .btn.primary { --h: 60px; font-size: 22px; }
 }
+
+/* ── main menu tiles (option C): [Continuar] / [▶ Partida rápida] / [Crear mesa | Multijugador] ── */
+.menu-actions .menu-tile {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  width: 100%;
+  min-height: 0;
+  padding: 12px 18px;
+  text-align: left;
+  white-space: normal;
+}
+.menu-tile-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.1; }
+.menu-tile-label { font-weight: 900; font-size: 18px; }
+.menu-tile-sub { margin-top: 3px; font-size: 13px; font-weight: 800; opacity: 0.78; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-tile-icon { flex: none; display: grid; place-items: center; width: 26px; height: 26px; }
+.menu-tile-icon svg { width: 100%; height: 100%; }
+.menu-tile-icon.gold { color: #ffb627; width: 30px; height: 30px; }
+.menu-actions .menu-tile.wide { height: 92px; border-radius: 24px; }
+.menu-tile.wide .menu-tile-label { font-size: 25px; }
+.menu-tile.wide .menu-tile-sub { font-size: 14px; }
+.menu-tile-icon.disc { width: 54px; height: 54px; padding: 15px; border-radius: 50%; background: #2a1300; color: #ffd24a; }
+.menu-actions .menu-tile.slim { height: 64px; }
+.menu-tile-row { display: flex; gap: 12px; }
+.menu-actions .menu-tile.half { flex: 1 1 0; min-width: 0; height: 112px; flex-direction: column; align-items: flex-start; justify-content: center; gap: 8px; padding: 14px; border-radius: 22px; }
+.menu-tile.half .menu-tile-label { font-size: 16.5px; }
+.menu-tile.half .menu-tile-sub { font-size: 12px; white-space: normal; color: #cfe0ea; }
+@media (orientation: landscape) and (max-height: 520px) {
+  .menu-actions .menu-tile.wide { height: 72px; }
+  .menu-actions .menu-tile.half { height: 84px; gap: 4px; }
+  .menu-actions .menu-tile.slim { height: 54px; }
+}
+
+/* top buttons: solid, no see-through */
+.menu-profile, .menu-top-icons .about-btn { background: #16272f; }
+.menu-top-icons .about-btn { --bg: #16272f; }
+/* tile icons: the play triangle takes the icon colour; the disc is dark navy with a mango triangle */
+.menu-tile-icon svg { fill: currentColor; }
+.menu-tile-icon.gold svg path[fill='none'] { fill: none; }
+.menu-tile-icon.disc { background: #16272f; color: #ffb627; box-shadow: inset 0 0 0 2px #e0a033; padding: 14px 13px 14px 15px; }
+/* last row: shorter, icon column + text column (flex 1) */
+.menu-actions .menu-tile.half { height: 74px; flex-direction: row; align-items: center; gap: 10px; padding: 10px 12px; }
+.menu-tile.half .menu-tile-text { flex: 1 1 auto; }
+.menu-tile.half .menu-tile-sub { white-space: nowrap; }
+@media (orientation: landscape) and (max-height: 520px) { .menu-actions .menu-tile.half { height: 62px; } }
+.menu-tile.half .menu-tile-label { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-tile.half .menu-tile-sub { font-size: 11.5px; white-space: normal; line-height: 1.15; }
+.menu-tile.half .menu-tile-icon.gold { width: 26px; height: 26px; }
+.menu-tile-icon.disc { padding: 14px; }
+
+/* avatar editor tab arrows: small game buttons (dark with gold rim, 3D lip, press down) */
+.face-editor .kua-tabs-arrow {
+  align-self: center;
+  width: 38px;
+  min-height: 0;
+  height: 38px;
+  margin: 0 4px 4px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #223845, #16272f);
+  color: #ffd27a;
+  font-size: 22px;
+  font-weight: 900;
+  box-shadow: inset 0 0 0 2px #e0a033, 0 4px 0 #070f14;
+  transition: transform 0.09s ease, box-shadow 0.09s ease;
+}
+.face-editor .kua-tabs-arrow:not(:disabled):active {
+  color: #ffd27a;
+  transform: translateY(3px);
+  box-shadow: inset 0 0 0 2px #e0a033, 0 1px 0 #070f14;
+}
+.face-editor .kua-tabs-arrow:disabled { opacity: 0.35; }
+/* draw the arrow as a centred chevron (the ‹ › text glyphs sit off-centre in the game font) */
+.face-editor .kua-tabs-arrow { display: flex; align-items: center; justify-content: center; font-size: 0; line-height: 0; }
+.face-editor .kua-tabs-arrow::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M9.25 2.5 4.75 7l4.5 4.5' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M9.25 2.5 4.75 7l4.5 4.5' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.face-editor .kua-tabs-next::before { transform: scaleX(-1); }
+/* stack buttons: a small picture of the card (its colour and +N), then "Apilar" */
+.resp-opt.resp-stack { gap: 8px; padding-left: 10px; padding-right: 14px; }
+.resp-stack-card { flex: none; display: block; width: 30px; height: 45px; margin: -6px 0; filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.45)); }
+.resp-stack-card svg { display: block; width: 100%; height: 100%; }

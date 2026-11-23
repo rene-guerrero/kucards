@@ -168,7 +168,7 @@ export function hitFan(f: FanLayout, x: number, y: number, lifts?: ArrayLike<num
 const COLOR_ORDER: Record<string, number> = { sol: 0, mar: 1, palma: 2, coral: 3 };
 const KIND_ORDER: Record<CardKind, number> = {
   number: 0, skip: 1, skipAll: 2, reverse: 3, draw2: 4, draw6: 5, shield: 6, sweep: 7, mirror: 8, flip: 9,
-  wild: 10, wildColor: 11, wild4: 12, draw10: 13, swap: 14, wildFlip: 15, sweepWild: 16,
+  wild: 10, wildColor: 11, wild4: 12, draw10: 13, swap: 14, wildFlip: 15, sweepWild: 16, wheelWild: 17,
 };
 
 export function cardOrder(a: Card, b: Card): number {

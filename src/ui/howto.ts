@@ -9,7 +9,7 @@ export function screenHeader(title: string, onBack: () => void): HTMLElement {
 }
 
 interface Item {
-  cards?: CardFace[];
+  cards?: (CardFace & { badge?: 'swap' | 'pass' })[];
   /** a seating diagram instead of cards */
   seats?: 'ABAB' | 'AABB';
   title?: Key;
@@ -57,6 +57,7 @@ const SECTIONS: Section[] = [
       { cards: [{ kind: 'swap', color: null }], title: 'card.swap', text: 'howto.swap' },
       { cards: [{ kind: 'sweep', color: 'palma' }], title: 'card.sweep', text: 'howto.sweep' },
       { cards: [{ kind: 'sweepWild', color: null }], title: 'card.sweepWild', text: 'howto.sweepWild' },
+      { cards: [{ kind: 'wheelWild', color: null }], title: 'card.wheelWild', text: 'howto.wheelWild' },
       { cards: [{ kind: 'shield', color: 'mar' }], title: 'card.shield', text: 'howto.shield' },
       { cards: [{ kind: 'mirror', color: 'coral' }], title: 'card.mirror', text: 'howto.mirror' },
       { cards: [{ kind: 'wildColor', color: null }], title: 'card.wildColor', text: 'howto.wildColor' },
@@ -99,7 +100,8 @@ const SECTIONS: Section[] = [
       { text: 'howto.rules.intro' },
       { cards: [{ kind: 'draw2', color: 'sol', draw: 2 }, { kind: 'draw2', color: 'mar', draw: 2 }], text: 'howto.rule.stacking', lead: true },
       { cards: [N('palma', 4), N('palma', 4)], text: 'howto.rule.jumpIn', lead: true },
-      { cards: [N('coral', 7), N('mar', 0)], text: 'howto.rule.sevenZero', lead: true },
+      { cards: [{ ...N('coral', 7), badge: 'swap' }], text: 'howto.rule.sevenSwap', lead: true },
+      { cards: [{ ...N('mar', 0), badge: 'pass' }], text: 'howto.rule.zeroPass', lead: true },
       { text: 'howto.rule.drawMode', lead: true },
       { text: 'howto.rule.drawnCard', lead: true },
       { cards: [N('sol', 7), N('palma', 7), N('coral', 7)], text: 'howto.rule.multiPlay', lead: true },

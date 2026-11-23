@@ -5,7 +5,7 @@ import { sanitizeFace as cleanFace, type FaceSpec } from 'kuavatars/faces';
  * Ported from Kudominoes; modes are KuCards' (Clásico / Pura acción / Ciclón: 2–4 players, Parejas: 4).
  */
 import type { GameMode, MatchState, RuleSettings, Seat } from '../../contracts';
-import { DEFAULT_RULES, modeRules, RULE_PRESETS, RULE_SETTINGS } from '../../engine/rules';
+import { DEFAULT_RULES, modeRules, RULE_PRESETS, RULE_SETTINGS, upgradeLegacyRules } from '../../engine/rules';
 import {
   activeSeatsOf,
   MAX_NAME_LENGTH,
@@ -110,7 +110,7 @@ export function newRoom(code: string, now: number, hostId = ''): RoomData {
  */
 export function normalizeRules(raw: unknown, mode: GameMode): RuleSettings {
   const out: RuleSettings = { ...(RULE_PRESETS.find((p) => p.id === mode)?.rules ?? DEFAULT_RULES) };
-  const s = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const s = upgradeLegacyRules((raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>);
   for (const d of RULE_SETTINGS) {
     if (!(d.key in out)) out[d.key] = d.default;
     const v = s[d.key];

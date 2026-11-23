@@ -6,7 +6,7 @@ import { served } from '../net/config';
 
 export interface MenuOpts {
   /** a saved match to continue (null = none) */
-  save: { round: number } | null;
+  save: { round: number; line: string } | null;
   /** quick start with the last setup */
   onPlay(): void;
   /** the full setup screen (the line under Jugar) */
@@ -48,6 +48,10 @@ const GLOBE =
 /** two people side by side (Jugar con amigos) */
 const FRIENDS =
   '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8.6" cy="8.4" r="3.3" fill="none" stroke="currentColor" stroke-width="2.1"/><path d="M2.6 19.4c.5-3.4 2.9-5.4 6-5.4s5.5 2 6 5.4" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/><circle cx="16.4" cy="7.6" r="2.7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16.4 12.9c2.7 0 4.6 1.8 5 4.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+
+/** resume: a play triangle inside a circular arrow (Continuar) */
+const RESUME =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.6-5.9" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/><path d="M18.6 2.8v3.9h-3.9" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 8.4v7.2a.6.6 0 0 0 .9.5l5.6-3.6a.6.6 0 0 0 0-1l-5.6-3.6a.6.6 0 0 0-.9.5z" fill="currentColor"/></svg>';
 
 /** sliders: change the game setup */
 const ADJUST =
@@ -97,20 +101,20 @@ export function buildMenu(o: MenuOpts): HTMLElement {
   const actions = h('div.menu-actions');
   const hasNet = !!(o.onOnline || o.onFriends);
   let el: HTMLElement;
-  const multi = hasNet ? btn(t('menu.multi'), () => multiSheet(el, o, icon), 'secondary lg menu-multi', icon(FRIENDS)) : null;
-  // the split play button: start with the last setup | change the setup
-  const split = (label: string, kind: 'primary' | 'secondary') => {
-    const go = h('button.menu-split-go', { type: 'button' }, h('span.menu-split-label', icon(ICONS.play), h('span', label)), h('span.btn-sub.menu-split-sub', o.setupLine));
-    go.addEventListener('click', o.onPlay);
-    const cfg = h('button.menu-split-cfg', { type: 'button', 'aria-label': t('menu.setup'), title: t('menu.setup'), html: ADJUST });
-    cfg.addEventListener('click', o.onSetup);
-    // the wrapper is a shared .btn (fill, rim, 3D lip, press); its two halves are transparent hit areas
-    return h(`div.menu-split.btn.${kind}`, go, cfg);
+  // tiles: [Continuar] / [▶ Partida rápida · last setup] / [Crear mesa | Multijugador]
+  const tile = (cls: string, ic: HTMLElement, label: string, sub: string, onClick: () => void) => {
+    const b = h(`button.btn.menu-tile.${cls}`, { type: 'button' }, ic, h('span.menu-tile-text', h('span.menu-tile-label', label), h('span.menu-tile-sub', sub)));
+    b.addEventListener('click', onClick);
+    return b;
   };
-  if (o.save) actions.append(btn(t('menu.continue'), o.onContinue, 'primary xl', h('span.btn-sub', t('menu.continueSub', { n: o.save.round }))), split(t('menu.newGame'), 'secondary'));
-  else actions.append(split(t('menu.play'), 'primary'));
-  if (multi) actions.append(multi);
-  ((actions.querySelector('.menu-split-go, button.btn') as HTMLElement | null) ?? actions).dataset.autofocus = '';
+  const tileIcon = (svg: string, cls = '') => h(`span.menu-tile-icon${cls}`, { html: svg, 'aria-hidden': 'true' });
+  if (o.save) actions.append(tile('secondary slim', tileIcon(RESUME, '.gold'), t('menu.continue'), `${o.save.line} · ${t('menu.continueSub', { n: o.save.round })}`, o.onContinue));
+  actions.append(tile('primary wide', tileIcon(ICONS.play, '.disc'), t('menu.quick'), o.setupLine, o.onPlay));
+  const setupTile = tile('secondary half', tileIcon(ADJUST, '.gold'), t('menu.table'), t('menu.tableSub'), o.onSetup);
+  const sub = o.onOnline && o.onFriends ? t('menu.multiSubBoth') : o.onOnline ? t('menu.viaInternet') : t('menu.viaLocal');
+  const multi = hasNet ? tile('secondary half menu-multi', tileIcon(FRIENDS, '.gold'), t('menu.multi'), sub, () => multiSheet(el, o, icon)) : null;
+  actions.append(h('div.menu-tile-row', setupTile, multi));
+  (actions.querySelector('button.btn') as HTMLElement).dataset.autofocus = '';
   const chip = h('button.menu-profile', { type: 'button', 'aria-label': t('settings.name') }, h('span.menu-profile-face', o.profile.face), h('span.menu-profile-name', o.profile.name));
   chip.addEventListener('click', o.profile.onOpen);
   const top = h(

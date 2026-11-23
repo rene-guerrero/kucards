@@ -15,6 +15,9 @@
 import * as THREE from 'three';
 import type { CardBack, CardFace, CardKind, Color, TableStyle } from '../contracts';
 import { BACK_FIELD, backDesign } from './cardBacks';
+import { OUTLINED_CORNER, OUTLINE_STEPS, WHEEL_ARCS, WHEEL_HEADS, type FaceBadge } from './ruleBadges';
+
+export { faceBadge, type BadgeRules, type FaceBadge } from './ruleBadges';
 
 /** the four card colours: one hue each and four clearly different lightness steps (sol lightest, mar darkest) */
 export const COLOR_HEX: Record<AnyColor, string> = {
@@ -99,10 +102,17 @@ const DEFAULT_DRAW: Record<string, number | undefined> = { draw1: 1, draw2: 2, w
 
 /** an atlas face: a card face (day or night), plus the colour chosen for a played wild-type card (its field
  *  colour) and the night flag for colourless night cards */
-export type AtlasFace = Omit<CardFace, 'color'> & { color: AnyColor | null; tint?: AnyColor; night?: boolean };
+export type AtlasFace = Omit<CardFace, 'color'> & {
+  color: AnyColor | null;
+  tint?: AnyColor;
+  night?: boolean;
+  /** the rule badge on the card's corner (ruleBadges.ts): drawn OUTSIDE the face, so never part of the atlas cell */
+  badge?: FaceBadge;
+};
+
 
 /** wild-type kinds whose player picks a colour (the played card takes it as its field) */
-export const TINTABLE: readonly CardKind[] = ['wild', 'wild4', 'swap', 'draw10', 'wildColor', 'wildFlip', 'sweepWild'];
+export const TINTABLE: readonly CardKind[] = ['wild', 'wild4', 'swap', 'draw10', 'wildColor', 'wildFlip', 'sweepWild', 'wheelWild'];
 
 /** the face to show for a card on the pile: wild-type cards take the chosen colour, others stay as they are */
 export function playedFace(f: AtlasFace, chosen: AnyColor | null | undefined): AtlasFace {
@@ -385,6 +395,17 @@ function drawGlyph(g: G, kind: CardKind, col: string, isIndex = col === CREAM): 
       g.stroke(P('M3.2 21.9h11.2M3.2 23.4h11.2'));
       return true;
     }
+    case 'wheelWild': {
+      // Comodín Rueda: two arrows chasing round a small card (every hand moves on one seat)
+      g.stroke(P(WHEEL_ARCS));
+      g.lineWidth = 1.2;
+      g.fill(P(WHEEL_HEADS));
+      g.stroke(P(WHEEL_HEADS));
+      g.lineWidth = 1.6;
+      roundRect(g, 9.4, 8.4, 5.2, 7.2, 1);
+      g.stroke();
+      return true;
+    }
     case 'swap':
       g.stroke(P('M4 8h14l-3-3M20 16H6l3 3'));
       g.beginPath();
@@ -407,12 +428,32 @@ function drawGlyph(g: G, kind: CardKind, col: string, isIndex = col === CREAM): 
       g.lineWidth = 2.2;
       g.stroke(P(SKIP_ALL_RING));
       return true;
-    case 'wildColor':
-      // a drop falling into a cup of stacked lines: draw until the colour comes
-      g.fill(P('M12 2.6c2.6 3.4 3.9 5.5 3.9 7.2a3.9 3.9 0 0 1-7.8 0c0-1.7 1.3-3.8 3.9-7.2z'));
-      g.lineWidth = 2;
-      g.stroke(P('M5 15.5h14M6.5 18.6h11M8 21.6h8'));
+    case 'wildColor': {
+      // a deck seen from above at an angle (flat rhombus layers, a thin gap between them), its top card lifted clear of it and a bold
+      // arrow rising from that card: draw until the colour comes. Fills in `col`, gaps and the arrow's rim in the colour behind the glyph.
+      // The corner index has one layer less. Same shapes in src/ui/cardArt.ts
+      const sep = col === CREAM ? INK : col === NIGHT_LIGHT ? NIGHT_PAPER : col === NIGHT_PAPER ? NIGHT_WILD_FIELD : CREAM;
+      const rhombus = (cy: number, w: number, h: number): string => {
+        const v = [[12 - w, cy], [12, cy - h], [12 + w, cy], [12, cy + h]];
+        const at = (i: number, k: number): string => {
+          const a = v[i % 4]!, b = v[(i + 1) % 4]!;
+          return `${(a[0]! + (b[0]! - a[0]!) * k).toFixed(2)} ${(a[1]! + (b[1]! - a[1]!) * k).toFixed(2)}`;
+        };
+        let d = `M${at(0, 0.2)}`;
+        for (let i = 0; i < 4; i++) d += `L${at(i, 0.8)}Q${v[(i + 1) % 4]!.join(' ')} ${at(i + 1, 0.2)}`;
+        return d + 'Z';
+      };
+      const shapes = isIndex
+        ? [rhombus(20, 9.2, 3), rhombus(17.5, 9.2, 3), rhombus(15, 9.2, 3), rhombus(8.4, 9.2, 3), 'M12 .6 17.2 5.8H13.9V9H10.1V5.8H6.8Z']
+        : [rhombus(20, 9, 2.7), rhombus(18.1, 9, 2.7), rhombus(16.2, 9, 2.7), rhombus(14.3, 9, 2.7), rhombus(8, 9, 2.7), 'M12 .7 16.6 5.4H13.6V8.6H10.4V5.4H7.4Z'];
+      g.strokeStyle = sep;
+      g.lineWidth = isIndex ? 2 : 1.6;
+      for (const d of shapes) {
+        g.stroke(P(d));
+        g.fill(P(d));
+      }
       return true;
+    }
     default:
       return false;
   }
@@ -637,6 +678,13 @@ export function drawFace(g: G, f: AtlasFace, x: number, y: number, w: number): v
       g.save();
       g.translate(4.2, 5);
       g.scale(0.68, 0.68);
+      // reverse / skip corners get a dark rim like the number index (copies nudged in 8 directions)
+      if (OUTLINED_CORNER.has(f.kind)) for (const [dx, dy] of OUTLINE_STEPS) {
+        g.save();
+        g.translate(dx, dy);
+        drawGlyph(g, f.kind, idxRim, true);
+        g.restore();
+      }
       drawGlyph(g, f.kind, onField, true);
       g.restore();
     }

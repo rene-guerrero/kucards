@@ -4,7 +4,7 @@
  */
 import type { AppSettings, GameMode, Lineup, RulePreset, RuleSettings, SettingDescriptor } from '../contracts';
 import { CARD_BACKS, TABLE_STYLES } from '../contracts';
-import { DEFAULT_RULES, modeRules, RULE_PRESETS, RULE_SETTINGS, RULES_VERSION } from '../engine/rules';
+import { DEFAULT_RULES, modeRules, RULE_PRESETS, RULE_SETTINGS, RULES_VERSION, upgradeLegacyRules } from '../engine/rules';
 import { DEFAULT_CLOCK, sanitizeClock } from '../engine/clock';
 import { DEFAULT_GESTURES, sanitizeGestures } from '../net/protocol';
 import { DEFAULT_LINEUP, isCharacter } from '../roster';
@@ -49,7 +49,7 @@ export function descriptorsFor(mode: GameMode, src: RulesSource = ENGINE): Setti
  */
 export function sanitizeRules(stored: unknown, mode: GameMode, src: RulesSource = ENGINE): RuleSettings {
   const out = presetRules(mode, src);
-  const s = (stored && typeof stored === 'object' ? stored : {}) as Record<string, unknown>;
+  const s = upgradeLegacyRules((stored && typeof stored === 'object' ? stored : {}) as Record<string, unknown>);
   for (const d of src.RULE_SETTINGS) {
     if (!(d.key in out)) out[d.key] = d.default;
     const v = s[d.key];

@@ -1,5 +1,7 @@
 import type { GameMode, RulePreset, RuleSettings, SettingDescriptor } from '../contracts';
-import { applyForced, modeDef } from './modes';
+import { applyForced, modeDef, upgradeLegacyRules } from './modes';
+
+export { upgradeLegacyRules };
 
 export const RULES_VERSION = 1;
 
@@ -46,9 +48,17 @@ export const RULE_SETTINGS: SettingDescriptor[] = [
     options: [on, off],
   },
   {
-    key: 'sevenZero', group: 'turn', type: 'toggle', default: false,
-    label: { es: '7 cambia, 0 rota', en: '7 swaps, 0 rotates' },
-    help: { es: 'Con un 7 cambias tu mano con otro jugador; con un 0 todos pasan su mano al siguiente.', en: 'A 7 swaps hands with a player; a 0 passes every hand along.' },
+    key: 'sevenSwap', group: 'turn', type: 'toggle', default: false,
+    label: { es: 'El 7 cambia manos', en: 'Sevens swap hands' },
+    short: { es: '7 cambia', en: '7 swaps' },
+    help: { es: 'Al jugar un 7 eliges a otro jugador y cambias tu mano con la suya.', en: 'Playing a 7 lets you pick another player and swap hands with them.' },
+    options: [on, off],
+  },
+  {
+    key: 'zeroPass', group: 'turn', type: 'toggle', default: false,
+    label: { es: 'El 0 pasa las manos', en: 'Zeros pass hands' },
+    short: { es: '0 pasa', en: '0 passes' },
+    help: { es: 'Al jugar un 0, todos pasan su mano entera al siguiente jugador en el sentido del juego.', en: 'Playing a 0 makes everyone pass their whole hand to the next player in the direction of play.' },
     options: [on, off],
   },
   {
@@ -145,7 +155,7 @@ export const RULE_PRESETS: RulePreset[] = [
     deck: 'action', stacking: 'any', 'power.swap': true, 'power.sweep': true,
   }),
   preset('cyclone', { es: 'Ciclón', en: 'Cyclone' }, { es: 'Castigos que se acumulan. Con 25 cartas, quedas fuera.', en: 'Stacking penalties. Hold 25 cards and you are out.' }, {
-    deck: 'cyclone', stacking: 'any', 'power.sweep': true, eliminateAt: 25, drawMode: 'untilPlayable', target: 0,
+    deck: 'cyclone', stacking: 'any', 'power.sweep': true, eliminateAt: 25, drawMode: 'untilPlayable', target: 0, sevenSwap: true, zeroPass: true,
   }),
   preset('sideBySide', { es: 'Codo a codo', en: 'Side by Side' }, { es: '2 vs 2, tu pareja al lado. Los castigos se acumulan.', en: '2 vs 2, partner beside you. Penalties always stack.' }, {
     deck: 'sideBySide', stacking: 'any', 'power.sweep': true,
@@ -154,6 +164,11 @@ export const RULE_PRESETS: RulePreset[] = [
     deck: 'dayNight', stacking: 'any',
   }),
 ];
+
+/** a 7 swaps hands with a chosen player (`sevenSwap`; the older combined `sevenZero` turns it on too) */
+export const sevenSwapOn = (rules: RuleSettings): boolean => !!(rules.sevenSwap || rules.sevenZero);
+/** a 0 passes every hand along in play direction (`zeroPass`; the older combined `sevenZero` turns it on too) */
+export const zeroPassOn = (rules: RuleSettings): boolean => !!(rules.zeroPass || rules.sevenZero);
 
 /**
  * rules a mode always enforces: every mode but Clásico stacks +2 / +4 freely; Pura acción always has

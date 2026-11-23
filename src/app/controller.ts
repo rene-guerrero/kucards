@@ -293,6 +293,7 @@ export class GameController {
       if (ev.type === 'roundEnd') this.stopClock();
       // "Draw N!" starts as the drawing starts; the others once their card has landed
       if (ev.type === 'draw') voiceForEvent(ev, 60);
+      if (ev.type === 'deal') view.setRuleBadges?.(this.match.rules);
       await view.handle(ev);
       powerSfxForEvent(ev);
       // another player's wild: their pick shows on the colour diamond before play goes on
@@ -669,7 +670,7 @@ export class GameController {
     const stacks = [...new Set(stackMoves.map((p) => p.cardId))].map((cardId) => {
       const c = r.hands[0].find((x) => x.id === cardId)!;
       const color = c.face.color ? ` ${t(`color.${c.face.color}` as Key)}` : '';
-      return { cardId, label: t('hud.stack', { card: `+${penaltyOf(c.face)}${color}` }) };
+      return { cardId, label: t('hud.stack', { card: `+${penaltyOf(c.face)}${color}` }), face: c.face };
     });
     let forcedStack: number | null = null;
     if (responds.length || challenge || stacks.length) {

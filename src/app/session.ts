@@ -244,6 +244,7 @@ export async function startSession(deps: SessionDeps, match: MatchState, lineup:
   if (restored && match.round && !match.round.over) {
     const r = match.round;
     view.setDeck([...r.deck, ...r.discard, ...r.hands.flat()]);
+    view.setRuleBadges?.(match.rules);
     await view.restore({ round: r, seats: match.seats });
   }
   void controller.run(restored).catch((e) => {

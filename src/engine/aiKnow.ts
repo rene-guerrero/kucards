@@ -17,6 +17,7 @@
  */
 import type { Card, CardKind, Color, MatchState, RoundState, Seat } from '../contracts';
 import { colorSlot } from '../contracts';
+import { sevenSwapOn, zeroPassOn } from './rules';
 
 /** a colour's slot 0–3 (Día y Noche: night colours share the slots of the day ones; one side is in play) */
 export const colorIdx = (c: Color): number => colorSlot(c);
@@ -232,8 +233,9 @@ function infer(t: Track, prev: Snap, cur: Snap, r: RoundState, m: MatchState): v
   }
   const added = r.discard.slice(prev.pile.length);
   // hands moved around (7 / 0 / swap): per-seat knowledge no longer applies
-  const seven = !!m.rules.sevenZero;
-  if (added.some((c) => c.face.kind === 'swap' || (seven && c.face.kind === 'number' && (c.face.value === 7 || c.face.value === 0)))) {
+  const seven = sevenSwapOn(m.rules);
+  const zero = zeroPassOn(m.rules);
+  if (added.some((c) => c.face.kind === 'swap' || c.face.kind === 'wheelWild' || (c.face.kind === 'number' && ((seven && c.face.value === 7) || (zero && c.face.value === 0))))) {
     t.voids = [0, 0, 0, 0, 0, 0];
     t.likes = [0, 0, 0, 0, 0, 0];
     t.prevColor = k === 1 ? prev.active : null;

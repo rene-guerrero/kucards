@@ -49,7 +49,8 @@ export type CardKind =
   | 'wildColor' // wild "draw until the colour": next player draws until they get the colour you chose
   // player-made decks only (the editor offers them; no built-in deck holds them)
   | 'wildFlip' // Eclipse comodín (two-sided decks): turns every card over, the player picks the new side's colour
-  | 'sweepWild'; // Barrida comodín: the player picks a colour and discards every card of it from their hand
+  | 'sweepWild' // Barrida comodín: the player picks a colour and discards every card of it from their hand
+  | 'wheelWild'; // Comodín Rueda: the player picks a colour and every hand passes to the next player in play direction
 
 export const POWER_KINDS: readonly CardKind[] = ['swap', 'shield', 'sweep', 'mirror'];
 export const CYCLONE_KINDS: readonly CardKind[] = ['skipAll', 'draw6', 'draw10', 'wildColor'];
@@ -488,6 +489,8 @@ export interface TableView {
    * again. Called after every change to that hand; the fan stays where it is, cards just turn face up.
    */
   setOpenHand?(seat: Seat, cards: Card[] | null): void;
+  /** the match's rules: 7s (sevenSwap) and 0s (zeroPass) dealt or restored from now on show their rule badge */
+  setRuleBadges?(rules: RuleSettings | null): void;
   dispose(): void;
 }
 
