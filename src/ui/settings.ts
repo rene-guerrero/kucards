@@ -16,6 +16,7 @@ import { screenHeader } from './howto';
 import { enhanceHScroll } from './hscroll';
 import { loc, t, tMaybe, type Key } from './i18n';
 import { ICONS, segmented, toggle } from './overlay';
+import { canFullscreen, toggleFullscreen } from '../app/fullscreen';
 import { modeSelect, builtInModeNames } from './modeSelect';
 import { customMode, deleteCustomMode, draftFrom } from '../app/customModes';
 import { BUILTIN_MODES, modeFromTemplate, type ModeDef } from '../engine/modes';
@@ -369,9 +370,9 @@ export function buildSettings(o: SettingsOpts): HTMLElement {
   const tabGame = () =>
     h(
       'div.set-tab-body',
-      // your name and face can't change mid-game (the other players already know you by them)
+      // your name and face still can't change mid-game; the old warning card is intentionally gone
       o.matchInProgress
-        ? h('section.card.set-card', h('p.warn', { role: 'note' }, t('settings.profileLocked')))
+        ? null
         : h(
             'section.card.set-card',
             // the name field sits in the face editor's button column (same width, aligned with Aleatorio / Restablecer)
@@ -428,7 +429,16 @@ export function buildSettings(o: SettingsOpts): HTMLElement {
       'div.set-tab-body',
       h(
         'section.card.set-card',
-        row(t('settings.quality'), qualityCtl()),
+        row(
+          t('settings.quality'),
+          canFullscreen()
+            ? h(
+                'div.quality-row',
+                qualityCtl(),
+                h('button.btn.sq.fs-btn', { type: 'button', 'aria-label': t('menu.fullscreen'), title: t('menu.fullscreen'), html: ICONS.fullscreen, onclick: () => void toggleFullscreen() }),
+              )
+            : qualityCtl(),
+        ),
         row(
           t('settings.tableStyle'),
           swatchPicker<TableStyle>(TABLE_STYLES, s.tableStyle ?? 'teal', (v) => tableSwatchSvg(v), (v) => t(`settings.table.${v}` as Key), t('settings.tableStyle'), (v) => set('tableStyle', v), 'table'),

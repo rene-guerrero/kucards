@@ -19,6 +19,7 @@ import { buildAbout } from './ui/about';
 import { h, setReducedMotionPref, setUiQuality } from './ui/dom';
 import { buildHowto } from './ui/howto';
 import { loc, setLang, t } from './ui/i18n';
+import { staticFace } from './ui/avatarAdapter';
 import { buildMenu } from './ui/menu';
 import { onlineAvailable, served, localPlayAvailable, type NetMode } from './net/config';
 import { rememberedRoom } from './net/identity';
@@ -132,12 +133,33 @@ function update(next: AppSettings, key: keyof AppSettings): void {
   if (key === 'language') show(current, false);
 }
 
+/** the menu's last-setup line: "Clásico · 4 jugadores · 2 vs 2" */
+function setupLine(): string {
+  const cm = settings.customMode ? customMode(settings.customMode) : null;
+  const preset = RULE_PRESETS.find((p) => p.id === (settings.mode ?? 'classic'));
+  const name = cm?.name ?? (preset ? loc(preset.label) : '');
+  const n = settings.players ?? 4;
+  return [name, t('menu.players', { n }), n === 4 && settings.teamPlay ? '2 vs 2' : ''].filter(Boolean).join(' · ');
+}
+
 function screen(id: ScreenId): HTMLElement {
   switch (id) {
     case 'menu':
       return buildMenu({
         save: saveSummary(loadSave()),
-        onPlay: () => show('newgame'),
+        // Jugar starts right away with the last setup (the setup screen's own start, so nothing drifts)
+        onPlay: () => (screen('newgame').querySelector('.ng-start') as HTMLButtonElement | null)?.click(),
+        onSetup: () => show('newgame'),
+        setupLine: setupLine(),
+        profile: {
+          face: staticFace(settings.avatarFace ?? 0),
+          name: humanName(),
+          onOpen: () => {
+            backTo = 'menu';
+            update({ ...settings, settingsTab: 'game' }, 'settingsTab');
+            show('settings');
+          },
+        },
         onContinue: continueGame,
         onSettings: () => {
           backTo = 'menu';
@@ -312,7 +334,11 @@ document.getElementById('boot')?.remove();
 // the demo table is the menu backdrop (three.js is its own chunk); the game replaces it
 let backdrop: { dispose(): void } | null = null;
 let backdropToken = 0;
+const NO_DEMO = true;
 function startBackdrop(): void {
+  // the menu now paints its own animated background: no demo table behind the screens (it flickered
+  // through when menus opened and closed, and skipping three.js here is lighter on weak phones)
+  if (NO_DEMO) return;
   const token = ++backdropToken;
   void import('./render/demoTable').then(async ({ createDemoTable }) => {
     if (token !== backdropToken || backdrop) return;

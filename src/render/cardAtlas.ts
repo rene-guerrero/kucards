@@ -66,7 +66,8 @@ export const NIGHT_PAPER = '#08080c';
 /** the pale light used where a night mark sits on black with no colour of its own */
 export const NIGHT_LIGHT = '#efe9ff';
 /** field of a night wild-type card in hand: a blue-black, so the black edge and capsule still read */
-const NIGHT_WILD_FIELD = '#17122b';
+/** night wilds: a white field inside the black border (marks on it are black) */
+const NIGHT_WILD_FIELD = '#f6f3ff';
 
 export const isNightColor = (c: string | null | undefined): c is NightColor => !!c && (NIGHT_COLORS as readonly string[]).includes(c);
 /** is this the night side of a card? */
@@ -471,9 +472,9 @@ export function drawFace(g: G, f: AtlasFace, x: number, y: number, w: number): v
   const ink = night ? NIGHT_LIGHT : INK;
   /** the index: its fill and its rim */
   const idxFill = night ? (hue ? NIGHT_PAPER : NIGHT_WILD_FIELD) : CREAM;
-  const idxRim = night ? (hue ? COLOR_GLOW[hue] : NIGHT_LIGHT) : INK;
+  const idxRim = night ? (hue ? COLOR_GLOW[hue] : NIGHT_PAPER) : INK;
   /** glyphs drawn straight on the field (corner glyphs, the +10 ring) */
-  const onField = night ? (hue ? NIGHT_PAPER : NIGHT_LIGHT) : CREAM;
+  const onField = night ? NIGHT_PAPER : CREAM;
   const field = hue ? COLOR_HEX[hue] : night ? NIGHT_WILD_FIELD : WILD_FIELD;
   // ivory card + colour field (the gutter around the cell is filled by the caller)
   g.fillStyle = paper;

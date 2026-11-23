@@ -148,10 +148,14 @@ button {
   font-size: 17px;
   letter-spacing: 0.01em;
   cursor: pointer;
+  /* the shared button look: --bg fill, --edge 3D lip, --ring rim/outline, --gloss top highlight */
+  --ring: 0 0 0 0 transparent;
+  --gloss: inset 0 2px 0 rgba(255, 255, 255, 0.45);
   box-shadow:
+    var(--ring),
     0 5px 0 var(--edge),
     0 10px 18px rgba(0, 0, 0, 0.28),
-    inset 0 2px 0 rgba(255, 255, 255, 0.45);
+    var(--gloss);
   transform: translateY(0);
   transition:
     transform 0.09s ease,
@@ -168,9 +172,10 @@ button {
 .btn:active {
   transform: translateY(4px);
   box-shadow:
+    var(--ring),
     0 1px 0 var(--edge),
     0 4px 8px rgba(0, 0, 0, 0.25),
-    inset 0 2px 0 rgba(255, 255, 255, 0.35);
+    var(--gloss);
 }
 .btn:focus-visible,
 .icon-btn:focus-visible,
@@ -181,28 +186,34 @@ button {
   outline-offset: 3px;
 }
 .btn.primary {
-  --bg: linear-gradient(180deg, #ffc94d, var(--mango));
-  --edge: var(--mango-d);
-  --fg: #13232e;
+  /* "Noche dorada": glossy mango with a cream rim */
+  --bg: linear-gradient(180deg, #ffe07a 0, #ffb627 45%, #f58a1a 100%);
+  --edge: #a8520a;
+  --fg: #2a1300;
+  --ring: 0 0 0 2px #fff1d6;
+  --gloss: inset 0 2px 0 rgba(255, 255, 255, 0.6);
 }
 .btn.secondary {
-  --bg: linear-gradient(180deg, #2ccdbf, var(--teal));
-  --edge: var(--teal-d);
-  --fg: #fff;
-  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+  /* dark with a gold outline and gold text */
+  --bg: linear-gradient(180deg, #223845, #16272f);
+  --edge: #070f14;
+  --fg: #ffd27a;
+  --ring: inset 0 0 0 2px #e0a033;
+  --gloss: inset 0 0 0 0 transparent;
 }
 .btn.danger {
   --bg: linear-gradient(180deg, #ff8a7e, var(--guava));
   --edge: var(--guava-d);
   --fg: #fff;
+  --ring: 0 0 0 2px #fff1d6;
 }
 .btn.ghost {
-  --bg: rgba(255, 246, 230, 0.12);
-  --edge: rgba(0, 0, 0, 0.35);
+  --bg: rgba(10, 21, 28, 0.72);
+  --edge: rgba(0, 0, 0, 0.45);
   --fg: var(--cream);
   box-shadow:
     0 4px 0 var(--edge),
-    inset 0 0 0 2px rgba(255, 246, 230, 0.18);
+    inset 0 0 0 2px rgba(255, 246, 230, 0.16);
 }
 .btn.ghost:active {
   box-shadow:
@@ -5461,11 +5472,6 @@ button.ng-seat:hover {
   width: 100%;
   min-height: 48px;
 }
-.fs-tg svg {
-  width: 22px;
-  height: 22px;
-}
-
 /* a short note at the top of the screen (fullscreen hints) */
 .fs-toast {
   position: fixed;
@@ -6642,4 +6648,213 @@ button.ng-seat:hover {
   .lb-foot-inner > .ng-clock { grid-column: 1; }
   .lb-foot-inner > .btn, .lb-foot-inner > .lobby-wait { grid-column: 2; grid-row: 1; }
   .lb-foot-inner .ng-clock-head { display: none; }
+}
+
+/* ── main menu: "Noche dorada" — dark table with a golden sunburst behind the logo (rays turn slowly) ── */
+.screen.menu {
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 50% 27%, rgba(255, 196, 70, 0.95) 0, rgba(245, 138, 26, 0.6) 17%, rgba(245, 138, 26, 0) 46%),
+    radial-gradient(circle at 50% 27%, #3a2a22 0, #172a35 45%, #0c1820 80%);
+}
+.screen.menu::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 27%;
+  width: 160vmax;
+  height: 160vmax;
+  margin: -80vmax 0 0 -80vmax;
+  pointer-events: none;
+  background: repeating-conic-gradient(from -6deg, rgba(255, 200, 90, 0.2) 0 6deg, rgba(255, 200, 90, 0) 6deg 12deg);
+  -webkit-mask: radial-gradient(circle, #000 0, transparent 40%);
+  mask: radial-gradient(circle, #000 0, transparent 40%);
+  z-index: -1;
+  will-change: transform;
+  animation: menu-rays 40s linear infinite;
+}
+.screen.menu::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 52%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(45deg, rgba(255, 246, 230, 0.05) 0 1px, transparent 1px 14px),
+    repeating-linear-gradient(-45deg, rgba(255, 246, 230, 0.05) 0 1px, transparent 1px 14px);
+  -webkit-mask: linear-gradient(to top, #000 40%, transparent);
+  mask: linear-gradient(to top, #000 40%, transparent);
+}
+@keyframes menu-rays { to { transform: rotate(360deg); } }
+/* always on, even with Windows / the app's reduced motion */
+html .screen.menu::before { animation: menu-rays 40s linear infinite !important; }
+.screen.menu .logo-word { color: #fff6e6; text-shadow: 0 3px 0 #7a3b05, 0 6px 0 #3c1c02; }
+.screen.menu .logo-word .ku { color: #ffb627; }
+.screen.menu .tagline { color: #ffe3a6; }
+.quality-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.quality-row > .quality-ctl { flex: 1 1 auto; min-width: 0; }
+.quality-row > .fs-btn { flex: none; width: 48px; height: 48px; min-height: 48px; padding: 0; }
+.quality-row > .fs-btn svg { width: 22px; height: 22px; }
+
+/* ── controls in the "Noche dorada" look (dark with gold, like .btn.secondary) ── */
+.rsel-btn {
+  background: linear-gradient(180deg, #223845, #16272f);
+  color: #ffd27a;
+  box-shadow:
+    inset 0 0 0 2px #e0a033,
+    0 4px 0 #070f14;
+}
+.rsel-btn:active { box-shadow: inset 0 0 0 2px #e0a033, 0 1px 0 #070f14; }
+.switch[aria-checked='true'] { background: linear-gradient(180deg, #ffe07a, #f58a1a); }
+.preset-chip[aria-pressed='true'] {
+  background: linear-gradient(180deg, #223845, #16272f);
+  color: #ffd27a;
+  box-shadow: inset 0 0 0 2px #e0a033, 0 3px 0 #070f14;
+}
+.info-btn[aria-expanded='true']::before { box-shadow: inset 0 0 0 2px #e0a033; }
+.stp .stp-b.stp-plus { background: linear-gradient(180deg, #ffe07a, #f58a1a); color: #2a1300; }
+.rule-group { color: #ffb627; }
+
+/* ── main menu actions: profile chip + icons on top, quick-start Jugar, last-setup line, Multijugador sheet ── */
+.menu-top {
+  position: absolute;
+  z-index: 2;
+  top: calc(var(--sat) + 12px);
+  left: calc(var(--sal) + 14px);
+  right: calc(var(--sar) + 14px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  pointer-events: none;
+}
+.menu-top > * { pointer-events: auto; }
+.menu-top-icons { display: flex; gap: 8px; }
+.menu-top-icons .about-btn { width: 46px; height: 46px; min-height: 46px; padding: 0; }
+.menu-profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 55%;
+  min-height: 46px;
+  padding: 3px 14px 3px 3px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(10, 21, 28, 0.72);
+  color: var(--cream);
+  font: inherit;
+  font-weight: 900;
+  font-size: 15px;
+  box-shadow: inset 0 0 0 2px rgba(255, 246, 230, 0.16), 0 3px 0 rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+.menu-profile-face { flex: none; width: 40px; height: 40px; border-radius: 50%; overflow: hidden; background: #ffb627; display: grid; place-items: center; }
+.menu-profile-face > * { width: 100%; height: 100%; }
+.menu-profile-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-setup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  margin-top: -6px;
+  padding: 4px 12px;
+  border: 0;
+  background: none;
+  color: #ffe3a6;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  max-width: 100%;
+}
+.menu-setup > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-setup-caret { color: #ffb627; }
+.menu-actions .menu-net > .btn { flex: 1 1 0; }
+.menu-sheet-wrap {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(5, 10, 14, 0.6);
+  animation: fade-in 0.18s ease both;
+}
+.menu-sheet {
+  width: min(100%, 460px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px calc(var(--sar) + 18px) calc(var(--sab) + 18px) calc(var(--sal) + 18px);
+  border-radius: 22px 22px 0 0;
+  background: linear-gradient(180deg, #1c313c, #12222a);
+  box-shadow: inset 0 2px 0 #e0a033, 0 -10px 30px rgba(0, 0, 0, 0.45);
+  animation: fade-up 0.22s var(--ease-out) both;
+}
+.menu-sheet-title { margin: 0 0 4px; text-align: center; color: var(--cream); font-size: 20px; }
+.menu-sheet-opt { flex-wrap: wrap; row-gap: 0; min-height: 66px; }
+.menu-sheet-opt .btn-sub { flex-basis: 100%; text-align: center; }
+@media (orientation: landscape) and (max-height: 520px) {
+  .menu-sheet-wrap { align-items: center; }
+  .menu-sheet { border-radius: 22px; }
+  .screen.menu .menu-hero { margin-top: 30px; }
+}
+.menu-profile-face { background: #16272f; box-shadow: inset 0 0 0 2px #e0a033; }
+html, body { background-color: #0c1820; }
+
+/* ── menu action family: Continuar, the split [ ▶ Jugar|Nueva / last setup | change setup ] and Multijugador are all
+   shared .btn's — same 20px radius, 2px inner rim, 5px lip and press; only the fill (primary/secondary) and height differ ── */
+.menu-actions { gap: 14px; }
+.menu-actions > .btn { --h: 58px; min-height: var(--h); padding-block: 6px 8px; border-radius: 20px; font-size: 19px; }
+.menu-actions > .btn.primary { --h: 70px; --ring: inset 0 0 0 2px #fff1d6; font-size: 25px; }
+/* entrance only (no idle breathing), and no forwards fill: a filling transform animation would block the :active press */
+.menu-actions > .btn.primary.xl { animation: fade-up 0.45s 0.35s var(--ease-out) backwards; }
+.menu-actions > * { animation-fill-mode: backwards; }
+.menu-actions > .btn .btn-sub { margin-top: 0; font-size: 13px; line-height: 1.25; }
+.menu-split.btn { display: flex; align-items: stretch; gap: 0; padding: 0; cursor: default; }
+.menu-split > button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  -webkit-appearance: none;
+  outline: none;
+}
+.menu-split > button:focus-visible { outline: 3px solid var(--mango); outline-offset: -5px; border-radius: 16px; }
+.menu-split-go {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* optically centred on the whole button, not just on this half */
+  padding: 6px 8px 8px calc(var(--cfg) + 8px);
+}
+.menu-split-label { display: flex; align-items: center; gap: 10px; line-height: 1.15; }
+.menu-split-label .btn-icon { width: 0.9em; height: 0.9em; }
+.menu-split-sub { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.menu-split { --cfg: 64px; }
+.menu-split-cfg { flex: none; width: var(--cfg); display: grid; place-items: center; color: #ffd27a; }
+.menu-split-cfg svg { width: 26px; height: 26px; }
+/* dark split: the divider is the gold rim turned inwards */
+.menu-split.secondary .menu-split-cfg { box-shadow: inset 2px 0 0 #e0a033; }
+/* mango split: the setup half is a dark + gold panel inlaid inside the cream rim */
+.menu-split.primary .menu-split-cfg {
+  margin: 2px 2px 2px 0;
+  border-radius: 0 18px 18px 0;
+  background: linear-gradient(180deg, #223845, #16272f);
+  box-shadow: -2px 0 0 #fff1d6, inset 0 0 0 2px #e0a033;
+}
+@media (orientation: landscape) and (max-height: 520px) {
+  .menu-actions { gap: 12px; }
+  .menu-actions > .btn { --h: 52px; font-size: 18px; }
+  .menu-actions > .btn.primary { --h: 60px; font-size: 22px; }
 }

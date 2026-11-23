@@ -28,7 +28,8 @@ export const NIGHT_COLORS: readonly NightColor[] = ['naranja', 'celeste', 'rosa'
 export const NIGHT_GLOW: Record<NightColor, string> = { naranja: '#ffb05c', celeste: '#8fe1ff', rosa: '#ff8cc4', morado: '#b894ff' };
 const NIGHT_PAPER = '#08080c';
 const NIGHT_LIGHT = '#efe9ff';
-const NIGHT_WILD_FIELD = '#17122b';
+/** night wilds: a white field inside the black border (marks on it are black) */
+const NIGHT_WILD_FIELD = '#f6f3ff';
 const isNightColor = (c: string | null | undefined): c is NightColor => !!c && (NIGHT_COLORS as readonly string[]).includes(c);
 const CREAM = '#fff6e6';
 const INK = '#13232e';
@@ -170,8 +171,8 @@ export function cardSvg(f: AtlasFace, opts: { width?: number; cls?: string; rota
   const order = night ? NIGHT_WILD_ORDER : WILD_ORDER;
   const ink = night ? NIGHT_LIGHT : INK;
   const idxFill = night ? (hue ? NIGHT_PAPER : NIGHT_WILD_FIELD) : CREAM;
-  const idxRim = night ? (isNightColor(hue) ? NIGHT_GLOW[hue] : NIGHT_LIGHT) : INK;
-  const onField = night ? (hue ? NIGHT_PAPER : NIGHT_LIGHT) : CREAM;
+  const idxRim = night ? (isNightColor(hue) ? NIGHT_GLOW[hue] : hue ? NIGHT_LIGHT : NIGHT_PAPER) : INK;
+  const onField = night ? NIGHT_PAPER : CREAM;
   const field = hue ? COLOR_HEX[hue] : night ? NIGHT_WILD_FIELD : WILD_FIELD;
   const t = cornerText(f);
   let mid =
