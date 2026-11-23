@@ -446,7 +446,8 @@ function buildCardGeometry(tab = false): THREE.BufferGeometry {
   const x0 = -L.CARD_W / 2 + BADGE_X * u;
   const y1 = L.CARD_H / 2 - BADGE_Y * u;
   const sz = BADGE_BOX * u;
-  const z = 0.004; // a hair in front of the face it sticks to
+  // a hair in front of its own face, but less than the gap to the next card in a tight fan (it poked through)
+  const z = 0.0012;
   const pos = g.attributes.position;
   const uv = g.attributes.uv;
   const n = pos.count;
