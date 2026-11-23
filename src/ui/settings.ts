@@ -14,7 +14,7 @@ import { gestureLabel, MAX_GESTURES, sanitizeGestures } from './chat';
 import { h } from './dom';
 import { screenHeader } from './howto';
 import { enhanceHScroll } from './hscroll';
-import { loc, t, tMaybe, type Key } from './i18n';
+import { getLang, loc, t, tMaybe, type Key } from './i18n';
 import { ICONS, segmented, toggle } from './overlay';
 import { canFullscreen, toggleFullscreen } from '../app/fullscreen';
 import { modeSelect, builtInModeNames } from './modeSelect';
@@ -180,7 +180,7 @@ function radioItems<T>(values: T[], value: T, make: (v: T, on: boolean) => Node[
 /** the KuAvatars editor: players build their own face (FaceSpec) */
 function faceEditor(value: number | FaceSpec, onChange: (v: FaceSpec) => void): HTMLElement {
   const box = h('div.face-editor');
-  createAvatarEditor(box, { value, onChange, moods: false, gestures: false });
+  createAvatarEditor(box, { value, onChange, moods: false, gestures: false, lang: getLang() });
   return box;
 }
 
