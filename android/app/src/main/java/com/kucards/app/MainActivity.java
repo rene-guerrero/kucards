@@ -42,6 +42,19 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         enterImmersive();
+        notifyGame(true);
+    }
+
+    @Override
+    public void onPause() {
+        notifyGame(false);
+        super.onPause();
+    }
+
+    /** The WebView keeps running in the background and fires no visibilitychange: tell the game directly. */
+    private void notifyGame(boolean active) {
+        WebView wv = getBridge() != null ? getBridge().getWebView() : null;
+        if (wv != null) wv.evaluateJavascript("window.__kucaLife && window.__kucaLife(" + active + ")", null);
     }
 
     /** Fullscreen immersive: hide status + navigation bars; a swipe reveals them transiently. */

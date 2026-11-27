@@ -13,7 +13,7 @@ import { loadSettings, rulesFor, saveSettings, withMode } from './app/settings';
 import { clearSave, loadSave, saveSummary } from './app/save';
 import { startSession, type GameSession } from './app/session';
 import { createMatch, sanitizeClock, startRound } from './engine';
-import { initAudio, setAudioPrefs, setMusicScene } from './audio/sfx';
+import { initAudio, setAudioPrefs, setAudioSuspended, setMusicScene } from './audio/sfx';
 import { RULE_PRESETS, RULE_SETTINGS } from './engine/rules';
 import { buildAbout } from './ui/about';
 import { h, setReducedMotionPref, setUiQuality } from './ui/dom';
@@ -333,6 +333,16 @@ function show(id: ScreenId, animate = true): void {
   else show(current === 'settings' || current === 'howto' ? backTo : 'menu');
   return true;
 };
+// App in the background: silence everything and pause an offline match. Android's WebView keeps running
+// behind Home / Back and fires no visibilitychange, so MainActivity calls window.__kucaLife from onPause/onResume.
+const background = (hidden: boolean): void => {
+  setAudioSuspended(hidden);
+  if (hidden && current === 'game' && !online?.active) session?.pause();
+};
+document.addEventListener('visibilitychange', () => background(document.hidden));
+window.addEventListener('pagehide', () => background(true));
+window.addEventListener('pageshow', () => background(document.hidden));
+(window as { __kucaLife?: (active: boolean) => void }).__kucaLife = (active) => background(!active);
 window.addEventListener('keydown', (e) => {
   // dropdowns and tooltips mark Escape as handled; don't leave the screen as well
   if (e.key === 'Escape' && !e.defaultPrevented) (window as { __kucaBack?: () => boolean }).__kucaBack?.();
